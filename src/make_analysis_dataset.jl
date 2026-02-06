@@ -151,10 +151,12 @@ Pkg.instantiate()
 
 using ProgressMeter
 import JLD2
-import Distributed
+using Distributed
 
 if nprocs() - 1 < num_workers
-    Distributed.addprocs(num_workers - (nprocs() - 1))
+    @info "Starting workers" requested=num_workers existing=(nprocs() - 1)
+    addprocs(num_workers - (nprocs() - 1); exeflags="--threads=1")
+    @info "Workers started" workers=workers()
 end
 
 @everywhere begin
@@ -472,6 +474,7 @@ JLD2.jldopen(out_path, "w") do fout
     fout["meta/N"]         = N
     fout["meta/config"]    = config
 
+    @info "Assigning batches to workers" nbatches=nbatches num_workers=num_workers
     workers_list = Distributed.workers()
     if num_workers < 1
         error("num_workers must be >= 1")
@@ -484,6 +487,7 @@ JLD2.jldopen(out_path, "w") do fout
     batch_map = [collect(w:num_workers:nbatches) for w in 1:num_workers]
     results = RemoteChannel(() -> Channel{Tuple{Int,Any}}(num_workers))
 
+    @info "Launching worker tasks" workers=workers_list
     for (idx, w) in enumerate(workers_list)
         @spawnat w begin
             for b in batch_map[idx]
@@ -507,6 +511,7 @@ JLD2.jldopen(out_path, "w") do fout
     p = Progress(N; desc = "Creating causal sets")
     pending = Dict{Int,Any}()
     next_b = 1
+    @info "Collecting and writing batches" total_batches=nbatches
     for _ in 1:nbatches
         b, data = take!(results)
         pending[b] = data
@@ -569,7 +574,7 @@ JLD2.jldopen(out_path, "w") do fout
 end
 @info "Dataset creation complete. Output written to $(out_path)."
 
-if nprocs() > 1
+if Distributed.nprocs() > 1
     try
         Distributed.rmprocs(Distributed.workers())
         @info "Workers shut down successfully."
