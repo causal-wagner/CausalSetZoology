@@ -819,9 +819,9 @@ function apply_paper_theme!(;
         colorant"#F1C21B",  # IBM Yellow
         colorant"#D12771",  # IBM Magenta
         colorant"#009D9A",  # IBM Teal
-        colorant"#FA4D56",  # IBM Red
-        colorant"#6F6F6F",  # IBM Gray
         colorant"#0F62FE",  # IBM Blue
+        colorant"#6F6F6F",  # IBM Gray
+        colorant"#FA4D56",  # IBM Red
         colorant"#24A148",  # IBM Green
     ]
 
@@ -2373,6 +2373,13 @@ function create_parallel_plot(
     kinds::Vector{String};
     thinning::Float64 = 1.0,
     color_transparency::Float64 = 1.0,
+    legend::Bool = true,
+    legendpos::Symbol = :tl,
+    legend_offset::Tuple{<:Real,<:Real} = (0, 0),
+    fig_path::Union{Nothing,String}=nothing,
+    sample_n::Union{Nothing,Int} = nothing,
+    color_vec::Union{Nothing,Vector{Int64}} = nothing,
+    order_vec::Union{Nothing,Vector{Int64}} = nothing,
     choose_kinds::Union{Nothing,Vector{Int64}} = nothing,
 )::AlgebraOfGraphics.FigureGrid
 
@@ -2384,21 +2391,30 @@ function create_parallel_plot(
             normalized_parallel_df[!, col] = transform_to_scale!(normalized_parallel_df[!, col])
         end
     end
+    base_indices = collect(1:length(kinds))
+    ordered_indices = order_vec === nothing ? base_indices : order_vec
+    @assert all(in.(ordered_indices, Ref(base_indices))) "order_vec must be valid indices of kinds"
+    selected_indices = choose_kinds === nothing ? ordered_indices : [i for i in ordered_indices if i in choose_kinds]
+    selected_kinds = kinds[selected_indices]
+    if choose_kinds !== nothing
+        normalized_parallel_df = filter(row -> row.kind in selected_kinds, normalized_parallel_df)
+    end
     if "kind" in names(normalized_parallel_df)
         normalized_parallel_df[!, "kind"] = CategoricalArrays.categorical(
             normalized_parallel_df[!, "kind"];
-            levels = kinds,
+            levels = selected_kinds,
             ordered = true,
         )
+        sort!(normalized_parallel_df, [:kind, :id])
     end
 
-    if choose_kinds !== nothing
-        selected = kinds[choose_kinds]
-        normalized_parallel_df = filter(row -> row.kind in selected, normalized_parallel_df)
+    nrows = Base.size(normalized_parallel_df, 1)
+    if sample_n === nothing
+        idxs = 1:nrows
+    else
+        n_sample = min(sample_n, nrows)
+        idxs = sample(1:nrows, n_sample; replace=false)
     end
-
-    n_sample = min(5000, Base.size(normalized_parallel_df, 1))
-    idxs = sample(1:Base.size(normalized_parallel_df, 1), n_sample; replace=false)
 
     normalized_parallel_df_long = stack(
         normalized_parallel_df[idxs, :],
@@ -2408,6 +2424,18 @@ function create_parallel_plot(
     )
 
     variables = String.(observables)
+    colors_obs = Makie.theme(:palette).color
+    colors = colors_obs isa Observables.Observable ? Observables.to_value(colors_obs) : colors_obs
+    palette_full = if color_vec === nothing
+        [colors[mod1(i, length(colors))] for i in base_indices]
+    else
+        if all(x -> x isa Integer, color_vec)
+            [colors[mod1(i, length(colors))] for i in color_vec]
+        else
+            color_vec
+        end
+    end
+    palette = [palette_full[i] for i in selected_indices]
 
     pp_specs(df) = AlgebraOfGraphics.data(df) * mapping(
         :variable => sorter(variables),
@@ -2422,12 +2450,45 @@ function create_parallel_plot(
 
     fig = draw(
         parallel_plot,
+        AlgebraOfGraphics.scales(Color = (; palette = palette)),
         figure = (; size = figsize),
-        axis = (xticklabelrotation = pi / 4, limits = (nothing, (0.0, 1.0))),
+        axis = (xticklabelrotation = pi / 4, limits = (nothing, (0.0, 1.0)), xlabel = "", ylabel = ""),
+        legend = (show = false,),
     )
     ax = fig.figure.current_axis[]
     if ax !== nothing
         ax.xticks = (1:length(variables), observables)
+        n = length(variables)
+        xlims!(ax, 0.8, n + 0.2)
+    end
+
+    if legend
+        # Custom opaque legend
+        colors_obs = Makie.theme(:palette).color
+        colors = colors_obs isa Observables.Observable ? Observables.to_value(colors_obs) : colors_obs
+        opaque(c) = begin
+            col = Makie.to_color(c)
+            Makie.RGBAf(col.r, col.g, col.b, 1f0)
+        end
+        legend_colors = map(opaque, palette)
+        elements = [Makie.LineElement(color = c, linewidth = 2.0) for c in legend_colors]
+        pos = legendpos === :lt ? Makie.TopLeft() :
+            legendpos === :rt ? Makie.TopRight() :
+            legendpos === :lb ? Makie.BottomLeft() :
+            legendpos === :rb ? Makie.BottomRight() :
+            Makie.TopRight()
+        leg = Makie.Legend(
+            fig.figure[1, 1, pos],
+            elements,
+            selected_kinds;
+            tellheight = false,
+            tellwidth = false,
+            margin = (10, 10, 10, 10),
+        )
+        translate!(leg.blockscene, legend_offset[1], legend_offset[2], 0)
+    end
+    if !isnothing(fig_path)
+        save(fig_path, fig)
     end
     return fig
 end
