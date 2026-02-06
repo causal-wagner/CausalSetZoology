@@ -156,7 +156,7 @@ using Distributed
 if nprocs() - 1 < num_workers
     @info "Starting workers" requested=num_workers existing=(nprocs() - 1)
     addprocs(num_workers - (nprocs() - 1); exeflags="--threads=1")
-    @info "Workers started" workers=workers()
+    @info "Workers started"
 end
 
 @everywhere begin
@@ -487,7 +487,7 @@ JLD2.jldopen(out_path, "w") do fout
     batch_map = [collect(w:num_workers:nbatches) for w in 1:num_workers]
     results = RemoteChannel(() -> Channel{Tuple{Int,Any}}(num_workers))
 
-    @info "Launching worker tasks" workers=workers_list
+    @info "Launching worker tasks"
     for (idx, w) in enumerate(workers_list)
         @spawnat w begin
             for b in batch_map[idx]
@@ -568,7 +568,7 @@ JLD2.jldopen(out_path, "w") do fout
             fout["batches/$b/std"] = data.std_b
         end
 
-            next!(p, length(data.csets_b))
+            next!(p; step=length(data.csets_b))
         end
     end
 end
