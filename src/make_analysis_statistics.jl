@@ -594,7 +594,7 @@ for b = 1:nbatches
                 r_b     = fin["batches/$b/r"]
                 order_b = fin["batches/$b/order"]
 
-            elseif kind == "manifold_non_simply_connected"
+            elseif kind == "manifoldlike_non_simply_connected"
                 r_b     = fin["batches/$b/r"]
                 order_b = fin["batches/$b/order"]
                 num_boundary_cuts_b = fin["batches/$b/num_boundary_cuts"]
