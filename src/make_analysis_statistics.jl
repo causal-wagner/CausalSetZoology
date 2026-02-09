@@ -106,7 +106,7 @@ end
     r = 0,
     order = 0,
     num_boundary_cuts = 0,
-    num_free_cuts = 0,
+    genus = 0,
     num_layers = 0,
     std = 0,
     segment_ratio = 0,
@@ -541,7 +541,7 @@ end
         d = merge(d, d2)
     elseif kind == "manifold_non_simply_connected"
         # @debug "  augmenting manifoldlike data..."
-        d2 = (r = r, order = order, num_boundary_cuts = num_boundary_cuts, num_free_cuts = num_free_cuts)
+        d2 = (r = r, order = order, num_boundary_cuts = num_boundary_cuts, genus = genus)
         d = merge(d, d2)
     elseif kind == "minkowski_quasicrystal"
         # @debug "  augmenting minkowski quasicrystal data..."
@@ -585,7 +585,7 @@ for b = 1:nbatches
             links_b = fin["batches/$b/links"]
 
             # Kind-dependent batch metadata loading
-            r_b = order_b = num_boundary_cuts_b = num_free_cuts_b = 
+            r_b = order_b = num_boundary_cuts_b = genus_b = 
             rel_num_flips_b = rel_size_KR_b = segment_ratio_b = 
             segment_angle_b = rotation_angle_b = lattice_b = num_layers_b = std_b = 
             trans_in_b = trans_out_b = nothing
@@ -598,7 +598,7 @@ for b = 1:nbatches
                 r_b     = fin["batches/$b/r"]
                 order_b = fin["batches/$b/order"]
                 num_boundary_cuts_b = fin["batches/$b/num_boundary_cuts"]
-                num_free_cuts_b     = fin["batches/$b/num_free_cuts"]
+                genus_b     = fin["batches/$b/genus"]
 
             elseif kind == "destroyed"
                 r_b             = fin["batches/$b/r"]
@@ -649,7 +649,7 @@ for b = 1:nbatches
                         r     = r_b !== nothing         ? r_b[i]         : 0,
                         order = order_b !== nothing     ? order_b[i]     : 0,
                         num_boundary_cuts = num_boundary_cuts_b !== nothing ? num_boundary_cuts_b[i] : 0,
-                        num_free_cuts     = num_free_cuts_b !== nothing     ? num_free_cuts_b[i]     : 0,
+                        genus     = genus_b !== nothing     ? genus_b[i]     : 0,
                     )
                 elseif kind == "destroyed"
                     compute(
