@@ -204,9 +204,9 @@ end
         paths::Vector{<:AbstractString},
         histname::Symbol;
         filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
-        thinning::Float64 = 1.0,
-        mmaparrays::Bool = false,
-    )::Vector{Vector{Dict}}
+        scalar::Union{Nothing,Symbol}=nothing,
+        thinning::Int = 1,
+    )::Union{Vector{Vector{Dict}}, Vector{Vector{Tuple{Dict,Real}}}}
 
 Load a single histogram field `histname` from multiple `statistics.jld2` files.
 
@@ -215,45 +215,65 @@ Returns a vector `out` such that:
 - only the requested histogram field is loaded (RAM-safe)
 - optional per-file filters can be applied
 
-`thinning` keeps roughly a fraction of entries (e.g. 0.1 keeps ~every 10th sample).
 `filters[i] === nothing` means no filtering for that file.
+
+`thinning` keeps every N-th histogram after filtering (N >= 1).
+
+If `scalar` is provided, each entry becomes a tuple `(hist, value)` where
+`value = getfield(x, scalar)` and must be a `Real`.
 """
 function load_histograms_from_paths(
     paths::Vector{<:AbstractString},
     histname::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
-    thinning::Float64 = 1.0,
-    mmaparrays::Bool = false,
-)::Vector{Vector{Dict}}
+    scalar::Union{Nothing,Symbol}=nothing,
+    thinning::Int = 1,
+)::Union{Vector{Vector{Dict}}, Vector{Vector{Tuple{Dict,Real}}}}
     n = length(paths)
     filters === nothing && (filters = fill(nothing, n))
     @assert length(filters) == n
-    @assert 0.0 < thinning <= 1.0
-    step = max(1, round(Int, 1.0 / thinning))
+    @assert thinning >= 1 "thinning must be >= 1"
 
-    out = Vector{Vector{Dict}}(undef, n)
+    out = Vector{Any}(undef, n)
 
     Threads.@threads for i in 1:n
         path   = paths[i]
         filter = filters[i]
+
         hists = Dict[]
+        pairs = Tuple{Dict,Real}[]
         seen = 0
 
-        JLD2.jldopen(path, "r"; mmaparrays=mmaparrays) do f
+        JLD2.jldopen(path, "r") do f
             nbatches = f["meta/nbatches"]
+
             for b in 1:nbatches
                 batch = f["batches/$b"]
+
                 for x in batch
                     filter !== nothing && !filter(x) && continue
                     seen += 1
-                    (seen - 1) % step != 0 && continue
-                    push!(hists, getfield(x, histname))
+                    if seen % thinning != 0
+                        continue
+                    end
+                    if scalar === nothing
+                        push!(hists, getfield(x, histname))
+                    else
+                        v = getfield(x, scalar)
+                        @assert v isa Real "scalar field must be Real"
+                        push!(pairs, (getfield(x, histname), v))
+                    end
                 end
             end
         end
-
-        println("  Loaded $(length(hists)) histograms from $path")
-        out[i] = hists
+        
+        if scalar === nothing
+            println("  Loaded $(length(hists)) histograms from $path")
+            out[i] = hists
+        else
+            println("  Loaded $(length(pairs)) histograms from $path with scalar $(scalar)")
+            out[i] = pairs
+        end
     end
 
     return out
@@ -351,6 +371,27 @@ function average_histogram_with_std(
     # Population std (numerically safe)
     std_vec = sqrt.(max.(vec(Statistics.mean(X.^2; dims=1)) .- mean_vec.^2, 0.0))
     return mean_vec, std_vec
+end
+
+function average_histogram_with_std(
+    hists::AbstractVector{<:Tuple{<:AbstractDict,<:Real}},
+)::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}
+    isempty(hists) && return Tuple{Tuple{Real,Vector{Float64}},Vector{Float64}}[]
+
+    groups = Dict{Real,Vector{Dict}}()
+    for (h, v) in hists
+        @assert v isa Real
+        get!(groups, v, Dict[])
+        push!(groups[v], h)
+    end
+
+    keys_sorted = sort(collect(keys(groups)))
+    out = Vector{Tuple{Tuple{Real,Vector{Float64}},Vector{Float64}}}(undef, length(keys_sorted))
+    for (i, v) in enumerate(keys_sorted)
+        mean_vec, std_vec = average_histogram_with_std(groups[v])
+        out[i] = (v, mean_vec, std_vec)
+    end
+    return out
 end
 
 function replace_zeros(σ::AbstractVector{<:Real}; ϵ::Real=1e-3)
@@ -1009,6 +1050,158 @@ function plot_mean_histograms_with_std(
         n_Legend_columns > 1 && (legend_kwargs = merge(legend_kwargs, (nbanks = n_Legend_columns,)))
         axislegend(ax; legend_kwargs...)
     end
+
+    return return_axis ? (fig, ax) : fig
+end
+
+
+"""
+    plot_mean_histograms_with_std(
+        data::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}};
+        xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+        ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+        logscale_x::Bool = false,
+        logscale_y::Bool = false,
+        plotlabel::Union{AbstractString,Nothing} = nothing,
+        xlabel::Union{AbstractString,Nothing} = nothing,
+        ylabel::Union{AbstractString,Nothing} = nothing,
+        hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+        double_column::Bool = false,
+        magnification::Real = 1.0,
+        legendpos = :rt,
+        legendpadding = nothing,
+        legendmargin = nothing,
+        n_Legend_columns::Int = 1,
+        linewidth::Union{Nothing,Real} = nothing,
+        plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+        markersize::Union{Nothing,Real} = nothing,
+        colormap = :viridis,
+        colorbar_label::Union{Nothing,AbstractString} = nothing,
+        return_axis::Bool = false,
+    )::Figure
+
+Plot mean histograms with ±1σ bands and color encoding of the leading Real value.
+
+Each element of `data` must be `(value, mean, std)` where `value` is used to
+pick a color from `colormap`.
+"""
+function plot_mean_histograms_with_std(
+    data::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}};
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = false,
+    logscale_y::Bool = false,
+    plotlabel::Union{AbstractString,Nothing} = nothing,
+    xlabel::Union{AbstractString,Nothing} = nothing,
+    ylabel::Union{AbstractString,Nothing} = nothing,
+    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = nothing,
+    legendmargin = nothing,
+    n_Legend_columns::Int = 1,
+    linewidth::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+    colormap = :viridis,
+    colorbar_label::Union{Nothing,AbstractString} = nothing,
+    return_axis::Bool = false,
+)::Union{Figure, Tuple{Figure, Axis}}
+
+    if hist_labels !== nothing
+        @assert length(hist_labels) == length(data) "hist_labels and data must have same length"
+    end
+    if plot_types !== nothing
+        @assert length(plot_types) == length(data) "plot_types and data must have same length"
+    end
+
+    figsize = apply_paper_theme!(
+        double_column = double_column,
+        magnification = magnification,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        legendpos = legendpos,
+        legendpadding = legendpadding,
+        legendmargin = legendmargin,
+        n_Legend_columns = n_Legend_columns,
+    )
+
+    fig = Figure(size = figsize)
+    ax = Axis(
+        fig[1, 1];
+        xscale = logscale_x ? log10 : identity,
+        yscale = logscale_y ? log10 : identity,
+    )
+
+    ax.ylabel = ylabel === nothing ? "count" : ylabel
+    ax.xlabel = xlabel === nothing ? L"n" : xlabel
+    plotlabel !== nothing && (ax.title  = plotlabel)
+
+    xlim !== nothing && xlims!(ax, xlim...)
+    ylim !== nothing && ylims!(ax, ylim...)
+
+    eps = if logscale_y
+        if ylim !== nothing
+            ylim[1] * 1e-3
+        else
+            minpos = minimum(v for (_, m, _) in data for v in m if v > 0)
+            minpos * 1e-3
+        end
+    else
+        -Inf
+    end
+
+    values = [v for (v, _, _) in data]
+    vmin, vmax = minimum(values), maximum(values)
+    denom = vmax == vmin ? 1.0 : (vmax - vmin)
+
+    for (i, (val, mean, std)) in enumerate(data)
+        @assert length(mean) == length(std)
+
+        t = (val - vmin) / denom
+        color = Makie.cgrad(colormap)(t)
+
+        x   = collect(1:length(mean))
+        ylo = mean .- std
+        yhi = mean .+ std
+
+        if logscale_y
+            mask = mean .> 0
+            x = x[mask]
+            mean = mean[mask]
+            ylo = ylo[mask]
+            yhi = yhi[mask]
+
+            ylo = max.(ylo, eps)
+            yhi = max.(yhi, eps)
+        end
+
+        plot_type = plot_types === nothing ? :line : plot_types[i]
+        if plot_type == :line
+            band!(ax, x, ylo, yhi; color = (color, 0.2))
+            if hist_labels === nothing
+                isnothing(linewidth) ? lines!(ax, x, mean; color = color) : lines!(ax, x, mean; color = color, linewidth = linewidth)
+            else
+                isnothing(linewidth) ? lines!(ax, x, mean; color = color, label = hist_labels[i]) : lines!(ax, x, mean; color = color, linewidth = linewidth, label = hist_labels[i])
+            end
+        elseif plot_type == :scatter
+            if hist_labels === nothing
+                isnothing(markersize) ? scatter!(ax, x, mean; color = color) : scatter!(ax, x, mean; color = color, markersize = markersize)
+            else
+                isnothing(markersize) ? scatter!(ax, x, mean; color = color, label = hist_labels[i]) : scatter!(ax, x, mean; color = color, label = hist_labels[i], markersize = markersize)
+            end
+            err = mean .- ylo
+            Makie.errorbars!(ax, x, mean, err, err; color = color)
+        else
+            error("plot_types entries must be :line or :scatter")
+        end
+    end
+
+    cb = Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = colormap)
+    colorbar_label !== nothing && (cb.label = colorbar_label)
+    legendpadding !== nothing && (cb.padding = legendpadding)
+    legendmargin !== nothing && (cb.margin = legendmargin)
 
     return return_axis ? (fig, ax) : fig
 end
