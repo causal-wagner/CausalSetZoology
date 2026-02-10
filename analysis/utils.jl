@@ -204,9 +204,8 @@ end
         paths::Vector{<:AbstractString},
         histname::Symbol;
         filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
-        scalar::Union{Nothing,Symbol}=nothing,
         thinning::Int = 1,
-    )::Union{Vector{Vector{Dict}}, Vector{Vector{Tuple{Dict,Real}}}}
+    )::Vector{Vector{Dict}}
 
 Load a single histogram field `histname` from multiple `statistics.jld2` files.
 
@@ -218,29 +217,81 @@ Returns a vector `out` such that:
 `filters[i] === nothing` means no filtering for that file.
 
 `thinning` keeps every N-th histogram after filtering (N >= 1).
-
-If `scalar` is provided, each entry becomes a tuple `(hist, value)` where
-`value = getfield(x, scalar)` and must be a `Real`.
 """
 function load_histograms_from_paths(
     paths::Vector{<:AbstractString},
     histname::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
-    scalar::Union{Nothing,Symbol}=nothing,
     thinning::Int = 1,
-)::Union{Vector{Vector{Dict}}, Vector{Vector{Tuple{Dict,Real}}}}
+)::Vector{Vector{Dict}}
     n = length(paths)
     filters === nothing && (filters = fill(nothing, n))
     @assert length(filters) == n
     @assert thinning >= 1 "thinning must be >= 1"
 
-    out = Vector{Any}(undef, n)
+    out = Vector{Vector{Dict}}(undef, n)
 
     Threads.@threads for i in 1:n
         path   = paths[i]
         filter = filters[i]
 
         hists = Dict[]
+        seen = 0
+
+        JLD2.jldopen(path, "r") do f
+            nbatches = f["meta/nbatches"]
+
+            for b in 1:nbatches
+                batch = f["batches/$b"]
+
+                for x in batch
+                    filter !== nothing && !filter(x) && continue
+                    seen += 1
+                    if seen % thinning != 0
+                        continue
+                    end
+                    push!(hists, getfield(x, histname))
+                end
+            end
+        end
+
+        println("  Loaded $(length(hists)) histograms from $path")
+        out[i] = hists
+    end
+
+    return out
+end
+
+"""
+    load_histograms_from_paths(
+        paths::Vector{<:AbstractString},
+        histname::Symbol,
+        scalar::Symbol;
+        filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
+        thinning::Int = 1,
+    )::Vector{Vector{Tuple{Dict,Real}}}
+
+Like the 2-arg version, but also extracts a scalar field `scalar` from each
+entry, returning `(hist, value)` pairs where `value` is a `Real`.
+"""
+function load_histograms_from_paths(
+    paths::Vector{<:AbstractString},
+    histname::Symbol,
+    scalar::Symbol;
+    filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
+    thinning::Int = 1,
+)::Vector{Vector{Tuple{Dict,Real}}}
+    n = length(paths)
+    filters === nothing && (filters = fill(nothing, n))
+    @assert length(filters) == n
+    @assert thinning >= 1 "thinning must be >= 1"
+
+    out = Vector{Vector{Tuple{Dict,Real}}}(undef, n)
+
+    Threads.@threads for i in 1:n
+        path   = paths[i]
+        filter = filters[i]
+
         pairs = Tuple{Dict,Real}[]
         seen = 0
 
@@ -256,28 +307,20 @@ function load_histograms_from_paths(
                     if seen % thinning != 0
                         continue
                     end
-                    if scalar === nothing
-                        push!(hists, getfield(x, histname))
-                    else
-                        v = getfield(x, scalar)
-                        @assert v isa Real "scalar field must be Real"
-                        push!(pairs, (getfield(x, histname), v))
-                    end
+                    v = getfield(x, scalar)
+                    @assert v isa Real "scalar field must be Real"
+                    push!(pairs, (getfield(x, histname), v))
                 end
             end
         end
-        
-        if scalar === nothing
-            println("  Loaded $(length(hists)) histograms from $path")
-            out[i] = hists
-        else
-            println("  Loaded $(length(pairs)) histograms from $path with scalar $(scalar)")
-            out[i] = pairs
-        end
+
+        println("  Loaded $(length(pairs)) histograms from $path with scalar $(scalar)")
+        out[i] = pairs
     end
 
     return out
 end
+
 
 
 """
@@ -376,7 +419,7 @@ end
 function average_histogram_with_std(
     hists::AbstractVector{<:Tuple{<:AbstractDict,<:Real}},
 )::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}
-    isempty(hists) && return Tuple{Tuple{Real,Vector{Float64}},Vector{Float64}}[]
+    isempty(hists) && return Tuple{Real,Vector{Float64},Vector{Float64}}[]
 
     groups = Dict{Real,Vector{Dict}}()
     for (h, v) in hists
@@ -386,7 +429,7 @@ function average_histogram_with_std(
     end
 
     keys_sorted = sort(collect(keys(groups)))
-    out = Vector{Tuple{Tuple{Real,Vector{Float64}},Vector{Float64}}}(undef, length(keys_sorted))
+    out = Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}(undef, length(keys_sorted))
     for (i, v) in enumerate(keys_sorted)
         mean_vec, std_vec = average_histogram_with_std(groups[v])
         out[i] = (v, mean_vec, std_vec)
@@ -727,6 +770,23 @@ function _logticks_internal(lo::Real, hi::Real; base::Real = 10.0)
     ticks = [base^Float64(p) for p in pmin:pmax if lo ≤ base^Float64(p) ≤ hi]
     labels = latex_label.(ticks)
 
+    if isempty(ticks)
+        # promote minor ticks to major ticks if needed (avoid recursion)
+        minor = Float64[]
+        for p in pmin:pmax
+            for m in 2:9
+                v = m * base^Float64(p)
+                lo ≤ v ≤ hi && push!(minor, v)
+            end
+        end
+        sort!(minor)
+        if !isempty(minor)
+            ticks = minor
+            labels = latex_label.(ticks)
+            return ticks, labels, :promoted
+        end
+    end
+
     return ticks, labels, :decades
 end
 
@@ -738,21 +798,38 @@ end
 function logminorticks(lo::Real, hi::Real; base::Real = 10.0)
     ticks, _, kind = _logticks_internal(lo, hi; base = base)
 
-    logb(x) = log(x) / log(base)
-    pmin = floor(Int, logb(lo))
-    pmax = ceil(Int,  logb(hi))
+    pmin = floor(Int, log(lo) / log(base))
+    pmax = ceil(Int,  log(hi) / log(base))
 
     if kind == :dense
         return Float64[]
     end
 
-    mults = kind == :decades ? (2:9) : [2, 3, 4, 6, 7, 8, 9]
+    if kind == :promoted
+        # majors are 2..9*base^p; keep 1*base^p as minors (and any missing)
+        mults = 1:9
+    else
+        mults = kind == :decades ? (2:9) : [2, 3, 4, 6, 7, 8, 9]
+    end
     minor = Float64[]
     for p in pmin:pmax
         for m in mults
             v = m * base^Float64(p)
             lo ≤ v ≤ hi && push!(minor, v)
         end
+    end
+
+    if kind == :promoted
+        # remove any promoted majors
+        minor = [v for v in minor if !in(v, ticks)]
+    end
+
+    if kind == :promoted && isempty(minor)
+        # create half-step minors within the decade (e.g., 5.5, 6.5, ...)
+        t = ticks[1]
+        p = floor(Int, log(t) / log(base))
+        step = base^Float64(p)
+        minor = [(m + 0.5) * step for m in 1:9 if lo ≤ (m + 0.5) * step ≤ hi && !in((m + 0.5) * step, ticks)]
     end
 
     sort!(minor)
@@ -1160,7 +1237,7 @@ function plot_mean_histograms_with_std(
         @assert length(mean) == length(std)
 
         t = (val - vmin) / denom
-        color = Makie.cgrad(colormap)(t)
+        color = PlotUtils.get(Makie.cgrad(colormap), t)
 
         x   = collect(1:length(mean))
         ylo = mean .- std
@@ -1200,8 +1277,6 @@ function plot_mean_histograms_with_std(
 
     cb = Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = colormap)
     colorbar_label !== nothing && (cb.label = colorbar_label)
-    legendpadding !== nothing && (cb.padding = legendpadding)
-    legendmargin !== nothing && (cb.margin = legendmargin)
 
     return return_axis ? (fig, ax) : fig
 end
