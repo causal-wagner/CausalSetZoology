@@ -539,7 +539,7 @@ end
         # @debug "  augmenting manifoldlike data..."
         d2 = (r = r, order = order)
         d = merge(d, d2)
-    elseif kind == "manifold_non_simply_connected"
+    elseif kind == "manifoldlike_non_simply_connected"
         # @debug "  augmenting manifoldlike data..."
         d2 = (r = r, order = order, num_boundary_cuts = num_boundary_cuts, genus = genus)
         d = merge(d, d2)
