@@ -48,6 +48,11 @@ s = ArgParseSettings()
         arg_type = Int
         default = 1
 
+    "--dataset_multiprocessing"
+        help = "Use multiprocessing for dataset generation"
+        arg_type = Bool
+        default = false
+
     "--batchsize"
         help = "Batch size for dataset creation"
         arg_type = Int
@@ -82,7 +87,9 @@ end
 # ---------------------------------------------------------------------
 # Paths to scripts
 # ---------------------------------------------------------------------
-dataset_script = joinpath(@__DIR__, "make_analysis_dataset_sequential.jl")
+dataset_script = args["dataset_multiprocessing"] ?
+    joinpath(@__DIR__, "make_analysis_dataset.jl") :
+    joinpath(@__DIR__, "make_analysis_dataset_sequential.jl")
 stats_script   = joinpath(@__DIR__, "make_analysis_statistics.jl")
 
 isfile(dataset_script) || error("Dataset script not found: $dataset_script")
@@ -128,6 +135,7 @@ config = Dict(
     "seed"              => args["seed"],
     "batchsize"         => args["batchsize"],
     "num_processes"     => args["num_processes"],
+    "dataset_multiprocessing" => args["dataset_multiprocessing"],
     "dataset_out"       => dataset_out,
     "stats_out"         => stats_out,
     "julia_version"     => string(VERSION),
@@ -182,6 +190,7 @@ open(readme_out, "w") do io
     println(io, "         --num_csets ", args["num_csets"], " \\")
     println(io, "         --batchsize ", args["batchsize"], " \\")
     println(io, "         --num_processes ", args["num_processes"], " \\")
+    println(io, "         --dataset_multiprocessing ", args["dataset_multiprocessing"], " \\")
     println(io, "         --seed ", args["seed"], " \\")
     println(io, "         --outdir <NEW_OUTPUT_DIRECTORY>")
     println(io)
@@ -202,6 +211,7 @@ cmd = `julia -O3 $dataset_script_copy
     --batchsize $(args["batchsize"])
     --out $dataset_out
 `
+args["dataset_multiprocessing"] && (cmd = `$cmd --num_processes $(args["num_processes"])`)
 args["D"] !== nothing && (cmd = `$cmd --D $(args["D"])`)
 args["cut_restriction"] !== nothing && (cmd = `$cmd --cut_restriction $(args["cut_restriction"])`)
 run(cmd)
