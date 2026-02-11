@@ -1,5 +1,5 @@
 """
-    minkowski_interval_abundance_2d_inclusive_hypergeom(
+    minkowski_interval_abundance_2d_inclusive_asymptotic(
         m::Int, n::Int
     )
 
@@ -7,62 +7,11 @@ Exact 2D Minkowski causal-diamond interval abundance.
 Inclusive interval size m (endpoints counted).
 
 - m = 1 : returns n
-- m ≥ 2 : exact 2F2 expression
-"""
-function minkowski_interval_abundance_2d_inclusive_hypergeom(
-    m::Int,
-    n::Int
-)
-    @assert m ≥ 1
-    @assert n ≥ 1
-
-    if m == 1
-        return float(n)
-    end
-
-    mp = m - 2
-
-    return n^(mp + 2) / (factorial(mp) * (1 + mp)^2 + (2 + mp)^2) *
-           pFq((mp + 1.0, mp + 1.0),
-               (mp + 3.0, mp + 3.0),
-               -n)
-end
-
-"""
-    minkowski_interval_abundance_2d_asymptotic(m::Int, n::Real)
-
-Asymptotic approximation (large n) of the 2D Minkowski causal-diamond
-interval abundance for *inclusive* interval size m.
-
-Implements:
-n * (-2 + γ - H_m + log n)
-+ (1 + m) * (2 + log n - ψ(2 + m))
+- m ≥ 2 : large-n approximation
 """
 function minkowski_interval_abundance_2d_inclusive_asymptotic(
-    m::Int,
-    n::Int,
-)::Float64
-    @assert m ≥ 1
-    @assert n > 0
-
-    if m == 1
-        return float(n)
-    end
-
-    mp = m - 2
-
-    return n * (-2 +
-                MathConstants.eulergamma -
-                harmonic(mp) +
-                log(n)) +
-           (1 + mp) * (2 +
-                      log(n) -
-                      digamma(2 + mp))
-end
-
-function minkowski_interval_abundance_2d_inclusive_asymptotic(
-    m::Int,
-    n::Int,
+    m::Real,
+    n::Real,
 )::Float64
     @assert m ≥ 1
     @assert n > 0
@@ -482,15 +431,13 @@ from `(y_values, stds)` as returned by `average_histogram_with_std`.
 `init` may be a vector or a `NamedTuple`. `bounds` may be a tuple of
 `(lower, upper)` vectors or `(lower_nt, upper_nt)` NamedTuples.
 """
-function fit_histogram_bins(
+function fit_curve(
     y_values::Vector{Float64},
     f::Function,
-    param_syms::Tuple{Vararg{Symbol}},
-    bin_lo::Int,
-    bin_hi::Int;
+    param_syms::Tuple{Vararg{Symbol}};
+    x_values::Union{Nothing,Vector{<:Real}} = nothing,
     stds::Union{Nothing,Vector{Float64}} = nothing,
     minimize_χ²::Bool = false,
-    x_values::Union{Nothing,Vector{Float64}} = nothing,
     init::Union{Nothing,NamedTuple} = nothing,
     bounds::Union{Nothing,Tuple{NamedTuple,NamedTuple}} = nothing,
     goodness_of_fit::Bool = false,
@@ -503,9 +450,8 @@ function fit_histogram_bins(
     verbose::Bool = false,
     std_fn::Union{Nothing,Function} = nothing,
     verbose_step::Union{Nothing,Int} = nothing,
+    return_cov::Bool = false,
 )
-    @assert 1 <= bin_lo <= bin_hi <= length(y_values) "bin range out of bounds"
-    
     if std_fn !== nothing && stds === nothing
         error("std_fn requires stds to be provided")
     end
@@ -550,20 +496,15 @@ function fit_histogram_bins(
         end
     end
 
-    if x_values !== nothing
-        @assert length(x_values) >= bin_hi "x_values length must be larger than bin_hi"
-        xs = x_values[bin_lo:bin_hi]
-    else
-        xs = collect(bin_lo:bin_hi)
-    end
-    ys = y_values[bin_lo:bin_hi]
+    xs = x_values === nothing ? collect(1:length(y_values)) : x_values
+    ys = y_values
 
     function obj(x)
         v = bounds_vec === nothing ? x : clamp.(x, bounds_vec[1], bounds_vec[2])
         params = to_nt(v)
         preds = f.(xs, Ref(params))
         if minimize_χ²
-            σ = std_fn === nothing ? stds[bin_lo:bin_hi] : std_fn(ys, preds, stds[bin_lo:bin_hi], params)
+            σ = std_fn === nothing ? stds : std_fn(ys, preds, stds, params)
             r = (ys .- preds) ./ σ
         else
             r = ys .- preds
@@ -592,7 +533,7 @@ function fit_histogram_bins(
         preds = f.(xs, Ref(params))
         residuals = ys .- preds
         if !isnothing(stds)
-            σ = std_fn === nothing ? stds[bin_lo:bin_hi] : std_fn(ys, preds, stds[bin_lo:bin_hi], params)
+            σ = std_fn === nothing ? stds : std_fn(ys, preds, stds, params)
             dof = length(ys) - p
             return dof > 0 ? sum((residuals ./ σ) .^ 2) / dof : NaN
         else
@@ -666,11 +607,56 @@ function fit_histogram_bins(
     xopt = bounds_vec === nothing ? best_x : clamp.(best_x, bounds_vec[1], bounds_vec[2])
     params = to_nt(xopt)
 
+    function jacobian_fd(xs, params; eps = 1e-6)
+        p = length(param_syms)
+        base_preds = f.(xs, Ref(params))
+        J = Matrix{Float64}(undef, length(xs), p)
+        for (j, sym) in enumerate(param_syms)
+            v = getfield(params, sym)
+            step = (v == 0 ? 1.0 : abs(v)) * eps
+            vpert = v + step
+            pvec = [getfield(params, s) for s in param_syms]
+            pvec[j] = vpert
+            ppert = NamedTuple{param_syms}(Tuple(pvec))
+            preds = f.(xs, Ref(ppert))
+            J[:, j] = (preds .- base_preds) ./ step
+        end
+        return J
+    end
+
+    function cov_and_stderr(xs, ys, params)
+        J = jacobian_fd(xs, params)
+        if !isnothing(stds)
+            σ = std_fn === nothing ? stds : std_fn(ys, f.(xs, Ref(params)), stds, params)
+            W = Diagonal(1.0 ./ (σ .^ 2))
+            JT_W_J = J' * W * J
+            dof = length(ys) - length(param_syms)
+            s2 = dof > 0 ? sum(((ys .- f.(xs, Ref(params))) ./ σ) .^ 2) / dof : 1.0
+            cov = try
+                inv(JT_W_J) * s2
+            catch
+                LinearAlgebra.pinv(JT_W_J) * s2
+            end
+        else
+            JT_J = J' * J
+            dof = length(ys) - length(param_syms)
+            s2 = dof > 0 ? sum((ys .- f.(xs, Ref(params))) .^ 2) / dof : 1.0
+            cov = try
+                inv(JT_J) * s2
+            catch
+                LinearAlgebra.pinv(JT_J) * s2
+            end
+        end
+        stderr = sqrt.(abs.(diag(cov)))
+        stderr_nt = NamedTuple{param_syms}(Tuple(stderr))
+        return cov, stderr_nt
+    end
+
     if goodness_of_fit
         preds = f.(xs, Ref(params))
         residuals = ys .- preds
         if !isnothing(stds)
-            σ = std_fn === nothing ? stds[bin_lo:bin_hi] : std_fn(ys, preds, stds[bin_lo:bin_hi], params)
+            σ = std_fn === nothing ? stds : std_fn(ys, preds, stds, params)
             dof = length(ys) - p
             if dof <= 0
                 @warn "chi-squared undefined: degrees of freedom <= 0" dof = dof
@@ -678,12 +664,86 @@ function fit_histogram_bins(
             else
                 χ² = sum((residuals ./ σ) .^ 2) / dof
             end
+            if return_cov
+                cov, stderr_nt = cov_and_stderr(xs, ys, params)
+                return (params = params, rel_residuals = residuals ./ ys, χ² = χ², cov = cov, stderr = stderr_nt)
+            end
             return (params = params, rel_residuals = residuals ./ ys, χ² = χ²)
+        end
+        if return_cov
+            cov, stderr_nt = cov_and_stderr(xs, ys, params)
+            return (params = params, rel_residuals = residuals ./ ys, cov = cov, stderr = stderr_nt)
         end
         return (params = params, rel_residuals = residuals ./ ys)
     end
 
+    if return_cov
+        cov, stderr_nt = cov_and_stderr(xs, ys, params)
+        return (params = params, cov = cov, stderr = stderr_nt)
+    end
     return params
+end
+
+function fit_histogram_bins(
+    y_values::Vector{Float64},
+    f::Function,
+    param_syms::Tuple{Vararg{Symbol}},
+    bin_lo::Int,
+    bin_hi::Int;
+    stds::Union{Nothing,Vector{Float64}} = nothing,
+    minimize_χ²::Bool = false,
+    x_values::Union{Nothing,Vector{<:Real}} = nothing,
+    init::Union{Nothing,NamedTuple} = nothing,
+    bounds::Union{Nothing,Tuple{NamedTuple,NamedTuple}} = nothing,
+    goodness_of_fit::Bool = false,
+    ϵ::Real = 1e-3,
+    multistart::Int = 1,
+    rng::Union{Nothing,AbstractRNG} = nothing,
+    optim_options = nothing,
+    method = Optim.NelderMead(),
+    autodiff = nothing,
+    verbose::Bool = false,
+    std_fn::Union{Nothing,Function} = nothing,
+    verbose_step::Union{Nothing,Int} = nothing,
+    return_cov::Bool = false,
+)
+    @assert 1 <= bin_lo <= bin_hi <= length(y_values) "bin range out of bounds"
+    if !isnothing(stds)
+        @assert length(stds) == length(y_values) "stds length must match y_values length"
+        stds_slice = stds[bin_lo:bin_hi]
+    else
+        stds_slice = nothing
+    end
+
+    xs = if x_values !== nothing
+        @assert length(x_values) >= bin_hi "x_values length must be larger than bin_hi"
+        x_values[bin_lo:bin_hi]
+    else
+        collect(bin_lo:bin_hi)
+    end
+    ys = y_values[bin_lo:bin_hi]
+
+    return fit_curve(
+        ys,
+        f,
+        param_syms;
+        x_values = xs,
+        stds = stds_slice,
+        minimize_χ² = minimize_χ²,
+        init = init,
+        bounds = bounds,
+        goodness_of_fit = goodness_of_fit,
+        ϵ = ϵ,
+        multistart = multistart,
+        rng = rng,
+        optim_options = optim_options,
+        method = method,
+        autodiff = autodiff,
+        verbose = verbose,
+        std_fn = std_fn,
+        verbose_step = verbose_step,
+        return_cov = return_cov,
+    )
 end
 
 """
@@ -770,23 +830,6 @@ function _logticks_internal(lo::Real, hi::Real; base::Real = 10.0)
     ticks = [base^Float64(p) for p in pmin:pmax if lo ≤ base^Float64(p) ≤ hi]
     labels = latex_label.(ticks)
 
-    if isempty(ticks)
-        # promote minor ticks to major ticks if needed (avoid recursion)
-        minor = Float64[]
-        for p in pmin:pmax
-            for m in 2:9
-                v = m * base^Float64(p)
-                lo ≤ v ≤ hi && push!(minor, v)
-            end
-        end
-        sort!(minor)
-        if !isempty(minor)
-            ticks = minor
-            labels = latex_label.(ticks)
-            return ticks, labels, :promoted
-        end
-    end
-
     return ticks, labels, :decades
 end
 
@@ -851,6 +894,8 @@ function apply_paper_theme!(;
     magnification::Real = 1.0,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
+    xticks = nothing,
+    yticks = nothing,
     legendpos = :rt,
     legendpadding = nothing,
     legendmargin = nothing,
@@ -931,6 +976,9 @@ function apply_paper_theme!(;
             yminorticks = logminorticks,
         ))
     end
+
+    xticks !== nothing && (axis_kwargs = merge(axis_kwargs, (xticks = xticks,)))
+    yticks !== nothing && (axis_kwargs = merge(axis_kwargs, (yticks = yticks,)))
 
     @assert 0.0 <= color_transparency <= 1.0
     base_colors = [
