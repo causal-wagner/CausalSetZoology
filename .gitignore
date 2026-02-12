@@ -1,0 +1,45 @@
+# Julia (packages, caches, compiled)
+.julia/
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+*.ji
+
+# Pkg / environment artifacts
+Manifest.toml.bak
+
+# Build artifacts
+deps/deps.jl
+deps/build.log
+deps/downloads/
+deps/usr/
+build/
+dist/
+
+# Documentation build output (Documenter.jl)
+docs/build/
+docs/site/
+
+# Notebooks / plots / data (project-specific; adjust)
+*.ipynb_checkpoints/
+*.png
+*.pdf
+*.svg
+*.h5
+*.jld2
+*.zarr
+*.npz
+*.csv
+*.parquet
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Manifest
+Manifest.toml
