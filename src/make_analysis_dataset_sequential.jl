@@ -70,6 +70,15 @@ for (i, arg) in enumerate(args)
         end
     end
 
+    if arg == "--link_probability"
+        if i + 1 <= length(args)
+            global link_probability = parse(Float64, args[i+1])
+        else
+            println("Error: --link_probability requires a float argument.")
+            exit(1)
+        end
+    end
+
     if arg == "--help" || arg == "-h"
         println(
             "Usage: julia make_analysis_dataset.jl [--kind <kind>] [--out <output_path>] [--N <number>]",
@@ -85,6 +94,7 @@ for (i, arg) in enumerate(args)
         println("  --seed <number>                  Global RNG seed (default: 123456).")
         println("  --D <number>                     Dimensionality of the spacetime (default: 2) -- only supported for Minkowski sprinklings and manifoldlike_simply_connected kinds.")
         println("  --cut_restriction <restriction>  Restricts allowed topological cuts (for kind manifoldlike_non_simply_connected). Can be \"boundary_cuts\" or \"free_cuts\".")
+        println("  --link_probability <number>      Fix link probability for merged creation (0.0 to 1.0).")
         println("  --help, -h                       Show this help message.")
         exit(0)
     end
@@ -106,6 +116,16 @@ if !@isdefined(kind)
     exit(1)
 end
 
+if @isdefined(link_probability)
+    if link_probability < 0.0 || link_probability > 1.0
+        println("Error: --link_probability must be between 0.0 and 1.0.")
+        exit(1)
+    end
+    if kind != "merged"
+        @warn "--link_probability is only used for kind=merged; ignoring for kind=$(kind)"
+    end
+end
+
 generate_cset_size = !@isdefined(cset_size)
 
 info_parts = String[
@@ -116,6 +136,7 @@ info_parts = String[
 
 @isdefined(D) && push!(info_parts, "D=$(D)")
 @isdefined(cut_restriction) && push!(info_parts, "cut_restriction=$(cut_restriction)")
+@isdefined(link_probability) && push!(info_parts, "link_probability=$(link_probability)")
 @isdefined(batchsize) && push!(info_parts, "batchsize=$(batchsize)")
 @isdefined(seed) && push!(info_parts, "seed=$(seed)")
 @isdefined(out_path) && push!(info_parts, "output path=$(out_path)")
@@ -224,6 +245,9 @@ end
 if @isdefined(cut_restriction)
     config["cut_restriction"] = cut_restriction
 end
+if @isdefined(link_probability)
+    config["link_probability"] = link_probability
+end
 
 nbatches = cld(N, batchsize)
 
@@ -250,6 +274,7 @@ JLD2.jldopen(out_path, "w") do fout
         rotation_angle_b = Float64[]
         rel_num_flips_b = Float64[]
         rel_size_KR_b = Float64[]
+        link_probability_b = Float64[]
         lattice_b = String[]
         trans_in_b  = Float64[]
         trans_out_b = Float64[]
@@ -304,12 +329,13 @@ JLD2.jldopen(out_path, "w") do fout
             elseif kind == "merged"
                 r = rand(rng, rdistr)
                 order = rand(rng, orderdistr)
-                link_probability = rand(rng, link_probability_distr)
+                link_probability_value = @isdefined(link_probability) ? link_probability : rand(rng, link_probability_distr)
                 n2_rel = rand(rng, non_manifoldlikeness_distr)
-                cset, _, _ = QG.insert_KR_into_manifoldlike(cset_size, order, r, link_probability; rng = rng, n2_rel = n2_rel)
+                cset, _, _ = QG.insert_KR_into_manifoldlike(cset_size, order, r, link_probability_value; rng = rng, n2_rel = n2_rel)
                 push!(r_b, r)
                 push!(order_b, order)
                 push!(rel_size_KR_b, n2_rel)
+                push!(link_probability_b, link_probability_value)
             
             elseif kind == "grid"
                 r = rand(rng, rdistr)
@@ -424,6 +450,7 @@ JLD2.jldopen(out_path, "w") do fout
             fout["batches/$b/r"] = r_b
             fout["batches/$b/order"] = order_b
             fout["batches/$b/rel_size_KR"] = rel_size_KR_b
+            fout["batches/$b/link_probability"] = link_probability_b
         end
 
         if kind == "grid"

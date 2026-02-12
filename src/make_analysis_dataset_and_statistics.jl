@@ -28,6 +28,11 @@ s = ArgParseSettings()
         help = "Restricts allowed topological cuts (for kind manifoldlike_non_simply_connected). Can be \"boundary_cuts\" or \"free_cuts\")"
         required = false
 
+    "--link_probability"
+        help = "Fix link probability for merged creation (0.0 to 1.0)"
+        arg_type = Float64
+        required = false
+
     "--size"
         help = "Causal set size"
         arg_type = Int
@@ -68,6 +73,15 @@ args = parse_args(s)
 
 outdir = args["outdir"]
 isdir(outdir) || mkpath(outdir)
+
+if args["link_probability"] !== nothing
+    if args["link_probability"] < 0.0 || args["link_probability"] > 1.0
+        error("--link_probability must be between 0.0 and 1.0")
+    end
+    if args["kind"] != "merged"
+        @warn "--link_probability is only used for kind=merged; ignoring for kind=$(args["kind"])"
+    end
+end
 
 dataset_out = joinpath(outdir, "dataset.jld2")
 stats_out   = joinpath(outdir, "statistics.jld2")
@@ -148,6 +162,7 @@ config = Dict(
 )
 args["D"] !== nothing && (config["dimension"] = args["D"])
 args["cut_restriction"] !== nothing && (config["cut_restriction"] = args["cut_restriction"])
+args["link_probability"] !== nothing && (config["link_probability"] = args["link_probability"])
 
 YAML.write_file(config_out, config)
 
@@ -186,6 +201,9 @@ open(readme_out, "w") do io
     if args["cut_restriction"] !== nothing
         println(io, "         --cut_restriction ", args["cut_restriction"], " \\")
     end
+    if args["link_probability"] !== nothing
+        println(io, "         --link_probability ", args["link_probability"], " \\")
+    end
     println(io, "         --size ", args["size"], " \\")
     println(io, "         --num_csets ", args["num_csets"], " \\")
     println(io, "         --batchsize ", args["batchsize"], " \\")
@@ -214,6 +232,7 @@ cmd = `julia -O3 $dataset_script_copy
 args["dataset_multiprocessing"] && (cmd = `$cmd --num_processes $(args["num_processes"])`)
 args["D"] !== nothing && (cmd = `$cmd --D $(args["D"])`)
 args["cut_restriction"] !== nothing && (cmd = `$cmd --cut_restriction $(args["cut_restriction"])`)
+args["link_probability"] !== nothing && (cmd = `$cmd --link_probability $(args["link_probability"])`)
 run(cmd)
 
 # Ensure dataset was written

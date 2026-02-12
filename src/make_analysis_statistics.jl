@@ -2,12 +2,13 @@ args = ARGS
 for (i, arg) in enumerate(args)
     if arg == "--help" || arg == "-h"
         println(
-            "Usage: julia make_analysis_statistics.jl [--kind <kind>] [--in <input_path>] [--out <output_path>] [--num_processes <number>] [--batchsize <number>]",
+            "Usage: julia make_analysis_statistics.jl [--kind <kind>] [--in <input_path>] [--out <output_path>] [--num_processes <number>] [--batchsize <number>] [--link_probability <number>]",
         )
         println("Options:")
         println("  --in <input_path>                Path to the input .jld2 file containing dataset information.")
         println("  --out <output_path>              Path to save the resulting .csv file with computed statistics.")
         println("  --num_processes <number>         Number of parallel processes to use for computation.")
+        println("  --link_probability <number>      Optional metadata for merged datasets (0.0 to 1.0).")
         println("  --help, -h                       Show this help message.")
         exit(0)
     end
@@ -38,6 +39,22 @@ for (i, arg) in enumerate(args)
             exit(1)
         end
     end
+
+    if arg == "--link_probability"
+        if i + 1 <= length(args)
+            global link_probability = parse(Float64, args[i+1])
+        else
+            println("Error: --link_probability requires a float argument.")
+            exit(1)
+        end
+    end
+end
+
+if @isdefined(link_probability)
+    if link_probability < 0.0 || link_probability > 1.0
+        println("Error: --link_probability must be between 0.0 and 1.0.")
+        exit(1)
+    end
 end
 
 ################################################################################
@@ -56,7 +73,11 @@ const kind = JLD2.jldopen(in_path, "r") do f
     f["meta/config"]["kind"]
 end
 
-@info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
+if @isdefined(link_probability)
+    @info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes), link_probability=$(link_probability)"
+else
+    @info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
+end
 
 @everywhere import CausalSets as CS
 @everywhere import DataFrames
@@ -114,6 +135,7 @@ end
     rotation_angle = 0,
     rel_num_flips = 0,
     rel_size_KR = 0,
+    link_probability = 0,
     lattice = 0,
     trans_in = 0,
     trans_out = 0,
@@ -553,7 +575,7 @@ end
         d = merge(d, d2)
     elseif kind == "merged"
         # @debug "  augmenting merged data..."
-        d2 = (r = r, order = order, rel_size_KR = rel_size_KR)
+        d2 = (r = r, order = order, rel_size_KR = rel_size_KR, link_probability = link_probability)
         d = merge(d, d2)
     elseif kind=="grid"
         #@debug "  augmenting grid data..."
@@ -575,6 +597,9 @@ JLD2.jldopen(out_path, "w") do fout
     fout["meta/batchsize"] = batchsize_in
     fout["meta/nbatches"]  = nbatches
     fout["meta/N"]         = N
+    if @isdefined(link_probability)
+        fout["meta/link_probability"] = link_probability
+    end
 
     idx = 1
 for b = 1:nbatches
@@ -588,7 +613,7 @@ for b = 1:nbatches
             r_b = order_b = num_boundary_cuts_b = genus_b = 
             rel_num_flips_b = rel_size_KR_b = segment_ratio_b = 
             segment_angle_b = rotation_angle_b = lattice_b = num_layers_b = std_b = 
-            trans_in_b = trans_out_b = nothing
+            trans_in_b = trans_out_b = link_probability_b = nothing
 
             if kind == "manifoldlike_simply_connected"
                 r_b     = fin["batches/$b/r"]
@@ -609,6 +634,7 @@ for b = 1:nbatches
                 r_b           = fin["batches/$b/r"]
                 order_b       = fin["batches/$b/order"]
                 rel_size_KR_b = fin["batches/$b/rel_size_KR"]
+                link_probability_b = fin["batches/$b/link_probability"]
 
             elseif kind == "grid"
                 r_b             = fin["batches/$b/r"]
@@ -672,6 +698,7 @@ for b = 1:nbatches
                         r           = r_b !== nothing             ? r_b[i]             : 0,
                         order       = order_b !== nothing         ? order_b[i]         : 0,
                         rel_size_KR = rel_size_KR_b !== nothing   ? rel_size_KR_b[i]   : 0,
+                        link_probability = link_probability_b !== nothing ? link_probability_b[i] : 0,
                     )
                 elseif kind == "grid"
                     compute(
