@@ -37,4 +37,4 @@ Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
 
 [sources]
 CausalSets = {url = "https://codeberg.org/cyclopentane/CausalSets.jl"}
-QuantumGrav = {rev = "grids_with_fixed_boundary", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}
+QuantumGrav = {rev = "main", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}
