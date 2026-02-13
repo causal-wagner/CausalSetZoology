@@ -119,6 +119,44 @@ end
     return d
 end
 
+@everywhere function ev_summary(ev)
+    abs_ev = abs.(ev)
+    num_zero_ev = count(abs_ev .<= 1e-10)
+    min_abs_nonzero_ev = let nz = abs_ev[abs_ev .> 1e-10]
+        isempty(nz) ? NaN : minimum(nz)
+    end
+    return (
+        ev,
+        num_zero_ev,
+        min_abs_nonzero_ev,
+        minimum(ev),
+        maximum(ev),
+        mean(ev),
+        quantile(ev, 0.25),
+        quantile(ev, 0.75),
+        quantile(ev, 0.5),
+    )
+end
+
+@everywhere function sym_norm_lap_eigs!(W)
+    n = size(W, 1)
+    deg = vec(sum(W, dims = 2))
+    dinvsqrt = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        di = deg[i]
+        dinvsqrt[i] = di > 0.0 ? inv(sqrt(di)) : 0.0
+    end
+
+    LinearAlgebra.lmul!(LinearAlgebra.Diagonal(dinvsqrt), W)
+    LinearAlgebra.rmul!(W, LinearAlgebra.Diagonal(dinvsqrt))
+    W .*= -1.0
+    @inbounds for i in 1:n
+        W[i, i] += 1.0
+    end
+
+    return LinearAlgebra.eigen(LinearAlgebra.Hermitian(W)).values
+end
+
 @everywhere function compute(
     i,
     adj,
@@ -167,26 +205,28 @@ end
     end
 
     t_lap = begin
-        in_laplacian = LinearAlgebra.Diagonal(in_deg) - transpose(adj)
-        out_laplacian = LinearAlgebra.Diagonal(out_deg) - adj
+        # Densify once; eigensolvers are dense anyway.
+        adj_f = Float64.(adj)
 
-        ev_in = LinearAlgebra.eigen(Matrix(in_laplacian)).values
-        ev_out = LinearAlgebra.eigen(Matrix(out_laplacian)).values
+        # W_sym = A + A^T
+        W_sym = copy(adj_f)
+        W_sym .+= transpose(adj_f)
 
-        countmap(ev_in),
-        minimum(ev_in),
-        maximum(ev_in),
-        mean(ev_in),
-        quantile(ev_in, 0.25),
-        quantile(ev_in, 0.75),
-        quantile(ev_in, 0.5),
-        countmap(ev_out),
-        minimum(ev_out),
-        maximum(ev_out),
-        mean(ev_out),
-        quantile(ev_out, 0.25),
-        quantile(ev_out, 0.75),
-        quantile(ev_out, 0.5)
+        # W_aat = A A^T and W_ata = A^T A
+        W_aat = Matrix{Float64}(undef, n, n)
+        W_ata = Matrix{Float64}(undef, n, n)
+        LinearAlgebra.mul!(W_aat, adj_f, transpose(adj_f))
+        LinearAlgebra.mul!(W_ata, transpose(adj_f), adj_f)
+
+        ev_sym = sym_norm_lap_eigs!(W_sym)
+        ev_aat = sym_norm_lap_eigs!(W_aat)
+        ev_ata = sym_norm_lap_eigs!(W_ata)
+
+        (
+            ev_summary(ev_sym)...,
+            ev_summary(ev_aat)...,
+            ev_summary(ev_ata)...,
+        )
     end
 
     tdeg_link = begin
@@ -207,26 +247,28 @@ end
     end
 
     t_lap_link = begin
-        in_laplacian = LinearAlgebra.Diagonal(in_deg_link) - transpose(link)
-        out_laplacian = LinearAlgebra.Diagonal(out_deg_link) - link
+        # Densify once; eigensolvers are dense anyway.
+        link_f = Float64.(link)
 
-        ev_in = LinearAlgebra.eigen(Matrix(in_laplacian)).values
-        ev_out = LinearAlgebra.eigen(Matrix(out_laplacian)).values
+        # W_sym = A + A^T
+        W_sym = copy(link_f)
+        W_sym .+= transpose(link_f)
 
-        countmap(ev_in),
-        minimum(ev_in),
-        maximum(ev_in),
-        mean(ev_in),
-        quantile(ev_in, 0.25),
-        quantile(ev_in, 0.75),
-        quantile(ev_in, 0.5),
-        countmap(ev_out),
-        minimum(ev_out),
-        maximum(ev_out),
-        mean(ev_out),
-        quantile(ev_out, 0.25),
-        quantile(ev_out, 0.75),
-        quantile(ev_out, 0.5)
+        # W_aat = A A^T and W_ata = A^T A
+        W_aat = Matrix{Float64}(undef, n, n)
+        W_ata = Matrix{Float64}(undef, n, n)
+        LinearAlgebra.mul!(W_aat, link_f, transpose(link_f))
+        LinearAlgebra.mul!(W_ata, transpose(link_f), link_f)
+
+        ev_sym = sym_norm_lap_eigs!(W_sym)
+        ev_aat = sym_norm_lap_eigs!(W_aat)
+        ev_ata = sym_norm_lap_eigs!(W_ata)
+
+        (
+            ev_summary(ev_sym)...,
+            ev_summary(ev_aat)...,
+            ev_summary(ev_ata)...,
+        )
     end
 
 
@@ -367,35 +409,61 @@ end
     max_pathlen_q75_link,
     max_pathlen_median_link = t_paths_link
 
-    ev_in_hist,
-    ev_in_min,
-    ev_in_max,
-    ev_in_mean,
-    ev_in_q25,
-    ev_in_q75,
-    ev_in_median,
-    ev_out_hist,
-    ev_out_min,
-    ev_out_max,
-    ev_out_mean,
-    ev_out_q25,
-    ev_out_q75,
-    ev_out_median = t_lap
+    ev_sym,
+    ev_sym_num_zero,
+    ev_sym_min_abs_nonzero,
+    ev_sym_min,
+    ev_sym_max,
+    ev_sym_mean,
+    ev_sym_q25,
+    ev_sym_q75,
+    ev_sym_median,
+    ev_aat,
+    ev_aat_num_zero,
+    ev_aat_min_abs_nonzero,
+    ev_aat_min,
+    ev_aat_max,
+    ev_aat_mean,
+    ev_aat_q25,
+    ev_aat_q75,
+    ev_aat_median,
+    ev_ata,
+    ev_ata_num_zero,
+    ev_ata_min_abs_nonzero,
+    ev_ata_min,
+    ev_ata_max,
+    ev_ata_mean,
+    ev_ata_q25,
+    ev_ata_q75,
+    ev_ata_median = t_lap
 
-    ev_in_hist_link,
-    ev_in_min_link,
-    ev_in_max_link,
-    ev_in_mean_link,
-    ev_in_q25_link,
-    ev_in_q75_link,
-    ev_in_median_link,
-    ev_out_hist_link,
-    ev_out_min_link,
-    ev_out_max_link,
-    ev_out_mean_link,
-    ev_out_q25_link,
-    ev_out_q75_link,
-    ev_out_median_link = t_lap_link
+    ev_sym_link,
+    ev_sym_num_zero_link,
+    ev_sym_min_abs_nonzero_link,
+    ev_sym_min_link,
+    ev_sym_max_link,
+    ev_sym_mean_link,
+    ev_sym_q25_link,
+    ev_sym_q75_link,
+    ev_sym_median_link,
+    ev_aat_link,
+    ev_aat_num_zero_link,
+    ev_aat_min_abs_nonzero_link,
+    ev_aat_min_link,
+    ev_aat_max_link,
+    ev_aat_mean_link,
+    ev_aat_q25_link,
+    ev_aat_q75_link,
+    ev_aat_median_link,
+    ev_ata_link,
+    ev_ata_num_zero_link,
+    ev_ata_min_abs_nonzero_link,
+    ev_ata_min_link,
+    ev_ata_max_link,
+    ev_ata_mean_link,
+    ev_ata_q25_link,
+    ev_ata_q75_link,
+    ev_ata_median_link = t_lap_link
 
     @debug "fetching results rn, cn, d"
     connectivity = t_rn
@@ -490,41 +558,71 @@ end
         num_sources_link = num_sources_link,
         num_sinks_link = num_sinks_link,
 
-        # eigenvalues of lap in
-        ev_in_hist = ev_in_hist,
-        ev_in_min = ev_in_min,
-        ev_in_max = ev_in_max,
-        ev_in_mean = ev_in_mean,
-        ev_in_q25 = ev_in_q25,
-        ev_in_q75 = ev_in_q75,
-        ev_in_median = ev_in_median,
+        # eigenvalues of sym-normalized laplacian for A + A^T
+        ev_sym = ev_sym,
+        ev_sym_num_zero = ev_sym_num_zero,
+        ev_sym_min_abs_nonzero = ev_sym_min_abs_nonzero,
+        ev_sym_min = ev_sym_min,
+        ev_sym_max = ev_sym_max,
+        ev_sym_mean = ev_sym_mean,
+        ev_sym_q25 = ev_sym_q25,
+        ev_sym_q75 = ev_sym_q75,
+        ev_sym_median = ev_sym_median,
 
-        # eigenvalues of lap out
-        ev_out_hist = ev_out_hist,
-        ev_out_min = ev_out_min,
-        ev_out_max = ev_out_max,
-        ev_out_mean = ev_out_mean,
-        ev_out_q25 = ev_out_q25,
-        ev_out_q75 = ev_out_q75,
-        ev_out_median = ev_out_median,
+        # eigenvalues of sym-normalized laplacian for A A^T
+        ev_aat = ev_aat,
+        ev_aat_num_zero = ev_aat_num_zero,
+        ev_aat_min_abs_nonzero = ev_aat_min_abs_nonzero,
+        ev_aat_min = ev_aat_min,
+        ev_aat_max = ev_aat_max,
+        ev_aat_mean = ev_aat_mean,
+        ev_aat_q25 = ev_aat_q25,
+        ev_aat_q75 = ev_aat_q75,
+        ev_aat_median = ev_aat_median,
 
-        # eigenvalues of lap for link in
-        ev_in_hist_link = ev_in_hist_link,
-        ev_in_min_link = ev_in_min_link,
-        ev_in_max_link = ev_in_max_link,
-        ev_in_mean_link = ev_in_mean_link,
-        ev_in_q25_link = ev_in_q25_link,
-        ev_in_q75_link = ev_in_q75_link,
-        ev_in_median_link = ev_in_median_link,
+        # eigenvalues of sym-normalized laplacian for A^T A
+        ev_ata = ev_ata,
+        ev_ata_num_zero = ev_ata_num_zero,
+        ev_ata_min_abs_nonzero = ev_ata_min_abs_nonzero,
+        ev_ata_min = ev_ata_min,
+        ev_ata_max = ev_ata_max,
+        ev_ata_mean = ev_ata_mean,
+        ev_ata_q25 = ev_ata_q25,
+        ev_ata_q75 = ev_ata_q75,
+        ev_ata_median = ev_ata_median,
 
-        # eigenvalue of lap for link out
-        ev_out_hist_link = ev_out_hist_link,
-        ev_out_min_link = ev_out_min_link,
-        ev_out_max_link = ev_out_max_link,
-        ev_out_mean_link = ev_out_mean_link,
-        ev_out_q25_link = ev_out_q25_link,
-        ev_out_q75_link = ev_out_q75_link,
-        ev_out_median_link = ev_out_median_link,
+        # eigenvalues of sym-normalized laplacian for link + link^T
+        ev_sym_link = ev_sym_link,
+        ev_sym_num_zero_link = ev_sym_num_zero_link,
+        ev_sym_min_abs_nonzero_link = ev_sym_min_abs_nonzero_link,
+        ev_sym_min_link = ev_sym_min_link,
+        ev_sym_max_link = ev_sym_max_link,
+        ev_sym_mean_link = ev_sym_mean_link,
+        ev_sym_q25_link = ev_sym_q25_link,
+        ev_sym_q75_link = ev_sym_q75_link,
+        ev_sym_median_link = ev_sym_median_link,
+
+        # eigenvalues of sym-normalized laplacian for link link^T
+        ev_aat_link = ev_aat_link,
+        ev_aat_num_zero_link = ev_aat_num_zero_link,
+        ev_aat_min_abs_nonzero_link = ev_aat_min_abs_nonzero_link,
+        ev_aat_min_link = ev_aat_min_link,
+        ev_aat_max_link = ev_aat_max_link,
+        ev_aat_mean_link = ev_aat_mean_link,
+        ev_aat_q25_link = ev_aat_q25_link,
+        ev_aat_q75_link = ev_aat_q75_link,
+        ev_aat_median_link = ev_aat_median_link,
+
+        # eigenvalues of sym-normalized laplacian for link^T link
+        ev_ata_link = ev_ata_link,
+        ev_ata_num_zero_link = ev_ata_num_zero_link,
+        ev_ata_min_abs_nonzero_link = ev_ata_min_abs_nonzero_link,
+        ev_ata_min_link = ev_ata_min_link,
+        ev_ata_max_link = ev_ata_max_link,
+        ev_ata_mean_link = ev_ata_mean_link,
+        ev_ata_q25_link = ev_ata_q25_link,
+        ev_ata_q75_link = ev_ata_q75_link,
+        ev_ata_median_link = ev_ata_median_link,
 
         #
         connectivity = connectivity,

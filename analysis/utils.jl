@@ -366,13 +366,36 @@ function average_histogram_with_std(
 end
 
 function average_histogram_with_std(
-    hists::AbstractVector{<:Tuple{<:AbstractDict,<:Real}},
+    hists::AbstractVector{<:Tuple{<:AbstractDict,<:Real}};
+    num_bins::Union{Nothing,Int} = nothing,
 )::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}
     isempty(hists) && return Tuple{Real,Vector{Float64},Vector{Float64}}[]
+
+    if num_bins !== nothing
+        @assert num_bins ≥ 1 "num_bins must be >= 1"
+    end
+
+    # optional binning of scalar values
+    bin_edges = nothing
+    if num_bins !== nothing
+        values = [v for (_, v) in hists]
+        vmin, vmax = minimum(values), maximum(values)
+        if vmin == vmax
+            bin_edges = [vmin, vmax + 1e-12]
+        else
+            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
+        end
+    end
 
     groups = Dict{Real,Vector{Dict}}()
     for (h, v) in hists
         @assert v isa Real
+        if bin_edges !== nothing
+            # assign to evenly spaced bin center
+            idx = searchsortedlast(bin_edges, v)
+            idx = clamp(idx, 1, length(bin_edges) - 1)
+            v = (bin_edges[idx] + bin_edges[idx + 1]) / 2
+        end
         get!(groups, v, Dict[])
         push!(groups[v], h)
     end
@@ -451,6 +474,8 @@ function fit_curve(
     std_fn::Union{Nothing,Function} = nothing,
     verbose_step::Union{Nothing,Int} = nothing,
     return_cov::Bool = false,
+    bootstrap_errorbars::Bool = false,
+    n_boot::Int = 200,
 )
     if std_fn !== nothing && stds === nothing
         error("std_fn requires stds to be provided")
@@ -499,20 +524,23 @@ function fit_curve(
     xs = x_values === nothing ? collect(1:length(y_values)) : x_values
     ys = y_values
 
-    function obj(x)
-        v = bounds_vec === nothing ? x : clamp.(x, bounds_vec[1], bounds_vec[2])
-        params = to_nt(v)
-        preds = f.(xs, Ref(params))
-        if minimize_χ²
-            σ = std_fn === nothing ? stds : std_fn(ys, preds, stds, params)
-            r = (ys .- preds) ./ σ
-        else
-            r = ys .- preds
+    function make_obj(ys_local)
+        return function (x)
+            v = bounds_vec === nothing ? x : clamp.(x, bounds_vec[1], bounds_vec[2])
+            params = to_nt(v)
+            preds = f.(xs, Ref(params))
+            if minimize_χ²
+                σ = std_fn === nothing ? stds : std_fn(ys_local, preds, stds, params)
+                r = (ys_local .- preds) ./ σ
+            else
+                r = ys_local .- preds
+            end
+            return sum(r .^ 2)
         end
-        return sum(r .^ 2)
     end
 
-    function solve(x0)
+    function solve(x0, ys_local)
+        obj = make_obj(ys_local)
         if isnothing(optim_options)
             result = autodiff === nothing ?
                 Optim.optimize(obj, x0, method) :
@@ -546,7 +574,7 @@ function fit_curve(
         end
     end
 
-    best_x, best_f = solve(init_vec)
+    best_x, best_f = solve(init_vec, ys)
     best_score = score_for(best_x)
     label = isnothing(stds) ? "rel_rms" : "χ²"
     step = if verbose
@@ -586,7 +614,7 @@ function fit_curve(
                 end
                 x
             end
-            xopt, fmin = solve(x0)
+            xopt, fmin = solve(x0, ys)
             score = score_for(xopt)
             if fmin < best_f
                 best_x, best_f = xopt, fmin
@@ -625,6 +653,27 @@ function fit_curve(
     end
 
     function cov_and_stderr(xs, ys, params)
+        if bootstrap_errorbars
+            if stds === nothing
+                error("bootstrap_errorbars requires stds to be provided")
+            end
+            rng_local = rng === nothing ? Random.GLOBAL_RNG : rng
+            n_boot = n_boot
+            p = length(param_syms)
+            samples = Matrix{Float64}(undef, n_boot, p)
+            base_preds = f.(xs, Ref(params))
+            σ_base = std_fn === nothing ? stds : std_fn(ys, base_preds, stds, params)
+            for i in 1:n_boot
+                ys_boot = ys .+ randn(rng_local, length(ys)) .* σ_base
+                xopt_boot, _ = solve(xopt, ys_boot)
+                xopt_boot = bounds_vec === nothing ? xopt_boot : clamp.(xopt_boot, bounds_vec[1], bounds_vec[2])
+                samples[i, :] = xopt_boot
+            end
+            cov = Statistics.cov(samples)
+            stderr = sqrt.(abs.(diag(cov)))
+            stderr_nt = NamedTuple{param_syms}(Tuple(stderr))
+            return cov, stderr_nt
+        end
         J = jacobian_fd(xs, params)
         if !isnothing(stds)
             σ = std_fn === nothing ? stds : std_fn(ys, f.(xs, Ref(params)), stds, params)
@@ -907,7 +956,8 @@ function apply_paper_theme!(;
     dpi = 96
     pt = 4/3
     width_cm = double_column ? 17.8 : 8.6
-    height_cm = 0.75 * width_cm
+    # keep height tied to single-column width to avoid doubling overall size
+    height_cm = 0.75 * 8.6
 
     s(x) = x * magnification
 
@@ -1077,9 +1127,10 @@ function plot_mean_histograms_with_std(
     legendmargin = nothing,
     n_Legend_columns::Int = 1,
     linewidth::Union{Nothing,Real} = nothing,
-        markersize::Union{Nothing,Real} = nothing,
-        plot_types::Union{Nothing,Vector{Symbol}} = nothing,
-        return_axis::Bool = false,
+    markersize::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    plot_std::Bool = true,
+    return_axis::Bool = false,
 )::Union{Figure, Tuple{Figure, Axis}}
 
     if hist_labels !== nothing
@@ -1149,7 +1200,9 @@ function plot_mean_histograms_with_std(
 
         plot_type = plot_types === nothing ? :line : plot_types[i]
         if plot_type == :line
-            band!(ax, x, ylo, yhi; color = (color, 0.2))
+            if plot_std
+                band!(ax, x, ylo, yhi; color = (color, 0.2))
+            end
             if hist_labels === nothing
                 isnothing(linewidth) ? lines!(ax, x, mean; color = color) : lines!(ax, x, mean; color = color, linewidth = linewidth)
             else
@@ -1161,8 +1214,10 @@ function plot_mean_histograms_with_std(
             else
                 isnothing(markersize) ? scatter!(ax, x, mean; color = color, label = hist_labels[i]) : scatter!(ax, x, mean; color = color, label = hist_labels[i], markersize = markersize)
             end
-            err = mean .- ylo
-            Makie.errorbars!(ax, x, mean, err, err; color = color)
+            if plot_std
+                err = mean .- ylo
+                Makie.errorbars!(ax, x, mean, err, err; color = color)
+            end
         else
             error("plot_types entries must be :line or :scatter")
         end
@@ -1182,7 +1237,7 @@ end
 
 """
     plot_mean_histograms_with_std(
-        data::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}};
+        data::Vector{Tuple{<:Real,Vector{Float64},Vector{Float64}}};
         xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
         ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
         logscale_x::Bool = false,
@@ -1211,7 +1266,7 @@ Each element of `data` must be `(value, mean, std)` where `value` is used to
 pick a color from `colormap`.
 """
 function plot_mean_histograms_with_std(
-    data::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}};
+    data::Vector{Tuple{<:Real,Vector{Float64},Vector{Float64}}};
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = false,
@@ -1231,6 +1286,11 @@ function plot_mean_histograms_with_std(
     markersize::Union{Nothing,Real} = nothing,
     colormap = :viridis,
     colorbar_label::Union{Nothing,AbstractString} = nothing,
+    colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
+    plot_std::Bool = true,
+    invert_color_scaling::Bool = false,
+    colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
     return_axis::Bool = false,
 )::Union{Figure, Tuple{Figure, Axis}}
 
@@ -1281,10 +1341,12 @@ function plot_mean_histograms_with_std(
     vmin, vmax = minimum(values), maximum(values)
     denom = vmax == vmin ? 1.0 : (vmax - vmin)
 
-    for (i, (val, mean, std)) in enumerate(data)
+    iter = invert_color_scaling ? reverse(data) : data
+    for (i, (val, mean, std)) in enumerate(iter)
         @assert length(mean) == length(std)
 
         t = (val - vmin) / denom
+        t = invert_color_scaling ? (1 - t) : t
         color = PlotUtils.get(Makie.cgrad(colormap), t)
 
         x   = collect(1:length(mean))
@@ -1304,7 +1366,9 @@ function plot_mean_histograms_with_std(
 
         plot_type = plot_types === nothing ? :line : plot_types[i]
         if plot_type == :line
-            band!(ax, x, ylo, yhi; color = (color, 0.2))
+            if plot_std
+                band!(ax, x, ylo, yhi; color = (color, 0.2))
+            end
             if hist_labels === nothing
                 isnothing(linewidth) ? lines!(ax, x, mean; color = color) : lines!(ax, x, mean; color = color, linewidth = linewidth)
             else
@@ -1316,15 +1380,34 @@ function plot_mean_histograms_with_std(
             else
                 isnothing(markersize) ? scatter!(ax, x, mean; color = color, label = hist_labels[i]) : scatter!(ax, x, mean; color = color, label = hist_labels[i], markersize = markersize)
             end
-            err = mean .- ylo
-            Makie.errorbars!(ax, x, mean, err, err; color = color)
+            if plot_std
+                err = mean .- ylo
+                Makie.errorbars!(ax, x, mean, err, err; color = color)
+            end
         else
             error("plot_types entries must be :line or :scatter")
         end
     end
 
-    cb = Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = colormap)
+    cb_cmap = invert_color_scaling ? Makie.Reverse(colormap) : colormap
+    cb = if colorbar_pos === nothing
+        Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = cb_cmap)
+    else
+        cb = Colorbar(fig[1, 1], limits = (vmin, vmax), colormap = cb_cmap)
+        cb.halign = colorbar_pos[1]
+        cb.valign = colorbar_pos[2]
+        cb.tellwidth = false
+        cb.tellheight = false
+        cb
+    end
+    if colorbar_size !== nothing
+        cb.width = colorbar_size[1]
+        cb.height = colorbar_size[2]
+    end
     colorbar_label !== nothing && (cb.label = colorbar_label)
+    if colorbar_ticks !== nothing
+        cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
+    end
 
     return return_axis ? (fig, ax) : fig
 end
