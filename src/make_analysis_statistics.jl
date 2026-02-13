@@ -200,9 +200,11 @@ end
         ev_aat = sym_norm_lap_eigs!(W_aat)
         ev_ata = sym_norm_lap_eigs!(W_ata)
 
-        ev_summary(ev_sym)...,
-        ev_summary(ev_aat)...,
-        ev_summary(ev_ata)...,
+        (
+            ev_summary(ev_sym)...,
+            ev_summary(ev_aat)...,
+            ev_summary(ev_ata)...,
+        )
     end
 
     tdeg_link = begin
@@ -240,9 +242,11 @@ end
         ev_aat = sym_norm_lap_eigs!(W_aat)
         ev_ata = sym_norm_lap_eigs!(W_ata)
 
-        ev_summary(ev_sym)...,
-        ev_summary(ev_aat)...,
-        ev_summary(ev_ata)...,
+        (
+            ev_summary(ev_sym)...,
+            ev_summary(ev_aat)...,
+            ev_summary(ev_ata)...,
+        )
     end
 
 

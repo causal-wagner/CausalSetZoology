@@ -5,6 +5,9 @@
 *.jl.mem
 *.ji
 
+# execution files
+*.sh
+
 # Pkg / environment artifacts
 Manifest.toml.bak
 
