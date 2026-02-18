@@ -61,9 +61,9 @@ function normalize_hists(
         out[i] = Vector{Dict{Int,Float64}}(undef, length(hists[i]))
         for (j, hist) in enumerate(hists[i])
             if normalization === :max
-                denom = isempty(hist) ? 0.0 : maximum(values(hist))
+                denom = isempty(hist) ? 0.0 : maximum(Base.values(hist))
             elseif normalization === :probability
-                denom = isempty(hist) ? 0.0 : sum(values(hist))
+                denom = isempty(hist) ? 0.0 : sum(Base.values(hist))
             else
                 denom = normalization
             end
@@ -81,17 +81,85 @@ function normalize_hists(
 end
 
 """
+    normalize_hists(
+        hists::Vector{Vector{Tuple{Dict,Real}}};
+        normalization::Union{Symbol,Real} = :probability,
+        num_bins::Union{Nothing,Int} = nothing,
+    )::Vector{Vector{Tuple{Dict{Int,Float64},Real}}}
+
+Normalize histograms that are paired with a scalar. Histograms are normalized
+using a denominator computed across all entries with the same scalar (optionally
+binned into `num_bins`), and the scalar is carried along (binned if requested).
+"""
+function normalize_hists(
+    hists::Vector{Vector{Tuple{Dict,Real}}};
+    normalization::Union{Symbol,Real} = :probability,
+    num_bins::Union{Nothing,Int} = nothing,
+)::Vector{Vector{Tuple{Dict{Int,Float64},Real}}}
+    isempty(hists) && return Vector{Vector{Tuple{Dict{Int,Float64},Real}}}()
+
+    if num_bins !== nothing
+        @assert num_bins ≥ 1 "num_bins must be >= 1"
+    end
+
+    # build bin edges from all scalars if binning
+    bin_edges = nothing
+    if num_bins !== nothing
+        scalars = [s for group in hists for (_, s) in group]
+        vmin, vmax = minimum(scalars), maximum(scalars)
+        if vmin == vmax
+            bin_edges = [vmin, vmax + 1e-12]
+        else
+            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
+        end
+    end
+
+    scalar_key(s::Real) = if bin_edges === nothing
+        s
+    else
+        idx = searchsortedlast(bin_edges, s)
+        idx = clamp(idx, 1, length(bin_edges) - 1)
+        (bin_edges[idx] + bin_edges[idx + 1]) / 2
+    end
+
+    out = Vector{Vector{Tuple{Dict{Int,Float64},Real}}}(undef, length(hists))
+    for i in eachindex(hists)
+        out[i] = Vector{Tuple{Dict{Int,Float64},Real}}(undef, length(hists[i]))
+        for (j, hist_pair) in enumerate(hists[i])
+            d, s = hist_pair
+            key = scalar_key(s)
+            if normalization === :max
+                denom = isempty(d) ? 0.0 : maximum(Base.values(d))
+            elseif normalization === :probability
+                denom = isempty(d) ? 0.0 : sum(Base.values(d))
+            else
+                denom = normalization
+            end
+            @assert denom != 0.0
+            out_hist = Dict{Int,Float64}()
+            for (k, v) in d
+                out_hist[k] = v / denom
+            end
+            out[i][j] = (out_hist, key)
+        end
+    end
+
+    return out
+end
+
+"""
     load_fields_from_paths(
         paths::Vector{<:AbstractString},
         fields::AbstractVector{<:Union{Symbol,Tuple{Symbol,Int64}}};
         filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
         thinning::Float64 = 1.0,
-    )::Vector{Vector{Vector{Float64}}}
+    )
 
 Load multiple scalar fields from `statistics.jld2` files.
 
-Returns `out[i][j]` as a `Vector{Float64}` for `fields[j]` from `paths[i]`.
-If `fields[j]` is `(sym, bin)`, the value is taken from histogram `sym` at `bin`.
+Returns `out[i][j]` as a `Vector` for `fields[j]` from `paths[i]`. Values are
+returned in the same type as saved. If `fields[j]` is `(sym, bin)`, the value
+is taken from histogram `sym` at `bin`.
 
 Only the requested fields are loaded (RAM-safe). Optional per-file filters can be applied.
 `thinning` keeps roughly a fraction of entries (e.g. 0.1 keeps ~every 10th sample).
@@ -99,10 +167,11 @@ Only the requested fields are loaded (RAM-safe). Optional per-file filters can b
 """
 function load_fields_from_paths(
     paths::Vector{<:AbstractString},
-    fields::Vector{Any};
+    fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}};
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Float64 = 1.0,
-)::Vector{Vector{Vector{Float64}}}
+    verbose::Bool = false,
+)
     n = length(paths)
     filters === nothing && (filters = fill(nothing, n))
     @assert length(filters) == n
@@ -110,12 +179,15 @@ function load_fields_from_paths(
     step = max(1, round(Int, 1.0 / thinning))
 
     nfields = length(fields)
-    out = [Vector{Vector{Float64}}(undef, nfields) for _ in 1:n]
+    out = [Vector{Vector}(undef, nfields) for _ in 1:n]
 
     Threads.@threads for i in 1:n
         path   = paths[i]
         filter = filters[i]
-        vals = [Float64[] for _ in 1:nfields]
+        vals = Vector{Any}(undef, nfields)
+        for j in 1:nfields
+            vals[j] = nothing
+        end
         seen = 0
 
         JLD2.jldopen(path, "r") do f
@@ -127,22 +199,261 @@ function load_fields_from_paths(
                     seen += 1
                     (seen - 1) % step != 0 && continue
                     for (j, field) in enumerate(fields)
+                        local v
                         if field isa Symbol
-                            push!(vals[j], Float64(getfield(x, field)))
+                            v = getfield(x, field)
                         else
                             sym, bin = field
                             hist = getfield(x, sym)
-                            push!(vals[j], Float64(get(hist, bin, 0)))
+                            v = get(hist, bin, 0)
                         end
+                        if vals[j] === nothing
+                            vals[j] = Vector{typeof(v)}()
+                        end
+                        push!(vals[j], v)
                     end
                 end
             end
         end
 
         for j in 1:nfields
-            out[i][j] = vals[j]
+            out[i][j] = vals[j] === nothing ? Any[] : vals[j]
         end
-        println("  Loaded $(length(vals[1])) values per field from $path")
+        verbose && println("  Loaded $(length(vals[1])) values per field from $path")
+    end
+
+    return out
+end
+
+"""
+    load_fields_from_paths(
+        paths::Vector{<:AbstractString},
+        fields::AbstractVector{<:Union{Symbol,Tuple{Symbol,Int64}}},
+        scalar::Symbol;
+        filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
+        thinning::Float64 = 1.0,
+        verbose::Bool = false,
+    )
+
+Like the 2-arg version, but also extracts a scalar field `scalar` from each
+entry, returning `(value, scalar)` pairs for each requested field.
+"""
+function load_fields_from_paths(
+    paths::Vector{<:AbstractString},
+    fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}},
+    scalar::Symbol;
+    filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
+    thinning::Float64 = 1.0,
+    verbose::Bool = false,
+)
+    n = length(paths)
+    filters === nothing && (filters = fill(nothing, n))
+    @assert length(filters) == n
+    @assert 0.0 < thinning <= 1.0
+    step = max(1, round(Int, 1.0 / thinning))
+
+    nfields = length(fields)
+    out = [Vector{Vector}(undef, nfields) for _ in 1:n]
+
+    Threads.@threads for i in 1:n
+        path   = paths[i]
+        filter = filters[i]
+        vals = Vector{Any}(undef, nfields)
+        for j in 1:nfields
+            vals[j] = nothing
+        end
+        seen = 0
+
+        JLD2.jldopen(path, "r") do f
+            nbatches = f["meta/nbatches"]
+            for b in 1:nbatches
+                batch = f["batches/$b"]
+                for x in batch
+                    filter !== nothing && !filter(x) && continue
+                    seen += 1
+                    (seen - 1) % step != 0 && continue
+                    s = getfield(x, scalar)
+                    @assert s isa Real "scalar field must be Real"
+                    for (j, field) in enumerate(fields)
+                        local v
+                        if field isa Symbol
+                            v = getfield(x, field)
+                        else
+                            sym, bin = field
+                            hist = getfield(x, sym)
+                            v = get(hist, bin, 0)
+                        end
+                        pair = (v, s)
+                        if vals[j] === nothing
+                            vals[j] = Vector{typeof(pair)}()
+                        end
+                        push!(vals[j], pair)
+                    end
+                end
+            end
+        end
+
+        for j in 1:nfields
+            out[i][j] = vals[j] === nothing ? Any[] : vals[j]
+        end
+        verbose && println("  Loaded $(length(vals[1])) values per field from $path with scalar $(scalar)")
+    end
+
+    return out
+end
+
+"""
+    load_field_with_scalar(
+        paths::Vector{<:AbstractString},
+        field::Union{Symbol,Tuple{Symbol,Int64}},
+        scalar::Symbol;
+        filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
+        thinning::Float64 = 1.0,
+        verbose::Bool = false,
+    )
+
+Load a single field together with a scalar, returning a concrete-typed
+`Vector{Vector{Tuple{T,Float64}}}` where `T` matches the stored field type.
+"""
+function load_field_with_scalar(
+    paths::Vector{<:AbstractString},
+    field::Union{Symbol,Tuple{Symbol,Int64}},
+    scalar::Symbol;
+    filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
+    thinning::Float64 = 1.0,
+    verbose::Bool = false,
+)
+    n = length(paths)
+    filters === nothing && (filters = fill(nothing, n))
+    @assert length(filters) == n
+    @assert 0.0 < thinning <= 1.0
+    step = max(1, round(Int, 1.0 / thinning))
+
+    # infer element type from first path to keep a concrete output type
+    function load_one(path, filter)
+        vals = nothing
+        seen = 0
+        JLD2.jldopen(path, "r") do f
+            nbatches = f["meta/nbatches"]
+            for b in 1:nbatches
+                batch = f["batches/$b"]
+                for x in batch
+                    filter !== nothing && !filter(x) && continue
+                    seen += 1
+                    (seen - 1) % step != 0 && continue
+                    s = getfield(x, scalar)
+                    @assert s isa Real "scalar field must be Real"
+                    local v
+                    if field isa Symbol
+                        v = getfield(x, field)
+                    else
+                        sym, bin = field
+                        hist = getfield(x, sym)
+                        v = get(hist, bin, 0)
+                    end
+                    pair = (v, Float64(s))
+                    if vals === nothing
+                        vals = Vector{typeof(pair)}()
+                    end
+                    push!(vals, pair)
+                end
+            end
+        end
+        return vals === nothing ? Vector{Tuple{Any,Float64}}() : vals
+    end
+
+    first_vals = load_one(paths[1], filters[1])
+    out = Vector{typeof(first_vals)}(undef, n)
+    out[1] = first_vals
+    verbose && println("  Loaded $(length(out[1])) values from $(paths[1]) with scalar $(scalar)")
+
+    Threads.@threads for i in 2:n
+        path   = paths[i]
+        filter = filters[i]
+        vals = load_one(path, filter)
+        out[i] = vals
+        verbose && println("  Loaded $(length(out[i])) values from $path with scalar $(scalar)")
+    end
+
+    return out
+end
+
+function load_and_average_std_scalar(
+    data_paths::Vector{String},
+    fields::Vector{Symbol};
+    verbose::Bool=false,)
+    loaded = load_fields_from_paths(data_paths, fields; verbose = verbose)
+    return [[(Statistics.mean(field), Statistics.std(field)) for field in dataset] for dataset in loaded]
+end
+
+"""
+    load_and_average_std_scalar(
+        data_paths::Vector{String},
+        fields::Vector{Symbol},
+        scalar::Symbol;
+        num_bins::Union{Nothing,Int} = nothing,
+        verbose::Bool = false,
+    )
+
+Load fields and an ordering scalar, then group by scalar (optionally binned)
+before computing mean/std per field.
+
+Returns, for each dataset, a vector of `(scalar_value, stats)` pairs where
+`stats` is a vector of `(mean, std)` for each field in `fields`, ordered by
+`scalar_value`.
+"""
+function load_and_average_std_scalar(
+    data_paths::Vector{String},
+    fields::Vector{Symbol},
+    scalar::Symbol;
+    num_bins::Union{Nothing,Int} = nothing,
+    verbose::Bool = false,
+)
+    loaded = load_fields_from_paths(data_paths, fields, scalar; verbose = verbose)
+
+    out = Vector{Vector{Tuple{Real,Vector{Tuple{Float64,Float64}}}}}(undef, length(loaded))
+
+    for (i, dataset) in enumerate(loaded)
+        # dataset[j] is Vector{Tuple{value, scalar}}
+        @assert !isempty(dataset) "no fields loaded"
+        scalars = [s for (_, s) in dataset[1]]
+
+        bin_edges = nothing
+        if num_bins !== nothing
+            @assert num_bins ≥ 1 "num_bins must be >= 1"
+            vmin, vmax = minimum(scalars), maximum(scalars)
+            if vmin == vmax
+                bin_edges = [vmin, vmax + 1e-12]
+            else
+                bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
+            end
+        end
+
+        groups = Dict{Real,Vector{Vector{Any}}}() # scalar => list of per-field value vectors
+        for j in 1:length(dataset)
+            for (v, s) in dataset[j]
+                if bin_edges !== nothing
+                    idx = searchsortedlast(bin_edges, s)
+                    idx = clamp(idx, 1, length(bin_edges) - 1)
+                    s = (bin_edges[idx] + bin_edges[idx + 1]) / 2
+                end
+                if !haskey(groups, s)
+                    groups[s] = [Any[] for _ in 1:length(dataset)]
+                end
+                push!(groups[s][j], v)
+            end
+        end
+
+        scalars_sorted = sort(collect(keys(groups)))
+        out[i] = Vector{Tuple{Real,Vector{Tuple{Float64,Float64}}}}(undef, length(scalars_sorted))
+        for (k, s) in enumerate(scalars_sorted)
+            stats = Vector{Tuple{Float64,Float64}}(undef, length(dataset))
+            for j in 1:length(dataset)
+                vals = groups[s][j]
+                stats[j] = (Statistics.mean(vals), Statistics.std(vals))
+            end
+            out[i][k] = (s, stats)
+        end
     end
 
     return out
@@ -172,6 +483,7 @@ function load_histograms_from_paths(
     histname::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Int = 1,
+    verbose::Bool = false,
 )::Vector{Vector{Dict}}
     n = length(paths)
     filters === nothing && (filters = fill(nothing, n))
@@ -204,7 +516,7 @@ function load_histograms_from_paths(
             end
         end
 
-        println("  Loaded $(length(hists)) histograms from $path")
+        verbose && println("  Loaded $(length(hists)) histograms from $path")
         out[i] = hists
     end
 
@@ -229,6 +541,7 @@ function load_histograms_from_paths(
     scalar::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Int = 1,
+    verbose::Bool = false,
 )::Vector{Vector{Tuple{Dict,Real}}}
     n = length(paths)
     filters === nothing && (filters = fill(nothing, n))
@@ -263,7 +576,7 @@ function load_histograms_from_paths(
             end
         end
 
-        println("  Loaded $(length(pairs)) histograms from $path with scalar $(scalar)")
+        verbose && println("  Loaded $(length(pairs)) histograms from $path with scalar $(scalar)")
         out[i] = pairs
     end
 
@@ -339,6 +652,39 @@ function join_histograms(
 end
 
 """
+    join_histograms(hists::Vector{Vector{Vector{Tuple{Dict,Real}}}})
+
+Join histograms across the first dimension by summing counts per bin, for the
+case where each histogram is paired with a scalar. The scalar is carried over
+and is required to match across the joined dimension.
+"""
+function join_histograms(
+    hists::Vector{Vector{Vector{Tuple{Dict,Real}}}},
+)::Vector{Vector{Tuple{Dict,Real}}}
+    isempty(hists) && return Vector{Vector{Tuple{Dict,Real}}}()
+
+    n_mid = length(hists[1])
+    out = Vector{Vector{Tuple{Dict,Real}}}(undef, n_mid)
+
+    for j in 1:n_mid
+        groups = Dict{Real,Dict{Int,Float64}}()
+        for i in 1:length(hists)
+            for (d, s) in hists[i][j]
+                get!(groups, s, Dict{Int,Float64}())
+                outd = groups[s]
+                for (bin, count) in d
+                    outd[bin] = get(outd, bin, 0.0) + count
+                end
+            end
+        end
+        scalars_sorted = sort(collect(keys(groups)))
+        out[j] = [(groups[s], s) for s in scalars_sorted]
+    end
+
+    return out
+end
+
+"""
     average_histogram_with_std(hists::AbstractVector{<:AbstractDict})
 
 Given a vector of sparse histograms `hists` (each mapping `k::Int -> count::Int`),
@@ -363,6 +709,97 @@ function average_histogram_with_std(
     # Population std (numerically safe)
     std_vec = sqrt.(max.(vec(Statistics.mean(X.^2; dims=1)) .- mean_vec.^2, 0.0))
     return mean_vec, std_vec
+end
+
+"""
+    average_vectors_with_std(vs::AbstractVector{<:AbstractVector{<:Real}})
+
+Given a vector of equal-length vectors, compute the mean and standard deviation
+per index.
+"""
+function average_vectors_with_std(
+    vs::AbstractVector,
+)::Tuple{Vector{Float64},Vector{Float64}}
+    isempty(vs) && return Float64[], Float64[]
+    @assert all(v -> v isa AbstractVector, vs) "all entries must be vectors"
+
+    # Detect nested vectors: Vector{Vector{Float64}} per sample
+    if vs[1] isa AbstractVector && !isempty(vs[1]) && vs[1][1] isa AbstractVector
+        nested = vs
+        @assert all(v -> v isa AbstractVector, nested) "nested entries must be vectors"
+        n = length(nested[1][1])
+        for v in nested
+            @assert all(w -> w isa AbstractVector, v) "nested entries must be vectors"
+            for w in v
+                @assert length(w) == n "all nested vectors must have the same length"
+            end
+        end
+        # flatten nested samples by concatenation, then compute mean/std per index
+        flat = Vector{Vector{Float64}}(undef, 0)
+        for v in nested
+            for w in v
+                push!(flat, Float64.(w))
+            end
+        end
+        vs = flat
+    end
+
+    n = length(vs[1])
+    for v in vs
+        @assert length(v) == n "all vectors must have the same length"
+    end
+    X = Matrix{Float64}(undef, length(vs), n)
+    for (i, v) in enumerate(vs)
+        @inbounds for j in 1:n
+            X[i, j] = Float64(v[j])
+        end
+    end
+    mean_vec = vec(Statistics.mean(X; dims=1))
+    std_vec = sqrt.(max.(vec(Statistics.mean(X.^2; dims=1)) .- mean_vec.^2, 0.0))
+    return mean_vec, std_vec
+end
+
+function average_vectors_with_std(
+    vs::AbstractVector{<:Tuple{<:AbstractVector,<:Real}};
+    num_bins::Union{Nothing,Int} = nothing,
+)::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}
+    isempty(vs) && return Tuple{Real,Vector{Float64},Vector{Float64}}[]
+
+    if num_bins !== nothing
+        @assert num_bins ≥ 1 "num_bins must be >= 1"
+    end
+
+    bin_edges = nothing
+    if num_bins !== nothing
+        scalars = [s for (_, s) in vs]
+        vmin, vmax = minimum(scalars), maximum(scalars)
+        if vmin == vmax
+            bin_edges = [vmin, vmax + 1e-12]
+        else
+            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
+        end
+    end
+
+    groups = Dict{Real,Vector{AbstractVector}}()
+    for (v, s) in vs
+        key = if bin_edges === nothing
+            s
+        else
+            idx = searchsortedlast(bin_edges, s)
+            idx = clamp(idx, 1, length(bin_edges) - 1)
+            (bin_edges[idx] + bin_edges[idx + 1]) / 2
+        end
+        get!(groups, key, AbstractVector[])
+        push!(groups[key], v)
+    end
+
+    keys_sorted = sort(collect(keys(groups)))
+    out = Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}(undef, length(keys_sorted))
+    for (i, k) in enumerate(keys_sorted)
+        mean_vec, std_vec = average_vectors_with_std(groups[k])
+        out[i] = (k, mean_vec, std_vec)
+    end
+    return out
 end
 
 function average_histogram_with_std(
@@ -1089,9 +1526,9 @@ end
         ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
         logscale_x::Bool = false,
         logscale_y::Bool = false,
-        plotlabel::Union{AbstractString,Nothing} = nothing,
-        xlabel::Union{AbstractString,Nothing} = nothing,
-        ylabel::Union{AbstractString,Nothing} = nothing,
+        plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+        xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+        ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
         hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
         double_column::Bool = false,
         magnification::Real = 1.0,
@@ -1116,9 +1553,9 @@ function plot_mean_histograms_with_std(
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
-    plotlabel::Union{AbstractString,Nothing} = nothing,
-    xlabel::Union{AbstractString,Nothing} = nothing,
-    ylabel::Union{AbstractString,Nothing} = nothing,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -1242,9 +1679,9 @@ end
         ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
         logscale_x::Bool = false,
         logscale_y::Bool = false,
-        plotlabel::Union{AbstractString,Nothing} = nothing,
-        xlabel::Union{AbstractString,Nothing} = nothing,
-        ylabel::Union{AbstractString,Nothing} = nothing,
+        plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+        xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+        ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
         hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
         double_column::Bool = false,
         magnification::Real = 1.0,
@@ -1256,7 +1693,7 @@ end
         plot_types::Union{Nothing,Vector{Symbol}} = nothing,
         markersize::Union{Nothing,Real} = nothing,
         colormap = :viridis,
-        colorbar_label::Union{Nothing,AbstractString} = nothing,
+        colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
         return_axis::Bool = false,
     )::Figure
 
@@ -1266,14 +1703,14 @@ Each element of `data` must be `(value, mean, std)` where `value` is used to
 pick a color from `colormap`.
 """
 function plot_mean_histograms_with_std(
-    data::Vector{Tuple{<:Real,Vector{Float64},Vector{Float64}}};
+    data::AbstractVector{<:Tuple};
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
-    plotlabel::Union{AbstractString,Nothing} = nothing,
-    xlabel::Union{AbstractString,Nothing} = nothing,
-    ylabel::Union{AbstractString,Nothing} = nothing,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -1285,7 +1722,7 @@ function plot_mean_histograms_with_std(
     plot_types::Union{Nothing,Vector{Symbol}} = nothing,
     markersize::Union{Nothing,Real} = nothing,
     colormap = :viridis,
-    colorbar_label::Union{Nothing,AbstractString} = nothing,
+    colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
     colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
     plot_std::Bool = true,
     invert_color_scaling::Bool = false,
@@ -1293,6 +1730,9 @@ function plot_mean_histograms_with_std(
     colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
     return_axis::Bool = false,
 )::Union{Figure, Tuple{Figure, Axis}}
+
+    # coerce to concrete (Real, Vector{Float64}, Vector{Float64}) tuples
+    data = [(Float64(d[1]), d[2], d[3]) for d in data]
 
     if hist_labels !== nothing
         @assert length(hist_labels) == length(data) "hist_labels and data must have same length"
@@ -1419,9 +1859,9 @@ function plot_and_save_hists(
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = true,
     logscale_y::Bool = true,
-    plotlabel::Union{AbstractString,Nothing} = nothing,
-    xlabel::Union{AbstractString,Nothing} = nothing,
-    ylabel::Union{AbstractString,Nothing} = nothing,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -1459,6 +1899,267 @@ function plot_and_save_hists(
 
     save(fig_path(fig_name), plot)
 
+    return plot
+end
+
+function plot_and_save_hists(
+    hists::Vector{Vector{Tuple{D,Real}}},
+    fig_name::String;
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = nothing,
+    legendmargin = nothing,
+    n_Legend_columns::Int = 1,
+    linewidth::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+    colormap = :viridis,
+    colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
+    colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
+    plot_std::Bool = true,
+    invert_color_scaling::Bool = false,
+    colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    return_axis::Bool = false,
+    num_bins::Union{Nothing,Int} = nothing,
+)::Union{Figure, Tuple{Figure, Axis}} where {D<:AbstractDict}
+    average_std = [average_histogram_with_std(hists[i]; num_bins = num_bins) for i in 1:length(hists)]
+    data = length(average_std) == 1 ? average_std[1] : vcat(average_std...)
+    plot = plot_mean_histograms_with_std(
+        data;
+        xlim = xlim,
+        ylim = ylim,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        plotlabel = plotlabel,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        hist_labels = hist_labels,
+        double_column = double_column,
+        magnification = magnification,
+        legendpos = legendpos,
+        legendpadding = legendpadding,
+        legendmargin = legendmargin,
+        n_Legend_columns = n_Legend_columns,
+        linewidth = linewidth,
+        plot_types = plot_types,
+        markersize = markersize,
+        colormap = colormap,
+        colorbar_label = colorbar_label,
+        colorbar_ticks = colorbar_ticks,
+        plot_std = plot_std,
+        invert_color_scaling = invert_color_scaling,
+        colorbar_pos = colorbar_pos,
+        colorbar_size = colorbar_size,
+        return_axis = return_axis,
+    )
+
+    save(fig_path(fig_name), plot)
+
+    return plot
+end
+
+"""
+    plot_and_save_vectors(
+        vectors::Vector{Vector{Vector{Float64}}},
+        fig_name::String;
+        kwargs...
+    )
+
+Like `plot_and_save_hists`, but for vector-valued fields. Each element of
+`vectors[i]` is a vector sample; all samples within a group must have the same
+length. Plots mean ± std per index.
+"""
+function plot_and_save_vectors(
+    vectors::AbstractVector,
+    fig_name::String;
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = (10, 8, 8, 8),
+    legendmargin = (5,5,5,5),
+    n_Legend_columns::Int = 1,
+    linewidth::Union{Nothing,Real} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    return_axis::Bool = false,
+)::Union{Figure, Tuple{Figure, Axis}}
+    @assert all(v -> v isa AbstractVector, vectors) "vectors must be a collection of vector samples"
+    average_std = [average_vectors_with_std(vectors[i]) for i in 1:length(vectors)]
+    plot = plot_mean_histograms_with_std(
+        average_std;
+        xlim = xlim,
+        ylim = ylim,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        plotlabel = plotlabel,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        hist_labels = hist_labels,
+        double_column = double_column,
+        magnification = magnification,
+        legendpos = legendpos,
+        legendpadding = legendpadding,
+        legendmargin = legendmargin,
+        n_Legend_columns = n_Legend_columns,
+        linewidth = linewidth,
+        markersize = markersize,
+        plot_types = plot_types,
+        return_axis = return_axis,
+    )
+
+    save(fig_path(fig_name), plot)
+    return plot
+end
+
+# fallback that enables colorbar kwargs when vectors are (value, scalar) tuples
+function plot_and_save_vectors(
+    vectors::AbstractVector,
+    fig_name::String;
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = nothing,
+    legendmargin = nothing,
+    n_Legend_columns::Int = 1,
+    linewidth::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+    colormap = :viridis,
+    colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
+    colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
+    plot_std::Bool = true,
+    invert_color_scaling::Bool = false,
+    colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    return_axis::Bool = false,
+    num_bins::Union{Nothing,Int} = nothing,
+)::Union{Figure, Tuple{Figure, Axis}}
+    if !isempty(vectors) && vectors[1] isa AbstractVector &&
+       !isempty(vectors[1]) && vectors[1][1] isa Tuple &&
+       length(vectors[1][1]) == 2
+        return plot_and_save_vectors(
+            Vector{Vector{Tuple{AbstractVector,Real}}}(vectors),
+            fig_name;
+            xlim = xlim,
+            ylim = ylim,
+            logscale_x = logscale_x,
+            logscale_y = logscale_y,
+            plotlabel = plotlabel,
+            xlabel = xlabel,
+            ylabel = ylabel,
+            hist_labels = hist_labels,
+            double_column = double_column,
+            magnification = magnification,
+            legendpos = legendpos,
+            legendpadding = legendpadding,
+            legendmargin = legendmargin,
+            n_Legend_columns = n_Legend_columns,
+            linewidth = linewidth,
+            plot_types = plot_types,
+            markersize = markersize,
+            colormap = colormap,
+            colorbar_label = colorbar_label,
+            colorbar_ticks = colorbar_ticks,
+            plot_std = plot_std,
+            invert_color_scaling = invert_color_scaling,
+            colorbar_pos = colorbar_pos,
+            colorbar_size = colorbar_size,
+            return_axis = return_axis,
+            num_bins = num_bins,
+        )
+    end
+
+    error("plot_and_save_vectors: input does not look like a vector+scalar tuple dataset; use the non-colorbar overload.")
+end
+
+function plot_and_save_vectors(
+    vectors::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractVector,<:Real}}},
+    fig_name::String;
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = nothing,
+    legendmargin = nothing,
+    n_Legend_columns::Int = 1,
+    linewidth::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+    colormap = :viridis,
+    colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
+    colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
+    plot_std::Bool = true,
+    invert_color_scaling::Bool = false,
+    colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    return_axis::Bool = false,
+    num_bins::Union{Nothing,Int} = nothing,
+)::Union{Figure, Tuple{Figure, Axis}}
+    average_std = [average_vectors_with_std(vectors[i]; num_bins = num_bins) for i in 1:length(vectors)]
+    data = length(average_std) == 1 ? average_std[1] : vcat(average_std...)
+    plot = plot_mean_histograms_with_std(
+        data;
+        xlim = xlim,
+        ylim = ylim,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        plotlabel = plotlabel,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        hist_labels = hist_labels,
+        double_column = double_column,
+        magnification = magnification,
+        legendpos = legendpos,
+        legendpadding = legendpadding,
+        legendmargin = legendmargin,
+        n_Legend_columns = n_Legend_columns,
+        linewidth = linewidth,
+        plot_types = plot_types,
+        markersize = markersize,
+        colormap = colormap,
+        colorbar_label = colorbar_label,
+        colorbar_ticks = colorbar_ticks,
+        plot_std = plot_std,
+        invert_color_scaling = invert_color_scaling,
+        colorbar_pos = colorbar_pos,
+        colorbar_size = colorbar_size,
+        return_axis = return_axis,
+    )
+
+    save(fig_path(fig_name), plot)
     return plot
 end
 
