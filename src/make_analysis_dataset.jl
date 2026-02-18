@@ -186,6 +186,7 @@ end
     import Random
     import Distributions
     import LinearAlgebra
+    import JLD2
 end
 
 
@@ -209,6 +210,19 @@ end
     end
 end
 
+@everywhere const _big_crystal_ref = Ref{Any}(nothing)
+@everywhere const _big_crystal_path_ref = Ref{Union{Nothing,String}}(nothing)
+
+@everywhere function _get_big_crystal(path::String)
+    if _big_crystal_ref[] === nothing || _big_crystal_path_ref[] != path
+        f = JLD2.jldopen(path, "r")
+        _big_crystal_ref[] = f["big_set"]
+        close(f)
+        _big_crystal_path_ref[] = path
+    end
+    return _big_crystal_ref[]
+end
+
 @everywhere function generate_batch(
     b::Int,
     batchsize::Int,
@@ -221,6 +235,7 @@ end
     D::Union{Nothing,Int}=nothing,
     cut_restriction::Union{Nothing,String}=nothing,
     big_crystal=nothing,
+    big_crystal_path::Union{Nothing,String}=nothing,
 )
     rdistr = Distributions.Uniform(2, 8)
     layers_distr = Distributions.DiscreteUniform(2, 25)
@@ -278,7 +293,10 @@ end
             cset = CausalSets.BitArrayCauset(mink, sprinkling)
 
         elseif kind == "minkowski_quasicrystal"
-            @assert big_crystal !== nothing
+            if big_crystal === nothing
+                @assert big_crystal_path !== nothing
+                big_crystal = _get_big_crystal(big_crystal_path)
+            end
             ϵ = sqrt(cset_size_i / length(big_crystal[1]))
             trans_distr = Distributions.Uniform(ϵ, 1 - ϵ)
             αin = rand(rng, trans_distr)
@@ -432,14 +450,13 @@ end
 ################################################################################
 
 big_crystal = nothing
+big_crystal_path = nothing
 ϵ = nothing
 trans_distr = nothing
 
 if kind == "minkowski_quasicrystal"
-    f = JLD2.jldopen(
-        "/Volumes/Causal Set Silo/causal_sets/crystals/spacetime_quasicrystal_5e8.jld2",
-        "r",
-    )
+    big_crystal_path = "/Volumes/Causal Set Silo/causal_sets/crystals/spacetime_quasicrystal_5e8.jld2"
+    f = JLD2.jldopen(big_crystal_path, "r")
     big_crystal = f["big_set"]
     close(f)
 
@@ -531,6 +548,7 @@ JLD2.jldopen(out_path, "w") do fout
                     D = @isdefined(D) ? D : nothing,
                     cut_restriction = @isdefined(cut_restriction) ? cut_restriction : nothing,
                     big_crystal = big_crystal,
+                    big_crystal_path = big_crystal_path,
                 )
                 put!(results, (b, data))
             end
