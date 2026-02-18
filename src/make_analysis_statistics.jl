@@ -2,13 +2,12 @@ args = ARGS
 for (i, arg) in enumerate(args)
     if arg == "--help" || arg == "-h"
         println(
-            "Usage: julia make_analysis_statistics.jl [--kind <kind>] [--in <input_path>] [--out <output_path>] [--num_processes <number>] [--batchsize <number>] [--link_probability <number>]",
+            "Usage: julia make_analysis_statistics.jl [--kind <kind>] [--in <input_path>] [--out <output_path>] [--num_processes <number>] [--batchsize <number>]",
         )
         println("Options:")
         println("  --in <input_path>                Path to the input .jld2 file containing dataset information.")
         println("  --out <output_path>              Path to save the resulting .csv file with computed statistics.")
         println("  --num_processes <number>         Number of parallel processes to use for computation.")
-        println("  --link_probability <number>      Optional metadata for merged datasets (0.0 to 1.0).")
         println("  --help, -h                       Show this help message.")
         exit(0)
     end
@@ -40,21 +39,6 @@ for (i, arg) in enumerate(args)
         end
     end
 
-    if arg == "--link_probability"
-        if i + 1 <= length(args)
-            global link_probability = parse(Float64, args[i+1])
-        else
-            println("Error: --link_probability requires a float argument.")
-            exit(1)
-        end
-    end
-end
-
-if @isdefined(link_probability)
-    if link_probability < 0.0 || link_probability > 1.0
-        println("Error: --link_probability must be between 0.0 and 1.0.")
-        exit(1)
-    end
 end
 
 ################################################################################
@@ -73,11 +57,8 @@ const kind = JLD2.jldopen(in_path, "r") do f
     f["meta/config"]["kind"]
 end
 
-if @isdefined(link_probability)
-    @info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes), link_probability=$(link_probability)"
-else
-    @info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
-end
+
+@info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
 
 @everywhere import CausalSets as CS
 @everywhere import DataFrames
@@ -204,30 +185,30 @@ end
         quantile(out_deg, 0.5)
     end
 
-    t_lap = begin
+    #t_lap = begin
         # Densify once; eigensolvers are dense anyway.
-        adj_f = Float64.(adj)
+        #adj_f = Float64.(adj)
 
         # W_sym = A + A^T
-        W_sym = copy(adj_f)
-        W_sym .+= transpose(adj_f)
+        #W_sym = copy(adj_f)
+        #W_sym .+= transpose(adj_f)
 
         # W_aat = A A^T and W_ata = A^T A
-        W_aat = Matrix{Float64}(undef, n, n)
-        W_ata = Matrix{Float64}(undef, n, n)
-        LinearAlgebra.mul!(W_aat, adj_f, transpose(adj_f))
-        LinearAlgebra.mul!(W_ata, transpose(adj_f), adj_f)
+        #W_aat = Matrix{Float64}(undef, n, n)
+        #W_ata = Matrix{Float64}(undef, n, n)
+        #LinearAlgebra.mul!(W_aat, adj_f, transpose(adj_f))
+        #LinearAlgebra.mul!(W_ata, transpose(adj_f), adj_f)
 
-        ev_sym = sym_norm_lap_eigs!(W_sym)
-        ev_aat = sym_norm_lap_eigs!(W_aat)
-        ev_ata = sym_norm_lap_eigs!(W_ata)
+        #ev_sym = sym_norm_lap_eigs!(W_sym)
+        #ev_aat = sym_norm_lap_eigs!(W_aat)
+        #ev_ata = sym_norm_lap_eigs!(W_ata)
 
-        (
-            ev_summary(ev_sym)...,
-            ev_summary(ev_aat)...,
-            ev_summary(ev_ata)...,
-        )
-    end
+        #(
+            #ev_summary(ev_sym)...,
+            #ev_summary(ev_aat)...,
+            #ev_summary(ev_ata)...,
+        #)
+    #end
 
     tdeg_link = begin
         countmap(in_deg_link),
@@ -255,19 +236,19 @@ end
         W_sym .+= transpose(link_f)
 
         # W_aat = A A^T and W_ata = A^T A
-        W_aat = Matrix{Float64}(undef, n, n)
-        W_ata = Matrix{Float64}(undef, n, n)
-        LinearAlgebra.mul!(W_aat, link_f, transpose(link_f))
-        LinearAlgebra.mul!(W_ata, transpose(link_f), link_f)
+        #W_aat = Matrix{Float64}(undef, n, n)
+        #W_ata = Matrix{Float64}(undef, n, n)
+        #LinearAlgebra.mul!(W_aat, link_f, transpose(link_f))
+        #LinearAlgebra.mul!(W_ata, transpose(link_f), link_f)
 
         ev_sym = sym_norm_lap_eigs!(W_sym)
-        ev_aat = sym_norm_lap_eigs!(W_aat)
-        ev_ata = sym_norm_lap_eigs!(W_ata)
+        #ev_aat = sym_norm_lap_eigs!(W_aat)
+        #ev_ata = sym_norm_lap_eigs!(W_ata)
 
         (
             ev_summary(ev_sym)...,
-            ev_summary(ev_aat)...,
-            ev_summary(ev_ata)...,
+            #ev_summary(ev_aat)...,
+            #ev_summary(ev_ata)...,
         )
     end
 
@@ -409,33 +390,33 @@ end
     max_pathlen_q75_link,
     max_pathlen_median_link = t_paths_link
 
-    ev_sym,
-    ev_sym_num_zero,
-    ev_sym_min_abs_nonzero,
-    ev_sym_min,
-    ev_sym_max,
-    ev_sym_mean,
-    ev_sym_q25,
-    ev_sym_q75,
-    ev_sym_median,
-    ev_aat,
-    ev_aat_num_zero,
-    ev_aat_min_abs_nonzero,
-    ev_aat_min,
-    ev_aat_max,
-    ev_aat_mean,
-    ev_aat_q25,
-    ev_aat_q75,
-    ev_aat_median,
-    ev_ata,
-    ev_ata_num_zero,
-    ev_ata_min_abs_nonzero,
-    ev_ata_min,
-    ev_ata_max,
-    ev_ata_mean,
-    ev_ata_q25,
-    ev_ata_q75,
-    ev_ata_median = t_lap
+    #ev_sym,
+    #ev_sym_num_zero,
+    #ev_sym_min_abs_nonzero,
+    #ev_sym_min,
+    #ev_sym_max,
+    #ev_sym_mean,
+    #ev_sym_q25,
+    #ev_sym_q75,
+    #ev_sym_median,
+    #ev_aat,
+    #ev_aat_num_zero,
+    #ev_aat_min_abs_nonzero,
+    #ev_aat_min,
+    #ev_aat_max,
+    #ev_aat_mean,
+    #ev_aat_q25,
+    #ev_aat_q75,
+    #ev_aat_median,
+    #ev_ata,
+    #ev_ata_num_zero,
+    #ev_ata_min_abs_nonzero,
+    #ev_ata_min,
+    #ev_ata_max,
+    #ev_ata_mean,
+    #ev_ata_q25,
+    #ev_ata_q75,
+    #ev_ata_median = t_lap
 
     ev_sym_link,
     ev_sym_num_zero_link,
@@ -445,25 +426,25 @@ end
     ev_sym_mean_link,
     ev_sym_q25_link,
     ev_sym_q75_link,
-    ev_sym_median_link,
-    ev_aat_link,
-    ev_aat_num_zero_link,
-    ev_aat_min_abs_nonzero_link,
-    ev_aat_min_link,
-    ev_aat_max_link,
-    ev_aat_mean_link,
-    ev_aat_q25_link,
-    ev_aat_q75_link,
-    ev_aat_median_link,
-    ev_ata_link,
-    ev_ata_num_zero_link,
-    ev_ata_min_abs_nonzero_link,
-    ev_ata_min_link,
-    ev_ata_max_link,
-    ev_ata_mean_link,
-    ev_ata_q25_link,
-    ev_ata_q75_link,
-    ev_ata_median_link = t_lap_link
+    ev_sym_median_link = t_lap_link
+    #ev_aat_link,
+    #ev_aat_num_zero_link,
+    #ev_aat_min_abs_nonzero_link,
+    #ev_aat_min_link,
+    #ev_aat_max_link,
+    #ev_aat_mean_link,
+    #ev_aat_q25_link,
+    #ev_aat_q75_link,
+    #ev_aat_median_link,
+    #ev_ata_link,
+    #ev_ata_num_zero_link,
+    #ev_ata_min_abs_nonzero_link,
+    #ev_ata_min_link,
+    #ev_ata_max_link,
+    #ev_ata_mean_link,
+    #ev_ata_q25_link,
+    #ev_ata_q75_link,
+    #ev_ata_median_link = t_lap_link
 
     @debug "fetching results rn, cn, d"
     connectivity = t_rn
@@ -559,37 +540,37 @@ end
         num_sinks_link = num_sinks_link,
 
         # eigenvalues of sym-normalized laplacian for A + A^T
-        ev_sym = ev_sym,
-        ev_sym_num_zero = ev_sym_num_zero,
-        ev_sym_min_abs_nonzero = ev_sym_min_abs_nonzero,
-        ev_sym_min = ev_sym_min,
-        ev_sym_max = ev_sym_max,
-        ev_sym_mean = ev_sym_mean,
-        ev_sym_q25 = ev_sym_q25,
-        ev_sym_q75 = ev_sym_q75,
-        ev_sym_median = ev_sym_median,
+        #ev_sym = ev_sym,
+        #ev_sym_num_zero = ev_sym_num_zero,
+        #ev_sym_min_abs_nonzero = ev_sym_min_abs_nonzero,
+        #ev_sym_min = ev_sym_min,
+        #ev_sym_max = ev_sym_max,
+        #ev_sym_mean = ev_sym_mean,
+        #ev_sym_q25 = ev_sym_q25,
+        #ev_sym_q75 = ev_sym_q75,
+        #ev_sym_median = ev_sym_median,
 
         # eigenvalues of sym-normalized laplacian for A A^T
-        ev_aat = ev_aat,
-        ev_aat_num_zero = ev_aat_num_zero,
-        ev_aat_min_abs_nonzero = ev_aat_min_abs_nonzero,
-        ev_aat_min = ev_aat_min,
-        ev_aat_max = ev_aat_max,
-        ev_aat_mean = ev_aat_mean,
-        ev_aat_q25 = ev_aat_q25,
-        ev_aat_q75 = ev_aat_q75,
-        ev_aat_median = ev_aat_median,
+        #ev_aat = ev_aat,
+        #ev_aat_num_zero = ev_aat_num_zero,
+        #ev_aat_min_abs_nonzero = ev_aat_min_abs_nonzero,
+        #ev_aat_min = ev_aat_min,
+        #ev_aat_max = ev_aat_max,
+        #ev_aat_mean = ev_aat_mean,
+        #ev_aat_q25 = ev_aat_q25,
+        #ev_aat_q75 = ev_aat_q75,
+        #ev_aat_median = ev_aat_median,
 
         # eigenvalues of sym-normalized laplacian for A^T A
-        ev_ata = ev_ata,
-        ev_ata_num_zero = ev_ata_num_zero,
-        ev_ata_min_abs_nonzero = ev_ata_min_abs_nonzero,
-        ev_ata_min = ev_ata_min,
-        ev_ata_max = ev_ata_max,
-        ev_ata_mean = ev_ata_mean,
-        ev_ata_q25 = ev_ata_q25,
-        ev_ata_q75 = ev_ata_q75,
-        ev_ata_median = ev_ata_median,
+        #ev_ata = ev_ata,
+        #ev_ata_num_zero = ev_ata_num_zero,
+        #ev_ata_min_abs_nonzero = ev_ata_min_abs_nonzero,
+        #ev_ata_min = ev_ata_min,
+        #ev_ata_max = ev_ata_max,
+        #ev_ata_mean = ev_ata_mean,
+        #ev_ata_q25 = ev_ata_q25,
+        #ev_ata_q75 = ev_ata_q75,
+        #ev_ata_median = ev_ata_median,
 
         # eigenvalues of sym-normalized laplacian for link + link^T
         ev_sym_link = ev_sym_link,
@@ -603,26 +584,26 @@ end
         ev_sym_median_link = ev_sym_median_link,
 
         # eigenvalues of sym-normalized laplacian for link link^T
-        ev_aat_link = ev_aat_link,
-        ev_aat_num_zero_link = ev_aat_num_zero_link,
-        ev_aat_min_abs_nonzero_link = ev_aat_min_abs_nonzero_link,
-        ev_aat_min_link = ev_aat_min_link,
-        ev_aat_max_link = ev_aat_max_link,
-        ev_aat_mean_link = ev_aat_mean_link,
-        ev_aat_q25_link = ev_aat_q25_link,
-        ev_aat_q75_link = ev_aat_q75_link,
-        ev_aat_median_link = ev_aat_median_link,
+        #ev_aat_link = ev_aat_link,
+        #ev_aat_num_zero_link = ev_aat_num_zero_link,
+        #ev_aat_min_abs_nonzero_link = ev_aat_min_abs_nonzero_link,
+        #ev_aat_min_link = ev_aat_min_link,
+        #ev_aat_max_link = ev_aat_max_link,
+        #ev_aat_mean_link = ev_aat_mean_link,
+        #ev_aat_q25_link = ev_aat_q25_link,
+        #ev_aat_q75_link = ev_aat_q75_link,
+        #ev_aat_median_link = ev_aat_median_link,
 
         # eigenvalues of sym-normalized laplacian for link^T link
-        ev_ata_link = ev_ata_link,
-        ev_ata_num_zero_link = ev_ata_num_zero_link,
-        ev_ata_min_abs_nonzero_link = ev_ata_min_abs_nonzero_link,
-        ev_ata_min_link = ev_ata_min_link,
-        ev_ata_max_link = ev_ata_max_link,
-        ev_ata_mean_link = ev_ata_mean_link,
-        ev_ata_q25_link = ev_ata_q25_link,
-        ev_ata_q75_link = ev_ata_q75_link,
-        ev_ata_median_link = ev_ata_median_link,
+        #ev_ata_link = ev_ata_link,
+        #ev_ata_num_zero_link = ev_ata_num_zero_link,
+        #ev_ata_min_abs_nonzero_link = ev_ata_min_abs_nonzero_link,
+        #ev_ata_min_link = ev_ata_min_link,
+        #ev_ata_max_link = ev_ata_max_link,
+        #ev_ata_mean_link = ev_ata_mean_link,
+        #ev_ata_q25_link = ev_ata_q25_link,
+        #ev_ata_q75_link = ev_ata_q75_link,
+        #ev_ata_median_link = ev_ata_median_link,
 
         #
         connectivity = connectivity,
@@ -695,9 +676,6 @@ JLD2.jldopen(out_path, "w") do fout
     fout["meta/batchsize"] = batchsize_in
     fout["meta/nbatches"]  = nbatches
     fout["meta/N"]         = N
-    if @isdefined(link_probability)
-        fout["meta/link_probability"] = link_probability
-    end
 
     idx = 1
 for b = 1:nbatches
