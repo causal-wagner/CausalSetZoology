@@ -656,29 +656,39 @@ end
 
 Join histograms across the first dimension by summing counts per bin, for the
 case where each histogram is paired with a scalar. The scalar is carried over
-and is required to match across the joined dimension.
+per histogram index and is required to match across the joined dimension.
 """
 function join_histograms(
     hists::Vector{Vector{Vector{Tuple{Dict,Real}}}},
 )::Vector{Vector{Tuple{Dict,Real}}}
     isempty(hists) && return Vector{Vector{Tuple{Dict,Real}}}()
 
+    n_outer = length(hists)
     n_mid = length(hists[1])
-    out = Vector{Vector{Tuple{Dict,Real}}}(undef, n_mid)
+    n_hists = length(hists[1][1])
 
+    for i in 1:n_outer
+        @assert length(hists[i]) == n_mid
+        for j in 1:n_mid
+            @assert length(hists[i][j]) == n_hists
+        end
+    end
+
+    out = Vector{Vector{Tuple{Dict,Real}}}(undef, n_mid)
     for j in 1:n_mid
-        groups = Dict{Real,Dict{Int,Float64}}()
-        for i in 1:length(hists)
-            for (d, s) in hists[i][j]
-                get!(groups, s, Dict{Int,Float64}())
-                outd = groups[s]
+        out[j] = Vector{Tuple{Dict,Real}}(undef, n_hists)
+        for k in 1:n_hists
+            d_sum = Dict{Int,Float64}()
+            s_ref = hists[1][j][k][2]
+            for i in 1:n_outer
+                d, s = hists[i][j][k]
+                @assert s == s_ref "scalar mismatch for histogram index ($j,$k)"
                 for (bin, count) in d
-                    outd[bin] = get(outd, bin, 0.0) + count
+                    d_sum[bin] = get(d_sum, bin, 0.0) + count
                 end
             end
+            out[j][k] = (d_sum, s_ref)
         end
-        scalars_sorted = sort(collect(keys(groups)))
-        out[j] = [(groups[s], s) for s in scalars_sorted]
     end
 
     return out
@@ -1728,6 +1738,9 @@ function plot_mean_histograms_with_std(
     invert_color_scaling::Bool = false,
     colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
     colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    comp::Union{Nothing,Tuple{Vector{Float64},Vector{Float64}}} = nothing,
+    comp_color = :black,
+    comp_linewidth::Union{Nothing,Real} = 2,
     return_axis::Bool = false,
 )::Union{Figure, Tuple{Figure, Axis}}
 
@@ -1781,6 +1794,28 @@ function plot_mean_histograms_with_std(
     vmin, vmax = minimum(values), maximum(values)
     denom = vmax == vmin ? 1.0 : (vmax - vmin)
 
+    comp_x = nothing
+    comp_mean = nothing
+    # optional comparison band, plotted first
+    if comp !== nothing
+        mean_comp, std_comp = comp
+        x = collect(1:length(mean_comp))
+        ylo = mean_comp .- std_comp
+        yhi = mean_comp .+ std_comp
+        if logscale_y
+            mask = mean_comp .> 0
+            x = x[mask]
+            mean_comp = mean_comp[mask]
+            ylo = ylo[mask]
+            yhi = yhi[mask]
+            ylo = max.(ylo, eps)
+            yhi = max.(yhi, eps)
+        end
+        band!(ax, x, ylo, yhi; color = (comp_color, 0.2))
+        comp_x = x
+        comp_mean = mean_comp
+    end
+
     iter = invert_color_scaling ? reverse(data) : data
     for (i, (val, mean, std)) in enumerate(iter)
         @assert length(mean) == length(std)
@@ -1829,6 +1864,11 @@ function plot_mean_histograms_with_std(
         end
     end
 
+    if comp_x !== nothing
+        isnothing(comp_linewidth) ? lines!(ax, comp_x, comp_mean; color = comp_color) :
+            lines!(ax, comp_x, comp_mean; color = comp_color, linewidth = comp_linewidth)
+    end
+
     cb_cmap = invert_color_scaling ? Makie.Reverse(colormap) : colormap
     cb = if colorbar_pos === nothing
         Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = cb_cmap)
@@ -1844,7 +1884,9 @@ function plot_mean_histograms_with_std(
         cb.width = colorbar_size[1]
         cb.height = colorbar_size[2]
     end
-    colorbar_label !== nothing && (cb.label = colorbar_label)
+    if colorbar_label !== nothing
+        cb.label = colorbar_label
+    end
     if colorbar_ticks !== nothing
         cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
     end
@@ -1929,11 +1971,19 @@ function plot_and_save_hists(
     invert_color_scaling::Bool = false,
     colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
     colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    comp::Union{Nothing,AbstractVector} = nothing,
+    comp_color = :black,
+    comp_linewidth::Union{Nothing,Real} = 2,
     return_axis::Bool = false,
     num_bins::Union{Nothing,Int} = nothing,
 )::Union{Figure, Tuple{Figure, Axis}} where {D<:AbstractDict}
     average_std = [average_histogram_with_std(hists[i]; num_bins = num_bins) for i in 1:length(hists)]
     data = length(average_std) == 1 ? average_std[1] : vcat(average_std...)
+    comp_mean_std = nothing
+    if comp !== nothing
+        comp_hists = comp isa AbstractVector && !isempty(comp) && comp[1] isa AbstractVector ? vcat(comp...) : comp
+        comp_mean_std = average_histogram_with_std(comp_hists)
+    end
     plot = plot_mean_histograms_with_std(
         data;
         xlim = xlim,
@@ -1960,12 +2010,20 @@ function plot_and_save_hists(
         invert_color_scaling = invert_color_scaling,
         colorbar_pos = colorbar_pos,
         colorbar_size = colorbar_size,
+        comp = comp_mean_std,
+        comp_color = comp_color,
+        comp_linewidth = comp_linewidth,
         return_axis = return_axis,
     )
 
-    save(fig_path(fig_name), plot)
-
-    return plot
+    if return_axis
+        fig, ax = plot
+        save(fig_path(fig_name), fig)
+        return plot
+    else
+        save(fig_path(fig_name), plot)
+        return plot
+    end
 end
 
 """
@@ -2027,6 +2085,342 @@ function plot_and_save_vectors(
 
     save(fig_path(fig_name), plot)
     return plot
+end
+
+"""
+    hist_hist_vec_hist_plot_matrix(
+        data::Tuple{
+            Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
+            Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
+            Vector{Vector{Tuple{Vector{Float64}, Float64}}},
+            Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}}
+        };
+        xlim, ylim, xlabel, ylabel,
+        num_bins = nothing,
+        colormap = :viridis,
+        invert_color_scaling = false,
+        colorbar_label = nothing,
+        colorbar_ticks = nothing,
+        colorbar_pos = nothing,
+        colorbar_size = nothing,
+        logscale_x = true,
+        logscale_y = true,
+        double_column = false,
+        magnification = 1.0,
+        plot_std = true,
+        return_axis = false,
+    )
+
+Create a 2×2 matrix plot. The 1st, 2nd, and 4th entries are histogram+scalar
+datasets; the 3rd is a vector+scalar dataset. A single colorbar is placed to
+the right, spanning both rows. The color scaling is shared across all panels.
+"""
+function hist_hist_vec_hist_plot_matrix(
+    data::Tuple{
+        Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
+        Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
+        Vector{Vector{Tuple{Vector{Float64}, Float64}}},
+        Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
+    },
+    fig_name::String;
+    xlim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
+    ylim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
+    xlabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
+    ylabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
+    num_bins::Union{Nothing,Int} = nothing,
+    colormap = :viridis,
+    invert_color_scaling::Bool = false,
+    colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
+    colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
+    colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    colorbar_side::Symbol = :right,
+    colorbar_label_pos::Symbol = :side,
+    comp::Union{Nothing,Tuple{AbstractVector,AbstractVector,AbstractVector,AbstractVector}} = nothing,
+    comp_color = :black,
+    comp_linewidth::Union{Nothing,Real} = 2,
+    xticks::Union{Nothing,AbstractVector} = nothing,
+    yticks::Union{Nothing,AbstractVector} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    plot_std::Bool = true,
+    right_yaxis::Bool = true,
+    top_xaxis::Bool = true,
+    rowgap::Union{Nothing,Real} = 0.0,
+    colgap::Union{Nothing,Real} = 0.0,
+    return_axis::Bool = false,
+)::Union{Figure, Tuple{Figure, Vector{Axis}}}
+    @assert length(xlim) == 4
+    @assert length(ylim) == 4
+    @assert length(xlabel) == 4
+    @assert length(ylabel) == 4
+
+    h1, h2, v3, h4 = data
+
+    avg1 = [average_histogram_with_std(h1[i]) for i in 1:length(h1)]
+    avg2 = [average_histogram_with_std(h2[i]) for i in 1:length(h2)]
+    avg3 = [average_vectors_with_std(v3[i]; num_bins = num_bins) for i in 1:length(v3)]
+    avg4 = [average_histogram_with_std(h4[i]) for i in 1:length(h4)]
+
+    d1 = length(avg1) == 1 ? avg1[1] : vcat(avg1...)
+    d2 = length(avg2) == 1 ? avg2[1] : vcat(avg2...)
+    d3 = length(avg3) == 1 ? avg3[1] : vcat(avg3...)
+    d4 = length(avg4) == 1 ? avg4[1] : vcat(avg4...)
+
+    all_vals = [v for (v, _, _) in d1]
+    append!(all_vals, (v for (v, _, _) in d2))
+    append!(all_vals, (v for (v, _, _) in d3))
+    append!(all_vals, (v for (v, _, _) in d4))
+    vmin = isempty(all_vals) ? 0.0 : minimum(all_vals)
+    vmax = isempty(all_vals) ? 1.0 : maximum(all_vals)
+    denom = vmax == vmin ? 1.0 : (vmax - vmin)
+
+    figsize = 2 .* apply_paper_theme!(
+        double_column = double_column,
+        magnification = magnification,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+    )
+
+    fig = Figure(size = figsize)
+    if rowgap !== nothing
+        fig.layout.default_rowgap = Makie.Fixed(rowgap)
+    end
+    if colgap !== nothing
+        fig.layout.default_colgap = Makie.Fixed(colgap)
+    end
+    axs = [
+        Axis(fig[1,1]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
+        Axis(fig[1,2]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
+        Axis(fig[2,1]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
+        Axis(fig[2,2]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
+    ]
+    if top_xaxis
+        for ax in (axs[1], axs[2])
+            ax.xaxisposition = :top
+            ax.xticklabelalign = (:center, :bottom)
+            ax.xaxisposition = :top
+        end
+    end
+    if right_yaxis
+        for ax in (axs[2], axs[4])
+            ax.yaxisposition = :right
+            ax.yticklabelalign = (:left, :center)
+            ax.flip_ylabel = true
+        end
+        # add dummy left ticks on right-hand plots
+        for (ax, cell) in zip((axs[2], axs[4]), (fig[1,2], fig[2,2]))
+            ax_left = Axis(cell;
+                xscale = logscale_x ? log10 : identity,
+                yscale = logscale_y ? log10 : identity,
+                xlabelvisible = false,
+                xticksvisible = false,
+                xticklabelsvisible = false,
+                xgridvisible = false,
+                xminorgridvisible = false,
+                yticklabelsvisible = false,
+                ygridvisible = false,
+                yminorgridvisible = false,
+                backgroundcolor = :transparent,
+            )
+            ax_left.yaxisposition = :left
+            ax_left.rightspinevisible = false
+            linkxaxes!(ax, ax_left)
+            linkyaxes!(ax, ax_left)
+        end
+    end
+
+    function plot_on_axis!(
+        ax,
+        data::AbstractVector{<:Tuple},
+        comp_mean_std,
+        xlim_i,
+        ylim_i,
+        xlabel_i,
+        ylabel_i,
+        xticks_i,
+        yticks_i,
+    )
+        xlabel_i !== nothing && (ax.xlabel = xlabel_i)
+        ylabel_i !== nothing && (ax.ylabel = ylabel_i)
+        xlim_i !== nothing && xlims!(ax, xlim_i...)
+        ylim_i !== nothing && ylims!(ax, ylim_i...)
+        if xticks_i !== nothing
+            ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
+        end
+        if yticks_i !== nothing
+            ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
+        end
+
+        eps = if logscale_y
+            if ylim_i !== nothing
+                ylim_i[1] * 1e-3
+            else
+                minpos = minimum(v for (_, m, _) in data for v in m if v > 0)
+                minpos * 1e-3
+            end
+        else
+            -Inf
+        end
+
+        # comparison band first
+        comp_x = nothing
+        comp_mean = nothing
+        if comp_mean_std !== nothing
+            mean_comp, std_comp = comp_mean_std
+            x = collect(1:length(mean_comp))
+            ylo = mean_comp .- std_comp
+            yhi = mean_comp .+ std_comp
+            if logscale_y
+                mask = mean_comp .> 0
+                x = x[mask]
+                mean_comp = mean_comp[mask]
+                ylo = ylo[mask]
+                yhi = yhi[mask]
+                ylo = max.(ylo, eps)
+                yhi = max.(yhi, eps)
+            end
+            band!(ax, x, ylo, yhi; color = (comp_color, 0.2))
+            comp_x = x
+            comp_mean = mean_comp
+        end
+
+        iter = invert_color_scaling ? reverse(data) : data
+        for (val, mean, std) in iter
+            @assert length(mean) == length(std)
+            t = (val - vmin) / denom
+            t = invert_color_scaling ? (1 - t) : t
+            color = PlotUtils.get(Makie.cgrad(colormap), t)
+
+            x = collect(1:length(mean))
+            ylo = mean .- std
+            yhi = mean .+ std
+
+            if logscale_y
+                mask = mean .> 0
+                x = x[mask]
+                mean = mean[mask]
+                ylo = ylo[mask]
+                yhi = yhi[mask]
+                ylo = max.(ylo, eps)
+                yhi = max.(yhi, eps)
+            end
+
+            if plot_std
+                band!(ax, x, ylo, yhi; color = (color, 0.2))
+            end
+            lines!(ax, x, mean; color = color)
+        end
+
+        # comparison mean line on top
+        if comp_x !== nothing
+            isnothing(comp_linewidth) ? lines!(ax, comp_x, comp_mean; color = comp_color) :
+                lines!(ax, comp_x, comp_mean; color = comp_color, linewidth = comp_linewidth)
+        end
+    end
+
+    comp1 = nothing
+    comp2 = nothing
+    comp3 = nothing
+    comp4 = nothing
+    if comp !== nothing
+        comp1_flat = vcat(comp[1]...)
+        comp2_flat = vcat(comp[2]...)
+        comp3_flat = vcat(comp[3]...)
+        comp4_flat = vcat(comp[4]...)
+
+        comp1 = !isempty(comp1_flat) && comp1_flat[1] isa Tuple ?
+            average_histogram_with_std(comp1_flat; num_bins = num_bins) :
+            average_histogram_with_std(comp1_flat)
+
+        comp2 = !isempty(comp2_flat) && comp2_flat[1] isa Tuple ?
+            average_histogram_with_std(comp2_flat; num_bins = num_bins) :
+            average_histogram_with_std(comp2_flat)
+
+        comp3 = !isempty(comp3_flat) && comp3_flat[1] isa Tuple ?
+            average_vectors_with_std(comp3_flat; num_bins = num_bins) :
+            average_vectors_with_std(comp3_flat)
+
+        comp4 = !isempty(comp4_flat) && comp4_flat[1] isa Tuple ?
+            average_histogram_with_std(comp4_flat; num_bins = num_bins) :
+            average_histogram_with_std(comp4_flat)
+    end
+
+    xt = xticks === nothing ? fill(nothing, 4) : xticks
+    yt = yticks === nothing ? fill(nothing, 4) : yticks
+    @assert length(xt) == 4
+    @assert length(yt) == 4
+
+    plot_on_axis!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1])
+    plot_on_axis!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2])
+    plot_on_axis!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3])
+    plot_on_axis!(axs[4], d4, comp4, xlim[4], ylim[4], xlabel[4], ylabel[4], xt[4], yt[4])
+
+    cb_cmap = invert_color_scaling ? Makie.Reverse(colormap) : colormap
+    cb = if colorbar_pos === nothing
+        if colorbar_side == :right
+            Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
+        elseif colorbar_side == :left
+            Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
+        elseif colorbar_side == :top
+            Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
+        elseif colorbar_side == :bottom
+            Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
+        else
+            error("colorbar_side must be :left, :right, :top, or :bottom")
+        end
+    else
+        cb = Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
+        cb.halign = colorbar_pos[1]
+        cb.valign = colorbar_pos[2]
+        cb.tellwidth = false
+        cb.tellheight = false
+        cb
+    end
+    if colorbar_size !== nothing
+        cb.width = colorbar_size[1]
+        cb.height = colorbar_size[2]
+    end
+    if colorbar_label !== nothing
+        @assert colorbar_label_pos in (:side, :top) "colorbar_label_pos must be :side or :top"
+        if colorbar_label_pos == :top
+            cb.label = ""
+            if colorbar_side == :left
+                lbl = Makie.Label(fig[1:2, 0], colorbar_label; tellwidth = false, tellheight = false)
+                lbl.halign = 0.5
+                lbl.valign = 1.055
+            elseif colorbar_side == :right
+                lbl = Makie.Label(fig[1:2, 3], colorbar_label; tellwidth = false, tellheight = false)
+                lbl.halign = 0.5
+                lbl.valign = 1.055
+            else
+                cb.label = colorbar_label
+            end
+        else
+            if colorbar_side == :left
+                cb.label = ""
+                # put label in its own column to the left of the colorbar
+                lbl = Makie.Label(
+                    fig[1:2, -1],
+                    colorbar_label;
+                    tellwidth = true,
+                    tellheight = false,
+                )
+                lbl.halign = 0.5
+                lbl.valign = 0.5
+            else
+                cb.label = colorbar_label
+            end
+        end
+    end
+    if colorbar_ticks !== nothing
+        cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
+    end
+
+    save(fig_path(fig_name), fig)
+    return return_axis ? (fig, axs) : fig
 end
 
 # fallback that enables colorbar kwargs when vectors are (value, scalar) tuples
@@ -2125,11 +2519,19 @@ function plot_and_save_vectors(
     invert_color_scaling::Bool = false,
     colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
     colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    comp::Union{Nothing,AbstractVector} = nothing,
+    comp_color = :black,
+    comp_linewidth::Union{Nothing,Real} = 2,
     return_axis::Bool = false,
     num_bins::Union{Nothing,Int} = nothing,
 )::Union{Figure, Tuple{Figure, Axis}}
     average_std = [average_vectors_with_std(vectors[i]; num_bins = num_bins) for i in 1:length(vectors)]
     data = length(average_std) == 1 ? average_std[1] : vcat(average_std...)
+    comp_mean_std = nothing
+    if comp !== nothing
+        comp_vecs = comp isa AbstractVector && !isempty(comp) && comp[1] isa AbstractVector ? vcat(comp...) : comp
+        comp_mean_std = average_vectors_with_std(comp_vecs)
+    end
     plot = plot_mean_histograms_with_std(
         data;
         xlim = xlim,
@@ -2156,11 +2558,20 @@ function plot_and_save_vectors(
         invert_color_scaling = invert_color_scaling,
         colorbar_pos = colorbar_pos,
         colorbar_size = colorbar_size,
+        comp = comp_mean_std,
+        comp_color = comp_color,
+        comp_linewidth = comp_linewidth,
         return_axis = return_axis,
     )
 
-    save(fig_path(fig_name), plot)
-    return plot
+    if return_axis
+        fig, ax = plot
+        save(fig_path(fig_name), fig)
+        return plot
+    else
+        save(fig_path(fig_name), plot)
+        return plot
+    end
 end
 
 """
