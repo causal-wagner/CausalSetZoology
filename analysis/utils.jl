@@ -388,6 +388,396 @@ function load_and_average_std_scalar(
 end
 
 """
+    make_undirected_adjacency_from_subgraphs(
+        n_nodes::Int,
+        n_subgraphs::Int,
+        inter_edges::AbstractMatrix{<:Integer};
+        p_internal::Float64 = 0.5,
+        rng = nothing,
+    )::BitMatrix
+
+Create a symmetric adjacency matrix for an undirected simple graph.
+
+- Nodes are split into `n_subgraphs` contiguous, near-equal subgraphs.
+- Inside each subgraph, each edge is added independently with probability `p_internal`.
+- For each subgraph pair `(a,b)`, exactly `inter_edges[a,b]` edges are added between
+  randomly chosen node pairs from those two subgraphs (without duplicates).
+"""
+function make_undirected_adjacency_from_subgraphs(
+    n_nodes::Int,
+    n_subgraphs::Int,
+    inter_edges::AbstractMatrix{<:Integer};
+    p_internal::Float64 = 0.5,
+    rng = nothing,
+)::BitMatrix
+    @assert n_nodes ≥ 1
+    @assert 1 ≤ n_subgraphs ≤ n_nodes
+    @assert size(inter_edges, 1) == n_subgraphs
+    @assert size(inter_edges, 2) == n_subgraphs
+    @assert LinearAlgebra.issymmetric(inter_edges)
+    @assert all(inter_edges .≥ 0)
+    @assert all(inter_edges[i, i] == 0 for i in 1:n_subgraphs) "inter_edges diagonal must be zero"
+    @assert 0.0 ≤ p_internal ≤ 1.0
+
+    # near-equal partition sizes: first `r` subgraphs get one extra node
+    q, r = divrem(n_nodes, n_subgraphs)
+    sizes = fill(q, n_subgraphs)
+    for i in 1:r
+        sizes[i] += 1
+    end
+
+    ranges = Vector{UnitRange{Int}}(undef, n_subgraphs)
+    start_idx = 1
+    for s in 1:n_subgraphs
+        stop_idx = start_idx + sizes[s] - 1
+        ranges[s] = start_idx:stop_idx
+        start_idx = stop_idx + 1
+    end
+
+    rand01() = rng === nothing ? rand() : rand(rng)
+    randint(lo::Int, hi::Int) = rng === nothing ? rand(lo:hi) : rand(rng, lo:hi)
+
+    A = falses(n_nodes, n_nodes)
+
+    # random edges inside each subgraph
+    for sg in 1:n_subgraphs
+        idx = ranges[sg]
+        for i in first(idx):(last(idx) - 1)
+            for j in (i + 1):last(idx)
+                if rand01() < p_internal
+                    A[i, j] = true
+                    A[j, i] = true
+                end
+            end
+        end
+    end
+
+    # requested edges between distinct subgraphs
+    for a in 1:(n_subgraphs - 1)
+        ra = ranges[a]
+        na = length(ra)
+        for b in (a + 1):n_subgraphs
+            rb = ranges[b]
+            nb = length(rb)
+            requested = Int(inter_edges[a, b])
+            max_possible = na * nb
+            @assert requested ≤ max_possible "requested inter-subgraph edges exceed possible unique pairs for ($a, $b)"
+
+            used = Set{Tuple{Int,Int}}()
+            while length(used) < requested
+                u = first(ra) + randint(1, na) - 1
+                v = first(rb) + randint(1, nb) - 1
+                if (u, v) ∉ used
+                    push!(used, (u, v))
+                    A[u, v] = true
+                    A[v, u] = true
+                end
+            end
+        end
+    end
+
+    return A
+end
+
+"""
+    normalized_laplacian_eigenvalues(
+        A::BitMatrix;
+        zero_tol::Float64 = 1e-12,
+    )::Vector{Float64}
+
+Compute eigenvalues of the symmetrically normalized graph Laplacian
+
+`L_sym = I - D^{-1/2} A D^{-1/2}`
+
+for an undirected simple graph adjacency matrix `A`.
+
+For isolated vertices (`degree = 0`), `D^{-1/2}` is set to 0.
+Eigenvalues with `abs(λ) < zero_tol` are returned as exact `0.0`.
+"""
+function normalized_laplacian_eigenvalues(
+    A::BitMatrix;
+    zero_tol::Float64 = 1e-12,
+)::Vector{Float64}
+    n, m = size(A)
+    @assert n == m "adjacency matrix must be square"
+    @assert LinearAlgebra.issymmetric(A) "adjacency matrix must be symmetric"
+    @assert all(!A[i, i] for i in 1:n) "adjacency matrix diagonal must be zero"
+    @assert zero_tol ≥ 0.0 "zero_tol must be nonnegative"
+
+    degrees = vec(sum(A, dims = 2))
+    invsqrtdeg = zeros(Float64, n)
+    for i in 1:n
+        d = degrees[i]
+        if d > 0
+            invsqrtdeg[i] = inv(sqrt(Float64(d)))
+        end
+    end
+
+    Dhalf = LinearAlgebra.Diagonal(invsqrtdeg)
+    Afloat = Matrix{Float64}(A)
+    L = Matrix{Float64}(LinearAlgebra.I, n, n) - Dhalf * Afloat * Dhalf
+
+    λ = LinearAlgebra.eigvals(LinearAlgebra.Symmetric(L))
+    for i in eachindex(λ)
+        if abs(λ[i]) < zero_tol
+            λ[i] = 0.0
+        end
+    end
+
+    return λ
+end
+
+"""
+    plot_subgraph_colored_node_link(
+        A::BitMatrix,
+        n_subgraphs::Int;
+        fig_size::Union{Nothing,Tuple{Int,Int}} = nothing,
+        apply_theme::Bool = true,
+        theme_double_column::Bool = true,
+        theme_magnification::Real = 1.0,
+        color_transparency::Float64 = 1.0,
+        cluster_radius::Real = 6.0,
+        local_base::Real = 1.8,
+        local_scale::Real = 0.5,
+        node_size::Real = 10,
+        edge_alpha::Real = 0.25,
+        inter_edge_alpha::Real = 0.08,
+        fig_path::Union{Nothing,String} = nothing,
+    )
+
+Draw a node-link plot where nodes are colored by subgraph membership.
+Nodes are arranged in separated subgraph clusters to make the partition visible.
+If `apply_theme=true`, `apply_paper_theme!` is applied before plotting.
+"""
+function _draw_subgraph_colored_node_link!(
+    ax,
+    A::BitMatrix,
+    n_subgraphs::Int;
+    cluster_radius::Real = 6.0,
+    local_base::Real = 1.8,
+    local_scale::Real = 0.5,
+    node_size::Real = 10,
+    edge_alpha::Real = 0.25,
+    inter_edge_alpha::Real = 0.08,
+)
+    n, m = size(A)
+    @assert n == m "adjacency matrix must be square"
+    @assert LinearAlgebra.issymmetric(A) "adjacency matrix must be symmetric"
+    @assert 1 ≤ n_subgraphs ≤ n
+    @assert cluster_radius > 0
+    @assert local_base ≥ 0
+    @assert local_scale ≥ 0
+
+    # Same near-equal contiguous partition as in graph generation.
+    q, r = divrem(n, n_subgraphs)
+    sizes = fill(q, n_subgraphs)
+    for i in 1:r
+        sizes[i] += 1
+    end
+
+    ranges = Vector{UnitRange{Int}}(undef, n_subgraphs)
+    start_idx = 1
+    for s in 1:n_subgraphs
+        stop_idx = start_idx + sizes[s] - 1
+        ranges[s] = start_idx:stop_idx
+        start_idx = stop_idx + 1
+    end
+
+    # Cluster centers on a circle; nodes on local circles around each center.
+    # Defaults are chosen so medium-sized subgraphs (e.g. 3x10 nodes) are
+    # visually larger and closer than before.
+    pos = Vector{Makie.Point2f}(undef, n)
+    subgraph_of_node = Vector{Int}(undef, n)
+
+    for sg in 1:n_subgraphs
+        θc = 2π * (sg - 1) / n_subgraphs
+        cx = cluster_radius * cos(θc)
+        cy = cluster_radius * sin(θc)
+        idx = ranges[sg]
+        k = length(idx)
+        local_r = local_base + local_scale * sqrt(k)
+        for (t, node) in enumerate(idx)
+            θ = 2π * (t - 1) / max(k, 1)
+            x = cx + local_r * cos(θ)
+            y = cy + local_r * sin(θ)
+            pos[node] = Makie.Point2f(x, y)
+            subgraph_of_node[node] = sg
+        end
+    end
+
+    colors_obs = Makie.theme(:palette).color
+    colors = colors_obs isa Observables.Observable ? Observables.to_value(colors_obs) : colors_obs
+    node_colors = [colors[mod1(subgraph_of_node[i], length(colors))] for i in 1:n]
+
+    hidedecorations!(ax)
+    hidespines!(ax)
+    ax.aspect = Makie.DataAspect()
+
+    for i in 1:(n - 1)
+        pi = pos[i]
+        for j in (i + 1):n
+            if A[i, j]
+                pj = pos[j]
+                same = subgraph_of_node[i] == subgraph_of_node[j]
+                α = same ? edge_alpha : inter_edge_alpha
+                lines!(ax, [pi[1], pj[1]], [pi[2], pj[2]], color = (:black, α), linewidth = 1)
+            end
+        end
+    end
+
+    scatter!(ax, first.(pos), last.(pos), color = node_colors, markersize = node_size)
+    return ax
+end
+
+function plot_subgraph_colored_node_link(
+    A::BitMatrix,
+    n_subgraphs::Int;
+    fig_size::Union{Nothing,Tuple{Int,Int}} = nothing,
+    apply_theme::Bool = true,
+    theme_double_column::Bool = false,
+    theme_magnification::Real = 1.0,
+    color_transparency::Float64 = 1.0,
+    cluster_radius::Real = 6.0,
+    local_base::Real = 1.8,
+    local_scale::Real = 0.5,
+    node_size::Real = 10,
+    edge_alpha::Real = 0.25,
+    inter_edge_alpha::Real = 0.08,
+    fig_path::Union{Nothing,String} = nothing,
+)
+    themed_size = if apply_theme
+        apply_paper_theme!(
+            double_column = theme_double_column,
+            magnification = theme_magnification,
+            color_transparency = color_transparency,
+        )
+    else
+        (900, 900)
+    end
+    size_to_use = fig_size === nothing ? themed_size : fig_size
+    fig = Figure(size = size_to_use)
+    ax = Axis(fig[1, 1])
+    _draw_subgraph_colored_node_link!(
+        ax,
+        A,
+        n_subgraphs;
+        cluster_radius = cluster_radius,
+        local_base = local_base,
+        local_scale = local_scale,
+        node_size = node_size,
+        edge_alpha = edge_alpha,
+        inter_edge_alpha = inter_edge_alpha,
+    )
+
+    if !isnothing(fig_path)
+        save(fig_path, fig)
+    end
+
+    return fig
+end
+
+"""
+    plot_subgraph_colored_node_link(
+        A1::BitMatrix,
+        A2::BitMatrix,
+        A3::BitMatrix,
+        n_subgraphs::Int;
+        fig_size::Union{Nothing,Tuple{Int,Int}} = nothing,
+        apply_theme::Bool = true,
+        theme_magnification::Real = 1.0,
+        color_transparency::Float64 = 1.0,
+        cluster_radius::Real = 6.0,
+        local_base::Real = 1.8,
+        local_scale::Real = 0.5,
+        node_size::Real = 10,
+        edge_alpha::Real = 0.25,
+        inter_edge_alpha::Real = 0.08,
+        fig_path::Union{Nothing,String} = nothing,
+    )
+
+Create a 1×3 row of node-link plots (double-column-sized by default).
+"""
+function plot_subgraph_colored_node_link(
+    A1::BitMatrix,
+    A2::BitMatrix,
+    A3::BitMatrix,
+    n_subgraphs::Int;
+    fig_size::Union{Nothing,Tuple{Int,Int}} = nothing,
+    apply_theme::Bool = true,
+    theme_magnification::Real = 1.0,
+    color_transparency::Float64 = 1.0,
+    cluster_radius::Real = 6.0,
+    local_base::Real = 1.8,
+    local_scale::Real = 0.5,
+    node_size::Real = 10,
+    edge_alpha::Real = 0.25,
+    inter_edge_alpha::Real = 0.08,
+    fig_path::Union{Nothing,String} = nothing,
+)
+    themed_size = if apply_theme
+        apply_paper_theme!(
+            double_column = true,
+            magnification = theme_magnification,
+            color_transparency = color_transparency,
+        )
+    else
+        (1600, 450)
+    end
+    size_to_use = fig_size === nothing ? themed_size : fig_size
+
+    fig = Figure(size = size_to_use)
+    ax1 = Axis(fig[1, 1])
+    ax2 = Axis(fig[1, 3])
+    ax3 = Axis(fig[1, 5])
+
+    # Thick vertical separator bars between the three panels.
+    Makie.Box(fig[1, 2], color = :black, strokewidth = 0)
+    Makie.Box(fig[1, 4], color = :black, strokewidth = 0)
+    Makie.colsize!(fig.layout, 2, Makie.Fixed(8))
+    Makie.colsize!(fig.layout, 4, Makie.Fixed(8))
+
+    _draw_subgraph_colored_node_link!(
+        ax1,
+        A1,
+        n_subgraphs;
+        cluster_radius = cluster_radius,
+        local_base = local_base,
+        local_scale = local_scale,
+        node_size = node_size,
+        edge_alpha = edge_alpha,
+        inter_edge_alpha = inter_edge_alpha,
+    )
+    _draw_subgraph_colored_node_link!(
+        ax2,
+        A2,
+        n_subgraphs;
+        cluster_radius = cluster_radius,
+        local_base = local_base,
+        local_scale = local_scale,
+        node_size = node_size,
+        edge_alpha = edge_alpha,
+        inter_edge_alpha = inter_edge_alpha,
+    )
+    _draw_subgraph_colored_node_link!(
+        ax3,
+        A3,
+        n_subgraphs;
+        cluster_radius = cluster_radius,
+        local_base = local_base,
+        local_scale = local_scale,
+        node_size = node_size,
+        edge_alpha = edge_alpha,
+        inter_edge_alpha = inter_edge_alpha,
+    )
+
+    if !isnothing(fig_path)
+        save(fig_path, fig)
+    end
+
+    return fig
+end
+
+"""
     load_and_average_std_scalar(
         data_paths::Vector{String},
         fields::Vector{Symbol},
