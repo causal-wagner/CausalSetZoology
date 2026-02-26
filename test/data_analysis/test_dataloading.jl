@@ -4,7 +4,6 @@
     using JLD2
     using Random
 
-    include(joinpath(@__DIR__, "..", "..", "src", "data_analysis", "dataloading.jl"))
 
     Base.@kwdef struct _DLRec
         in_degree_hist_link::Dict{Int,Float64}
@@ -41,54 +40,54 @@ end
     _write_dl_file(p1, b1)
     _write_dl_file(p2, b2)
 
-    h = load_histograms_from_paths([p1, p2], :in_degree_hist_link)
+    h = CausalSetZoology.load_histograms_from_paths([p1, p2], :in_degree_hist_link)
     @test length(h) == 2
     @test length(h[1]) == 2
 
-    hs = load_histograms_from_paths([p1], :in_degree_hist_link, :scalar)
+    hs = CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link, :scalar)
     @test hs[1][1][2] == 10.0
 
-    @test size(densify_hists([Dict(0 => 1.0, 2 => 2.0), Dict(1 => 1.0)])) == (2, 3)
+    @test size(CausalSetZoology.densify_hists([Dict(0 => 1.0, 2 => 2.0), Dict(1 => 1.0)])) == (2, 3)
 
     d1::Dict = Dict{Int,Int}(1 => 1)
     d2::Dict = Dict{Int,Int}(1 => 2, 2 => 1)
-    jh = join_histograms(Vector{Vector{Vector{Dict}}}([[[d1]], [[d2]]]))
+    jh = CausalSetZoology.join_histograms(Vector{Vector{Vector{Dict}}}([[[d1]], [[d2]]]))
     @test jh[1][1][1] == 3
 
     t1 = (Dict{Int,Float64}(1 => 1.0)::Dict, 5.0::Real)
     t2 = (Dict{Int,Float64}(1 => 2.0)::Dict, 5.0::Real)
-    jhs = join_histograms(Vector{Vector{Vector{Tuple{Dict,Real}}}}([[[t1]], [[t2]]]))
+    jhs = CausalSetZoology.join_histograms(Vector{Vector{Vector{Tuple{Dict,Real}}}}([[[t1]], [[t2]]]))
     @test jhs[1][1][1][1] == 3.0
     @test jhs[1][1][2] == 5.0
 
     fields = Union{Symbol,Tuple{Symbol,Int64}}[:score, (:in_degree_hist_link, 1)]
-    f = load_fields_from_paths([p1], fields)
+    f = CausalSetZoology.load_fields_from_paths([p1], fields)
     @test f[1][1] == [1.0, 2.0]
     @test f[1][2] == [1.0, 2.0]
 
-    fs = load_fields_from_paths([p1], [:score], :scalar)
+    fs = CausalSetZoology.load_fields_from_paths([p1], [:score], :scalar)
     @test fs[1][1][1] == (1.0, 10.0)
 
-    one = load_field_with_scalar([p1], :score, :scalar)
+    one = CausalSetZoology.load_field_with_scalar([p1], :score, :scalar)
     @test one[1][2] == (2.0, 20.0)
 
-    av = load_and_average_std_scalar([p1], [:score])
+    av = CausalSetZoology.load_and_average_std_scalar([p1], [:score])
     @test av[1][1][1] ≈ 1.5
 
-    avs = load_and_average_std_scalar([p1], [:score], :scalar)
+    avs = CausalSetZoology.load_and_average_std_scalar([p1], [:score], :scalar)
     @test length(avs[1]) == 2
 
     # filtering/thinning branches
     filt = Union{Nothing,Function}[x -> x.score > 1.5]
-    hf = load_histograms_from_paths([p1], :in_degree_hist_link; filters = filt, thinning = 1)
+    hf = CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link; filters = filt, thinning = 1)
     @test length(hf[1]) == 1
-    ht = load_histograms_from_paths([p1], :in_degree_hist_link; thinning = 2)
+    ht = CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link; thinning = 2)
     @test length(ht[1]) == 1
 
     # validation branches
-    @test_throws TypeError load_histograms_from_paths([p1], :in_degree_hist_link; filters = [nothing, nothing])
-    @test_throws AssertionError load_histograms_from_paths([p1], :in_degree_hist_link; thinning = 0)
-    @test_throws AssertionError load_fields_from_paths([p1], fields; thinning = 0.0)
-    @test_throws AssertionError load_field_with_scalar([p1], :score, :scalar; thinning = 1.5)
-    @test_throws AssertionError join_histograms(Vector{Vector{Vector{Tuple{Dict,Real}}}}([[[t1]], [[(Dict{Int,Float64}(1 => 2.0)::Dict, 6.0::Real)]]]))
+    @test_throws TypeError CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link; filters = [nothing, nothing])
+    @test_throws AssertionError CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link; thinning = 0)
+    @test_throws AssertionError CausalSetZoology.load_fields_from_paths([p1], fields; thinning = 0.0)
+    @test_throws AssertionError CausalSetZoology.load_field_with_scalar([p1], :score, :scalar; thinning = 1.5)
+    @test_throws AssertionError CausalSetZoology.join_histograms(Vector{Vector{Vector{Tuple{Dict,Real}}}}([[[t1]], [[(Dict{Int,Float64}(1 => 2.0)::Dict, 6.0::Real)]]]))
 end

@@ -9,13 +9,9 @@
     using Colors
     using Printf
 
-    include(joinpath(@__DIR__, "..", "..", "src", "data_analysis", "plot_theme.jl"))
-    include(joinpath(@__DIR__, "..", "..", "src", "data_analysis", "dataloading.jl"))
-    include(joinpath(@__DIR__, "..", "..", "src", "data_analysis", "utils.jl"))
 
     fig_path(name::String) = joinpath(mktempdir(), string(name, ".png"))
 
-    include(joinpath(@__DIR__, "..", "..", "src", "data_analysis", "plot_matrix.jl"))
 end
 
 @testitem "plot_matrix: matrix plot and input validation" setup=[setupPlotMatrix] begin
@@ -30,7 +26,7 @@ end
         [(Dict{Int64,Float64}(1 => 3.0, 2 => 1.0), 1.0), (Dict{Int64,Float64}(1 => 2.0, 2 => 2.0), 2.0)],
     ])
 
-    fig = hist_hist_vec_hist_plot_matrix(
+    fig = CausalSetZoology.hist_hist_vec_hist_plot_matrix(
         (h1, h2, v3, h4),
         "matrix_test";
         xlim = [nothing, nothing, nothing, nothing],
@@ -43,7 +39,7 @@ end
     )
     @test fig isa Figure
 
-    @test_throws AssertionError hist_hist_vec_distinguishability_plot_matrix(
+    @test_throws AssertionError CausalSetZoology.hist_hist_vec_distinguishability_plot_matrix(
         ["a"], ["b"], :scalar, "bad";
         xlim = [nothing],
         ylim = [nothing, nothing, nothing, nothing],
@@ -51,7 +47,7 @@ end
         ylabel = ["y", "y", "y", "y"],
     )
 
-    @test_throws ErrorException hist_hist_vec_hist_plot_matrix(
+    @test_throws ErrorException CausalSetZoology.hist_hist_vec_hist_plot_matrix(
         (h1, h2, v3, h4),
         "matrix_bad_side";
         xlim = [nothing, nothing, nothing, nothing],
@@ -63,7 +59,7 @@ end
         logscale_y = false,
     )
 
-    @test_throws AssertionError hist_hist_vec_distinguishability_plot_matrix(
+    @test_throws AssertionError CausalSetZoology.hist_hist_vec_distinguishability_plot_matrix(
         ["missing_path"], ["missing_path"], :scalar, "bad2";
         xlim = [nothing, nothing, nothing, nothing],
         ylim = [nothing, nothing, nothing, nothing],

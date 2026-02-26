@@ -1,8 +1,17 @@
 @testsnippet setupDataGenerationIntegration begin
     using Test
+    import CausalSetZoology
     using JLD2
     import QuantumGrav
-    include(joinpath(@__DIR__, "test_support.jl"))
+
+    function _run_capture(cmd::Cmd)
+        out = Pipe()
+        proc = run(pipeline(ignorestatus(cmd), stdout = out, stderr = out); wait = false)
+        close(out.in)
+        text = read(out, String)
+        wait(proc)
+        return proc.exitcode, text
+    end
 
     root_dir = normpath(joinpath(@__DIR__, "..", ".."))
     src_project = joinpath(root_dir, "src")

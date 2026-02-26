@@ -1,41 +1,4 @@
 """
-    densify_hists(hists::Vector{<:AbstractDict})
-
-Convert sparse histogram dictionaries to a dense matrix with consistent binning.
-Returns a matrix of size (Nsamples, nbins).
-
-# Arguments
-- `hists`: Histogram input data.
-
-# Keyword Arguments
-- This method has no keyword arguments.
-
-# Returns
-- `result`: Output of `densify_hists` as described in the summary above.
-
-# Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
-function densify_hists(hists::Vector{<:AbstractDict})
-    min_k = minimum(minimum(keys(h)) for h in hists)
-    max_k = maximum(maximum(keys(h)) for h in hists)
-    shift = (min_k == 0)
-
-    nbins = shift ? max_k + 1 : max_k
-    dense = Matrix{Float64}(undef, length(hists), nbins)
-
-    for (i, h) in enumerate(hists)
-        fill!(view(dense, i, :), 0.0)
-        for (k, v) in h
-            idx = shift ? k + 1 : k
-            dense[i, idx] = v
-        end
-    end
-
-    return dense
-end
-
-"""
     relative_change(a::Real, b::Real)::Float64
 
 Relative change between two positive scalars: |a-b|/(a+b).

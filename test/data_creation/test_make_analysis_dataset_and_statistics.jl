@@ -1,6 +1,15 @@
 @testsnippet setupMakeAnalysisDatasetAndStatistics begin
     using Test
-    include(joinpath(@__DIR__, "test_support.jl"))
+    import CausalSetZoology
+
+    function _run_capture(cmd::Cmd)
+        out = Pipe()
+        proc = run(pipeline(ignorestatus(cmd), stdout = out, stderr = out); wait = false)
+        close(out.in)
+        text = read(out, String)
+        wait(proc)
+        return proc.exitcode, text
+    end
 
     pipeline_script = joinpath(@__DIR__, "..", "..", "src", "data_generation", "make_analysis_dataset_and_statistics.jl")
     pipeline_src = read(pipeline_script, String)
