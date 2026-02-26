@@ -24,13 +24,17 @@ end
     fs = fit_sigma_infty_alpha(σn, ns; σinf_init = 1.0, α_init = 0.5, fix_sigma_inf = true)
     @test isfinite(fs.α)
     @test fs.σinf ≈ 1.0 atol = 1e-6
-    @test_throws UndefVarError fit_sigma_infty_alpha(σn, ns; α_init = 0.3, fix_sigma_inf = false)
+    fs_free = fit_sigma_infty_alpha(σn, ns; α_init = 0.3, fix_sigma_inf = false)
+    @test isfinite(fs_free.σinf)
+    @test isfinite(fs_free.α)
 
     μn = 3.0 .+ 1.5 .* ns .^ (-0.7)
     fm = fit_mu_infty_beta(μn, ns; μinf_init = 3.0, β_init = 0.7, fix_sigma_inf = true)
     @test isfinite(fm.β)
     @test fm.μinf ≈ 3.0 atol = 1e-6
-    @test_throws UndefVarError fit_mu_infty_beta(μn, ns; β_init = 0.4, fix_sigma_inf = false)
+    fm_free = fit_mu_infty_beta(μn, ns; β_init = 0.4, fix_sigma_inf = false)
+    @test isfinite(fm_free.μinf)
+    @test isfinite(fm_free.β)
 
     sc = fit_sigma_convergence(X; batchsize = 1)
     @test length(sc.Ns) == size(sc.σ, 1)

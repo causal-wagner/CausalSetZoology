@@ -194,7 +194,7 @@ function fit_sigma_infty_alpha(
             σinf_fixed = clamp(σinf_fixed, bounds_σinf[1], bounds_σinf[2])
         end
 
-        function obj(x)
+        function obj_fixed(x)
             α = clamp(x[1], bounds_α[1], bounds_α[2])
             numer = sum(ns.^(-α) .* abs.(σn .- σinf_fixed))
             denom = sum(ns.^(-2α))
@@ -203,7 +203,7 @@ function fit_sigma_infty_alpha(
             return sum(r.^2)
         end
 
-        result = Optim.optimize(obj, [α_init], Optim.NelderMead())
+        result = Optim.optimize(obj_fixed, [α_init], Optim.NelderMead())
         α_hat = Optim.minimizer(result)[1]
         α_hat = clamp(α_hat, bounds_α[1], bounds_α[2])
         σinf_hat = σinf_fixed
@@ -213,7 +213,7 @@ function fit_sigma_infty_alpha(
         x0 = [σinf_init, α_init]
 
         # Objective function (reduced, as in boxed equation)
-        function obj(x)
+        function obj_free(x)
             σinf = length(x) == 2 ? x[1] : (σinf_init === nothing ? σn[end] : σinf_init)
             α = length(x) == 2 ? x[2] : x[1]
             # Clamp α to bounds
@@ -229,7 +229,7 @@ function fit_sigma_infty_alpha(
         end
         
         # Run optimization (Nelder-Mead, no gradients)
-        result = Optim.optimize(obj, x0, Optim.NelderMead())
+        result = Optim.optimize(obj_free, x0, Optim.NelderMead())
         xopt = Optim.minimizer(result)
         σinf_hat, α_hat = xopt
         # Clamp to bounds for output
@@ -303,7 +303,7 @@ function fit_mu_infty_beta(
         end
         μinf_fixed = clamp(μinf_fixed, bounds_μinf[1], bounds_μinf[2])
 
-        function obj(x)
+        function obj_fixed(x)
             β = clamp(x[1], bounds_β[1], bounds_β[2])
             numer = sum(ns.^(-β) .* abs.(μn .- μinf_fixed))
             denom = sum(ns.^(-2β))
@@ -312,7 +312,7 @@ function fit_mu_infty_beta(
             return sum(r.^2)
         end
 
-        result = Optim.optimize(obj, [β_init], Optim.NelderMead())
+        result = Optim.optimize(obj_fixed, [β_init], Optim.NelderMead())
         β_hat = Optim.minimizer(result)[1]
         β_hat = clamp(β_hat, bounds_β[1], bounds_β[2])
         μinf_hat = μinf_fixed
@@ -321,7 +321,7 @@ function fit_mu_infty_beta(
     else
         x0 = [μinf_init, β_init]
 
-        function obj(x)
+        function obj_free(x)
             μinf = length(x) == 2 ? x[1] : (μinf_init === nothing ? μn[end] : μinf_init)
             β = length(x) == 2 ? x[2] : x[1]
             β = clamp(β, bounds_β[1], bounds_β[2])
@@ -333,7 +333,7 @@ function fit_mu_infty_beta(
             return sum(r.^2)
         end
 
-        result = Optim.optimize(obj, x0, Optim.NelderMead())
+        result = Optim.optimize(obj_free, x0, Optim.NelderMead())
         xopt = Optim.minimizer(result)
         μinf_hat, β_hat = xopt
         β_hat = clamp(β_hat, bounds_β[1], bounds_β[2])
