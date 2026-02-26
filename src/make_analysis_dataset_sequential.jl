@@ -320,7 +320,7 @@ JLD2.jldopen(out_path, "w") do fout
             elseif kind == "destroyed"
                 r = rand(rng, rdistr)
                 order = rand(rng, orderdistr)
-                num_flips = Int64(ceil(cset_size * rand(rng, non_manifoldlikeness_distr)))
+                num_flips = Int64(ceil(cset_size * (cset_size - 1) / 2 * rand(rng, non_manifoldlikeness_distr)))
                 cset, _, _ = QG.destroy_manifold_cset(cset_size, num_flips, rng, order, r)
                 push!(r_b, r)
                 push!(order_b, order)

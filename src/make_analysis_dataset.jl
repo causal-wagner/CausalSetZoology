@@ -333,7 +333,7 @@ end
         elseif kind == "destroyed"
             r = rand(rng, rdistr)
             order = Int(ceil(2 * log(cset_size_i) / log(r) + 1))
-            num_flips = Int64(ceil(cset_size_i * rand(rng, non_manifoldlikeness_distr)))
+            num_flips = Int64(ceil(cset_size_i * (cset_size_i - 1) /2 * rand(rng, non_manifoldlikeness_distr)))
             cset, _, _ = QG.destroy_manifold_cset(cset_size_i, num_flips, rng, order, r)
             push!(r_b, r)
             push!(order_b, order)

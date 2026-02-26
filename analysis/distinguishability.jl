@@ -952,8 +952,8 @@ function histogram_distinguishability_permutation(
         return (D_obs = 0.0, p_value = 1.0, z_emp = 0.0, z_coll = 0.0, std_Ts = 0.0)
     end
 
-    idx_a = n1 == n ? collect(1:n1) : sort!(randperm(rng, n1)[1:n])
-    idx_b = n2 == n ? collect(1:n2) : sort!(randperm(rng, n2)[1:n])
+    idx_a = n1 == n ? collect(1:n1) : sort!(Random.randperm(rng, n1)[1:n])
+    idx_b = n2 == n ? collect(1:n2) : sort!(Random.randperm(rng, n2)[1:n])
 
     A = vecs_a[idx_a]
     B = vecs_b[idx_b]
@@ -1026,7 +1026,7 @@ function histogram_distinguishability_permutation(
 
     Ds = Vector{Float64}(undef, n_perm)
     for p in 1:n_perm
-        perm = randperm(rng, n_total)
+        perm = Random.randperm(rng, n_total)
         labels = falses(n_total)
         @inbounds for i in 1:n_per
             labels[perm[i]] = true
@@ -1058,8 +1058,8 @@ function histogram_distinguishability_permutation(
         return (D_obs = 0.0, p_value = 1.0, z_emp = 0.0, z_coll = 0.0, std_Ts = 0.0)
     end
 
-    idx_a = n1 == n ? collect(1:n1) : sort!(randperm(rng, n1)[1:n])
-    idx_b = n2 == n ? collect(1:n2) : sort!(randperm(rng, n2)[1:n])
+    idx_a = n1 == n ? collect(1:n1) : sort!(Random.randperm(rng, n1)[1:n])
+    idx_b = n2 == n ? collect(1:n2) : sort!(Random.randperm(rng, n2)[1:n])
 
     A = vecs_a[idx_a]
     B = vecs_b[idx_b]
@@ -1139,7 +1139,7 @@ function histogram_distinguishability_permutation(
 
     Ds = Vector{Float64}(undef, n_perm)
     for p in 1:n_perm
-        perm = randperm(rng, n_total)
+        perm = Random.randperm(rng, n_total)
         labels = falses(n_total)
         @inbounds for i in 1:n_per
             labels[perm[i]] = true
@@ -1370,7 +1370,7 @@ function _random_split_equal(B::Vector{Vector{Float64}}, rng)
     n = length(B)
     n2 = n ÷ 2
     @assert n2 >= 1 "need at least 2 samples to split"
-    perm = randperm(rng, n)
+    perm = Random.randperm(rng, n)
     B1 = B[perm[1:n2]]
     B2 = B[perm[(n2 + 1):(2 * n2)]]
     return B1, B2
@@ -1612,13 +1612,8 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     use_pm = false
     pm = nothing
     if progress
-        try
-            @eval import ProgressMeter
-            pm = ProgressMeter.Progress(total; desc = "mahalanobis bins")
-            use_pm = true
-        catch
-            use_pm = false
-        end
+        pm = ProgressMeter.Progress(total; desc = "mahalanobis bins")
+        use_pm = true
     end
     step = progress_step === nothing ? max(1, round(Int, total * 0.05)) : max(1, progress_step)
     workers_to_use = Int[]
@@ -1783,13 +1778,8 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     use_pm = false
     pm = nothing
     if progress
-        try
-            @eval import ProgressMeter
-            pm = ProgressMeter.Progress(total; desc = "mahalanobis bins")
-            use_pm = true
-        catch
-            use_pm = false
-        end
+        pm = ProgressMeter.Progress(total; desc = "mahalanobis bins")
+        use_pm = true
     end
     step = progress_step === nothing ? max(1, round(Int, total * 0.05)) : max(1, progress_step)
     workers_to_use = Int[]
