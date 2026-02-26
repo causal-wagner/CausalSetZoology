@@ -1,7 +1,7 @@
 """
-    normalize_hist(
-        hists::Vector{Vector{Dict}};
-        normalization::Union{Symbol,Float64} = :probability,
+    normalize_hists(
+        hists::AbstractVector{<:AbstractVector{<:AbstractDict}};
+        normalization::Union{Symbol,Real} = :probability,
     )::Vector{Vector{Dict{Int,Float64}}}
 
 Normalize each histogram in the output of `load_histograms_from_paths`.
@@ -10,7 +10,19 @@ Normalization options:
 - `:max`          → divide each histogram by its maximum bin count
 - `:probability`  → divide each histogram by the sum of its bin counts
 - `number`        → divide each histogram by that number
-"""
+
+# Arguments
+- `hists`: Histogram input data.
+
+# Keyword Arguments
+- `normalization`: Keyword option `normalization` controlling this method's behavior.
+
+# Returns
+- `result::Vector{Vector{Dict{Int,Float64}}}`: Output of `normalize_hists` with type annotation `Vector{Vector{Dict{Int,Float64}}}`.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function normalize_hists(
     hists::AbstractVector{<:AbstractVector{<:AbstractDict}};
     normalization::Union{Symbol,Real} = :probability,
@@ -42,15 +54,30 @@ end
 
 """
     normalize_hists(
-        hists::Vector{Vector{Tuple{Dict,Real}}};
+        hists::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractDict,<:Real}}};
         normalization::Union{Symbol,Real} = :probability,
         num_bins::Union{Nothing,Int} = nothing,
     )::Vector{Vector{Tuple{Dict{Int,Float64},Real}}}
 
-Normalize histograms that are paired with a scalar. Histograms are normalized
-using a denominator computed across all entries with the same scalar (optionally
-binned into `num_bins`), and the scalar is carried along (binned if requested).
-"""
+Normalize histograms that are paired with a scalar.
+
+Each histogram is normalized independently according to `normalization`. If
+`num_bins` is provided, scalar values are binned and replaced by bin centers in
+the returned tuples.
+
+# Arguments
+- `hists`: Histogram input data.
+
+# Keyword Arguments
+- `normalization`: Keyword option `normalization` controlling this method's behavior.
+- `num_bins`: Bin selection or binning control parameter.
+
+# Returns
+- `result::Vector{Vector{Tuple{Dict{Int,Float64},Real}}}`: Output of `normalize_hists` with type annotation `Vector{Vector{Tuple{Dict{Int,Float64},Real}}}`.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function normalize_hists(
     hists::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractDict,<:Real}}};
     normalization::Union{Symbol,Real} = :probability,
@@ -112,7 +139,19 @@ end
 
 Convert sparse histogram dictionaries to a dense matrix with consistent binning.
 Returns a matrix of size (Nsamples, nbins).
-"""
+
+# Arguments
+- `hists`: Histogram input data.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `densify_hists` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function densify_hists(hists::Vector{<:AbstractDict})
     min_k = minimum(minimum(keys(h)) for h in hists)
     max_k = maximum(maximum(keys(h)) for h in hists)
@@ -135,8 +174,21 @@ end
 """
     relative_change(a::Real, b::Real)::Float64
 
-Relative change between two positive scalars: 2|a-b|/(a+b).
-"""
+Relative change between two positive scalars: |a-b|/(a+b).
+
+# Arguments
+- `a`: Input parameter `a` used by this method.
+- `b`: Input parameter `b` used by this method.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result::Float64`: Output of `relative_change` with type annotation `Float64`.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function relative_change(a::Real, b::Real)::Float64
     @assert a > 0 && b > 0 "relative_change requires positive scalars"
     return abs(a - b) / (a + b)
@@ -148,7 +200,21 @@ end
 Group `(value, scalar)` pairs into bins. Returns a vector of `(bin_center, values)` pairs.
 If `num_bins === nothing`, uses exact scalar values.
 If `bin_edges` is provided, uses those edges; otherwise computes edges from the scalars.
-"""
+
+# Arguments
+- `pairs`: Input parameter `pairs` used by this method.
+- `num_bins`: Bin selection or binning control parameter.
+- `bin_edges`: Bin selection or binning control parameter.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `bin_scalar_pairs` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function bin_scalar_pairs(
     pairs::Vector{Tuple{T,Real}},
     num_bins::Union{Nothing,Int} = nothing,
@@ -186,16 +252,27 @@ function bin_scalar_pairs(
     return [(k, groups[k]) for k in keys_sorted]
 end
 
-
 """
     scalar_bin_distinguishability(data::Vector{Vector{Tuple{T,Real}}}; num_bins=nothing)
 
-Given two datasets (top-level vector must have length 2) of `(value, scalar)` pairs
+Given one dataset (top-level vector must have length 1) of `(value, scalar)` pairs
 from `load_histograms_from_paths(..., scalar)` or `load_field_with_scalar`, bin by
 scalar (if `num_bins` is set) and compute distinguishability for all bin pairs.
 
 Returns a vector of `(s1, s2, rel_change, D)`.
-"""
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}};
     num_bins::Union{Nothing,Int} = nothing,
@@ -253,9 +330,26 @@ end
 """
     scalar_bin_distinguishability(data::Vector{Vector{Tuple{T,Real}}}, num_draws::Int; num_bins=nothing, rng=...)
 
-Monte-Carlo version of `scalar_bin_distinguishability`. Uses `num_draws` pairs
-when computing distinguishability. Returns `(s1, s2, rel_change, D)` for each bin pair.
-"""
+See `scalar_bin_distinguishability(data; num_bins=...)`.
+
+This overload uses Monte Carlo distinguishability with `num_draws` samples and
+adds uncertainty output: each result has fields
+`(s1, s2, rel_change, D, std)`.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     num_draws::Int;
@@ -315,8 +409,24 @@ end
 """
     scalar_bin_distinguishability(data::Vector{Vector{Tuple{T,Real}}}, ref::AbstractVector; num_bins=nothing)
 
-Compare each scalar bin to a reference set `ref`. Returns `(s, D)` for each bin.
-"""
+See `scalar_bin_distinguishability(data; num_bins=...)`.
+
+This overload compares each scalar bin to a fixed reference sample `ref` and
+returns `(scalar, D)` entries.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `ref`: Input parameter `ref` used by this method.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector;
@@ -372,9 +482,26 @@ end
 """
     scalar_bin_distinguishability(data::Vector{Vector{Tuple{T,Real}}}, ref::AbstractVector, num_draws::Int; num_bins=nothing, rng=...)
 
-Monte-Carlo version comparing each scalar bin to reference `ref`.
-Returns `(s, D, std)` for each bin.
-"""
+See `scalar_bin_distinguishability(data, ref; num_bins=...)`.
+
+This overload uses Monte Carlo distinguishability with `num_draws` and returns
+`(scalar, D, std)` entries.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `ref`: Input parameter `ref` used by this method.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector,
@@ -434,7 +561,21 @@ end
 
 Permutation-test version of `scalar_bin_distinguishability`. Returns a vector of
 `(s1, s2, rel_change, D_obs, p_value, z_emp, z_coll, std_Ts)` for each bin pair.
-"""
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}};
     num_bins::Union{Nothing,Int} = nothing,
@@ -494,9 +635,26 @@ end
 """
     scalar_bin_distinguishability_permutation(data::Vector{Vector{Tuple{T,Real}}}, num_draws::Int; num_bins=nothing, n_perm=1000, rng=...)
 
-Permutation-test version using `num_draws` randomly sampled pairs (Monte Carlo).
-Returns `(s1, s2, rel_change, D_obs, p_value, z_emp, z_coll, std_Ts)` for each bin pair.
-"""
+See `scalar_bin_distinguishability_permutation(data; ...)`.
+
+This overload uses Monte Carlo pair sampling (`num_draws`) inside the
+permutation test and returns the same fields.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}},
     num_draws::Int;
@@ -557,9 +715,26 @@ end
 """
     scalar_bin_distinguishability_permutation(data::Vector{Vector{Tuple{T,Real}}}, ref::AbstractVector; num_bins=nothing, n_perm=1000, rng=...)
 
-Permutation-test version comparing each scalar bin to reference `ref`.
-Returns `(s, D_obs, p_value, z_emp, z_coll, std_Ts)` for each bin.
-"""
+See `scalar_bin_distinguishability_permutation(data; ...)`.
+
+This overload compares each scalar bin to reference sample `ref` and returns
+`(scalar, D_obs, p_value, z_emp, z_coll, std_Ts)` entries.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `ref`: Input parameter `ref` used by this method.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector;
@@ -617,9 +792,27 @@ end
 """
     scalar_bin_distinguishability_permutation(data::Vector{Vector{Tuple{T,Real}}}, ref::AbstractVector, num_draws::Int; num_bins=nothing, n_perm=1000, rng=...)
 
-Permutation-test version (MC) comparing each scalar bin to reference `ref`.
-Returns `(s, D_obs, p_value, z_emp, z_coll, std_Ts)` for each bin.
-"""
+See `scalar_bin_distinguishability_permutation(data, ref; ...)`.
+
+This overload uses Monte Carlo pair sampling (`num_draws`) and returns the same
+per-bin fields.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `ref`: Input parameter `ref` used by this method.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector,
@@ -680,7 +873,20 @@ end
 
 Compute the Hellinger distance between two probability vectors.
 Assumes `p` and `q` are nonnegative and have equal length.
-"""
+
+# Arguments
+- `p`: Input parameter `p` used by this method.
+- `q`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result::Float64`: Output of `hellinger_distance` with type annotation `Float64`.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function hellinger_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real})::Float64
     @assert length(p) == length(q) "Hellinger distance requires equal-length vectors"
     s = 0.0
@@ -701,7 +907,20 @@ two histogram/vector samples. Inputs can be:
 Returns a named tuple `(D = value)`.
 For histogram inputs, both sets are normalized with `normalize_hists(..., :probability)`
 and then trimmed to the maximal nonzero bin of the union.
-"""
+
+# Arguments
+- `hists_a`: Histogram input data.
+- `hists_b`: Histogram input data.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `histogram_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
@@ -723,6 +942,28 @@ function histogram_distinguishability(
     return histogram_distinguishability(vecs_a, vecs_b)
 end
 
+"""
+    histogram_distinguishability(hists_a, hists_b, num_draws; rng=...)
+
+See `histogram_distinguishability(hists_a, hists_b)`.
+
+This overload uses Monte Carlo estimation with `num_draws` and returns
+`(D, std)` instead of only `(D,)`.
+
+# Arguments
+- `hists_a`: Histogram input data.
+- `hists_b`: Histogram input data.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `histogram_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
@@ -746,6 +987,26 @@ function histogram_distinguishability(
     return histogram_distinguishability(vecs_a, vecs_b, num_draws; rng = rng)
 end
 
+"""
+    histogram_distinguishability(vecs_a, vecs_b)
+
+See `histogram_distinguishability(hists_a, hists_b)`.
+
+This is the exact vector-input implementation (no dict normalization stage).
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `histogram_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -804,6 +1065,27 @@ function histogram_distinguishability(
     return (D = D,)
 end
 
+"""
+    histogram_distinguishability(vecs_a, vecs_b, num_draws; rng=...)
+
+See `histogram_distinguishability(vecs_a, vecs_b)`.
+
+Monte Carlo variant using `num_draws`; returns `(D, std)`.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `histogram_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -883,7 +1165,21 @@ end
 Permutation test for distinguishability. Returns a named tuple
 `(D_obs, p_value, z_emp, z_coll, std_Ts)`, where `D_obs` is the observed
 distinguishability and `z_coll` is the collider-style Z derived from `p_value`.
-"""
+
+# Arguments
+- `hists_a`: Histogram input data.
+- `hists_b`: Histogram input data.
+
+# Keyword Arguments
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability_permutation(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict};
@@ -910,9 +1206,26 @@ end
 """
     histogram_distinguishability_permutation(hists_a, hists_b, num_draws; n_perm=1000, rng=...)
 
-Permutation test using `num_draws` randomly sampled pairs (Monte Carlo).
-Returns a named tuple `(D_obs, p_value, z_emp, z_coll, std_Ts)`.
-"""
+See `histogram_distinguishability_permutation(hists_a, hists_b; ...)`.
+
+Monte Carlo variant that samples `num_draws` pooled pairs per permutation run;
+returns the same fields.
+
+# Arguments
+- `hists_a`: Histogram input data.
+- `hists_b`: Histogram input data.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability_permutation(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
@@ -937,6 +1250,27 @@ function histogram_distinguishability_permutation(
     return histogram_distinguishability_permutation(vecs_a, vecs_b, num_draws; n_perm = n_perm, rng = rng)
 end
 
+"""
+    histogram_distinguishability_permutation(vecs_a, vecs_b; n_perm=1000, rng=...)
+
+See `histogram_distinguishability_permutation(hists_a, hists_b; ...)`.
+
+This is the vector-input implementation (no dict normalization stage).
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Keyword Arguments
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability_permutation(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}};
@@ -1042,6 +1376,29 @@ function histogram_distinguishability_permutation(
     return (D_obs = D_obs, p_value = p_value, z_emp = z_emp, z_coll = z_coll, std_Ts = std_Ts)
 end
 
+"""
+    histogram_distinguishability_permutation(vecs_a, vecs_b, num_draws; n_perm=1000, rng=...)
+
+See `histogram_distinguishability_permutation(vecs_a, vecs_b; ...)`.
+
+Monte Carlo variant: samples `num_draws` pooled pairs and reuses them across
+permutations.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function histogram_distinguishability_permutation(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -1158,10 +1515,30 @@ end
 """
     mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
 
-Compute the "smallest-sigma gap" distinguishability between two sets of histograms/vectors.
-Returns a named tuple:
-`(M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
-"""
+See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
+
+This overload accepts histogram dictionaries, normalizes/densifies them, and
+delegates to the vector implementation.
+
+# Arguments
+- `A`: Input parameter `A` used by this method.
+- `B`: Input parameter `B` used by this method.
+
+# Keyword Arguments
+- `regulator`: Keyword option `regulator` controlling this method's behavior.
+- `R`: Numeric control parameter for fitting/sampling resolution.
+- `q`: Numeric control parameter for fitting/sampling resolution.
+- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
+- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+
+# Returns
+- `result`: Output of `mahalanobis_gap_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function mahalanobis_gap_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict};
@@ -1207,6 +1584,27 @@ function mahalanobis_gap_distinguishability(
     )
 end
 
+"""
+    mahalanobis_gap_distinguishability(vals_a, vals_b; kwargs...)
+
+See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
+
+Dispatch helper that forwards homogeneous vectors-of-dicts or
+vectors-of-vectors to the corresponding concrete method.
+
+# Arguments
+- `vals_a`: Input parameter `vals_a` used by this method.
+- `vals_b`: Input parameter `vals_b` used by this method.
+
+# Keyword Arguments
+- `kwargs`: Additional keyword arguments forwarded to inner methods.
+
+# Returns
+- `result`: Output of `mahalanobis_gap_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function mahalanobis_gap_distinguishability(
     vals_a::AbstractVector,
     vals_b::AbstractVector;
@@ -1265,6 +1663,28 @@ function mahalanobis_gap_distinguishability(
     end
 end
 
+"""
+    _prepare_vectors_for_mahalanobis(vecs_a, vecs_b)
+
+Internal preprocessing for Mahalanobis-gap calculations.
+
+Pads every input vector to the same length, then trims both datasets to the
+largest non-zero coordinate present in either set. This ensures aligned feature
+dimensions while removing irrelevant trailing zeros.
+
+# Returns
+Tuple `(A, B)` where both entries are `Vector{Vector{Float64}}`.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _prepare_vectors_for_mahalanobis(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -1294,6 +1714,34 @@ function _prepare_vectors_for_mahalanobis(
     return A, B
 end
 
+"""
+    _fit_reference(B, regulator; stabilization_method=:regularization, projection_tolerance=1e-10, verbose=false, rank_tol=1e-12)
+
+Internal helper that fits the reference Gaussian model for Mahalanobis distance.
+
+Computes mean and covariance from reference samples `B` and returns a closure
+that applies a stabilized inverse covariance operator. Two stabilization modes
+are supported:
+- `:regularization`: invert `Sigma + regulator*I` via Cholesky,
+- `:projection`: use eigenvalue filtering and pseudoinverse projection.
+
+# Returns
+`(mu, inv_mul)` where `mu` is the reference mean vector and `inv_mul(d)` applies
+the stabilized inverse covariance action to deviation vector `d`.
+
+# Arguments
+- `B`: Input parameter `B` used by this method.
+- `regulator`: Input parameter `regulator` used by this method.
+
+# Keyword Arguments
+- `stabilization_method`: Keyword option `stabilization_method` controlling this method's behavior.
+- `projection_tolerance`: Keyword option `projection_tolerance` controlling this method's behavior.
+- `verbose`: Boolean toggle controlling output or execution behavior.
+- `rank_tol`: Keyword option `rank_tol` controlling this method's behavior.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _fit_reference(
     B::Vector{Vector{Float64}},
     regulator::Float64;
@@ -1345,6 +1793,28 @@ function _fit_reference(
     end
 end
 
+"""
+    _mahal_sigmas(X, mu, inv_mul)
+
+Internal routine computing Mahalanobis sigma distances for a batch.
+
+For each sample `x` in `X`, returns `sqrt((x-mu)' * Sigma^{-1} * (x-mu))`, with
+the inverse covariance action provided by `inv_mul`.
+
+# Arguments
+- `X`: Input coordinate/data values used in the computation.
+- `mu`: Input parameter `mu` used by this method.
+- `inv_mul`: Input parameter `inv_mul` used by this method.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `_mahal_sigmas` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _mahal_sigmas(
     X::Vector{Vector{Float64}},
     mu::Vector{Float64},
@@ -1359,6 +1829,27 @@ function _mahal_sigmas(
     return s
 end
 
+"""
+    _summary_stat(sigmas, q)
+
+Internal reducer for sigma-distance vectors.
+
+Returns the minimum when `q == 0.0` (smallest-gap criterion), otherwise returns
+the empirical `q`-quantile.
+
+# Arguments
+- `sigmas`: Input parameter `sigmas` used by this method.
+- `q`: Numeric control parameter for fitting/sampling resolution.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `_summary_stat` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _summary_stat(sigmas::Vector{Float64}, q::Float64)
     if q == 0.0
         return minimum(sigmas)
@@ -1366,6 +1857,25 @@ function _summary_stat(sigmas::Vector{Float64}, q::Float64)
     return Statistics.quantile(sigmas, q)
 end
 
+"""
+    _random_split_equal(B, rng)
+
+Internal helper for null resampling that randomly partitions `B` into two equal
+halves of size `length(B) ÷ 2` (dropping one element if odd).
+
+# Arguments
+- `B`: Input parameter `B` used by this method.
+- `rng`: Random number generator used for stochastic steps.
+
+# Keyword Arguments
+- This method has no keyword arguments.
+
+# Returns
+- `result`: Output of `_random_split_equal` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _random_split_equal(B::Vector{Vector{Float64}}, rng)
     n = length(B)
     n2 = n ÷ 2
@@ -1376,6 +1886,43 @@ function _random_split_equal(B::Vector{Vector{Float64}}, rng)
     return B1, B2
 end
 
+"""
+    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
+
+Compute Mahalanobis-gap distinguishability for two vector-valued datasets.
+
+Pipeline:
+1. Preprocess vectors to common dimensional support.
+2. Fit reference model on `vecs_b`.
+3. Compute summary statistic `M_obs` from Mahalanobis sigmas of `vecs_a`.
+4. Build baseline null distribution by random equal splits of the reference set.
+5. Compare `M_obs` against the `(1-alpha)` baseline quantile threshold.
+6. Optionally repeat in reverse direction when `symmetric=true`.
+
+# Returns
+Named tuple
+`(M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Keyword Arguments
+- `regulator`: Keyword option `regulator` controlling this method's behavior.
+- `R`: Numeric control parameter for fitting/sampling resolution.
+- `q`: Numeric control parameter for fitting/sampling resolution.
+- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
+- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+- `verbose`: Boolean toggle controlling output or execution behavior.
+- `rank_tol`: Keyword option `rank_tol` controlling this method's behavior.
+- `stabilization_method`: Keyword option `stabilization_method` controlling this method's behavior.
+- `projection_tolerance`: Keyword option `projection_tolerance` controlling this method's behavior.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function mahalanobis_gap_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}};
@@ -1537,11 +2084,30 @@ function mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::Vector{Vector{Tuple{T,Real}}}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
 
 Bin-pair version: compare every bin to every other bin. Returns a vector of
-`(s1, s2, rel_change, M_obs, distinguishable, threshold, z_emp, M_obs_sym)`.
-"""
+`(s1, s2, rel_change, M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `regulator`: Keyword option `regulator` controlling this method's behavior.
+- `R`: Numeric control parameter for fitting/sampling resolution.
+- `q`: Numeric control parameter for fitting/sampling resolution.
+- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
+- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+
+# Returns
+- `result`: Output of `scalar_bin_mahalanobis_gap_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_mahalanobis_gap_distinguishability(
     data::AbstractVector{<:AbstractVector};
     num_bins::Union{Nothing,Int} = nothing,
@@ -1710,11 +2276,33 @@ function scalar_bin_mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::Vector{Vector{Tuple{T,Real}}}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
 
-Reference version: compare each bin to `ref`. Returns a vector of
-`(s, M_obs, distinguishable, threshold, z_emp, M_obs_sym)`.
-"""
+See `scalar_bin_mahalanobis_gap_distinguishability(data; ...)`.
+
+Reference variant: compares each scalar bin to fixed reference sample `ref`
+instead of comparing all bin pairs.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `ref`: Input parameter `ref` used by this method.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `regulator`: Keyword option `regulator` controlling this method's behavior.
+- `R`: Numeric control parameter for fitting/sampling resolution.
+- `q`: Numeric control parameter for fitting/sampling resolution.
+- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `rng`: Random number generator used for stochastic steps.
+- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
+- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+
+# Returns
+- `result`: Output of `scalar_bin_mahalanobis_gap_distinguishability` as described in the summary above.
+
+# Throws
+- `AssertionError`: Raised when explicit input preconditions fail.
+- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function scalar_bin_mahalanobis_gap_distinguishability(
     data::AbstractVector{<:AbstractVector},
     ref::AbstractVector;
