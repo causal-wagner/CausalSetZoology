@@ -4,8 +4,8 @@
 Relative change between two positive scalars: |a-b|/(a+b).
 
 # Arguments
-- `a`: Input parameter `a` used by this method.
-- `b`: Input parameter `b` used by this method.
+- `a`: First positive scalar.
+- `b`: Second positive scalar.
 
 # Returns
 - `result::Float64`: Output of `relative_change` with type annotation `Float64`.
@@ -23,26 +23,28 @@ end
 """
     bin_scalar_pairs(pairs::Vector{<:Tuple{Any,Real}}, num_bins::Union{Nothing,Int}, bin_edges::Union{Nothing,Vector{<:Real}})
 
-Group `(value, scalar)` pairs into bins. Returns a vector of `(bin_center, values)` pairs.
+Group `(value, scalar)` pairs into bins. Returns a vector of `(bin_key, values)` pairs.
 If `num_bins === nothing`, uses exact scalar values.
 If `bin_edges` is provided, uses those edges; otherwise computes edges from the scalars.
+If `num_bins` equals the number of distinct scalar labels, preserves exact scalar
+labels instead of midpoint bin centers.
 
 # Arguments
-- `pairs`: Input parameter `pairs` used by this method.
+- `pairs`: Input (value, scalar) pairs to group.
 - `num_bins`: Bin selection or binning control parameter.
 - `bin_edges`: Bin selection or binning control parameter.
 
 # Returns
-- `result`: Output of `bin_scalar_pairs` as described in the summary above.
+- `result`: Vector of (bin_center, values) tuples sorted by bin center.
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
 """
 function bin_scalar_pairs(
-    pairs::Vector{Tuple{T,Real}},
+    pairs::AbstractVector{<:Tuple{T,S}},
     num_bins::Union{Nothing,Int} = nothing,
     bin_edges::Union{Nothing,Vector{<:Real}} = nothing,
-) where {T}
+) where {T,S<:Real}
     isempty(pairs) && return Vector{Tuple{Real,Vector{T}}}()
 
     scalars = [s for (_, s) in pairs]
@@ -59,10 +61,13 @@ function bin_scalar_pairs(
             bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
         end
     end
+    use_exact_labels = num_bins !== nothing && length(unique(scalars)) == num_bins
 
     groups = Dict{Real,Vector{T}}()
     for (v, s) in pairs
         key = if num_bins === nothing
+            s
+        elseif use_exact_labels
             s
         else
             idx = searchsortedlast(bin_edges, s)
@@ -78,39 +83,93 @@ function bin_scalar_pairs(
 end
 
 struct _ScalarBinContext{T,S<:Real}
-    pairs::Vector{Tuple{T,Real}}
+    pairs::Vector{Tuple{T,Float64}}
     bins::Vector{Tuple{S,Vector{T}}}
 end
 
-function _normalize_scalar_pairs(pairs_raw::AbstractVector)
+"""
+    _typed_scalar_pairs(pairs_raw)
+
+Validate and materialize `(value, scalar)` pairs in a concrete internal format.
+
+This helper enforces type `Vector{Tuple{T,Float64}}` for pairs, where `T` is 
+inferred from the first value.
+
+# Arguments
+- `pairs_raw`: Raw scalar-paired dataset entries.
+
+# Returns
+- `result`: Concrete typed `(value, Float64)` pairs.
+
+# Throws
+- `ArgumentError`: Raised when an entry is not pair-like (missing first/second slot).
+- `TypeError`: Raised when scalar slot is non-`Real` or value types are inconsistent.
+"""
+function _typed_scalar_pairs(pairs_raw::AbstractVector)
     p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    if !(has_scalar_second || has_scalar_first)
-        throw(TypeError(:distinguishability, "pair scalar slot", Real, p1))
+    v1 = try
+        p1[1]
+    catch
+        throw(ArgumentError("expected pair-like entries `(value, scalar)`"))
     end
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            if !(s isa Real)
-                throw(TypeError(:distinguishability, "scalar", Real, s))
-            end
-            pairs[i] = (v, s)
+    s1 = try
+        p1[2]
+    catch
+        throw(ArgumentError("expected pair-like entries `(value, scalar)`"))
+    end
+    if !(s1 isa Real)
+        throw(TypeError(:distinguishability, "scalar", Real, s1))
+    end
+
+    Tval = typeof(v1)
+    pairs = Vector{Tuple{Tval,Float64}}(undef, length(pairs_raw))
+    pairs[1] = (v1, Float64(s1))
+
+    for i in 2:length(pairs_raw)
+        p = pairs_raw[i]
+        v = try
+            p[1]
+        catch
+            throw(ArgumentError("expected pair-like entries `(value, scalar)`"))
         end
-        return pairs
-    end
-    Tval = typeof(p1[2])
-    pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-    for (i, (s, v)) in enumerate(pairs_raw)
+        s = try
+            p[2]
+        catch
+            throw(ArgumentError("expected pair-like entries `(value, scalar)`"))
+        end
+        if !(v isa Tval)
+            throw(TypeError(:distinguishability, "value", Tval, v))
+        end
         if !(s isa Real)
             throw(TypeError(:distinguishability, "scalar", Real, s))
         end
-        pairs[i] = (v, s)
+        pairs[i] = (v, Float64(s))
     end
     return pairs
 end
 
+"""
+    _prepare_scalar_bin_context(data, caller; num_bins=nothing, ref=nothing)
+
+Validate scalar-paired input and build the shared scalar-bin context used by
+scalar-bin distinguishability routines.
+
+# Arguments
+- `data`: Input dataset(s) consumed by this method.
+- `caller`: Caller name for validation error messages.
+
+# Keyword Arguments
+- `num_bins`: Bin selection or binning control parameter.
+- `ref`: Optional reference dataset used only for validation checks.
+
+# Returns
+- `result`: Internal `_ScalarBinContext` containing normalized pairs and binned groups.
+
+# Throws
+- `DimensionMismatch`: Raised when the top-level dataset count is not one.
+- `ArgumentError`: Raised for empty dataset or empty reference set.
+- `DomainError`: Raised when `num_bins` is provided but invalid.
+"""
 function _prepare_scalar_bin_context(
     data::AbstractVector{<:AbstractVector},
     caller::AbstractString;
@@ -127,8 +186,11 @@ function _prepare_scalar_bin_context(
     if ref !== nothing && isempty(ref)
         throw(ArgumentError("reference set must be non-empty"))
     end
+    if num_bins !== nothing && !(num_bins >= 1)
+        throw(DomainError(num_bins, "num_bins must be >= 1"))
+    end
 
-    pairs = _normalize_scalar_pairs(pairs_raw)
+    pairs = _typed_scalar_pairs(pairs_raw)
     scalars = [s for (_, s) in pairs]
     bin_edges = nothing
     if num_bins !== nothing
@@ -143,6 +205,18 @@ function _prepare_scalar_bin_context(
     return _ScalarBinContext(pairs, bins)
 end
 
+"""
+    _map_scalar_bin_pairs(compute, bins)
+
+Apply `compute(s1, vals1, s2, vals2)` to every unordered pair of scalar bins.
+
+# Arguments
+- `compute`: Mapping function for one bin pair.
+- `bins`: Scalar-bin collection.
+
+# Returns
+- `result`: Vector of outputs returned by `compute` for all bin pairs.
+"""
 function _map_scalar_bin_pairs(compute::F, bins::AbstractVector) where {F<:Function}
     out = Vector{NamedTuple}()
     for i in 1:length(bins)
@@ -155,20 +229,24 @@ function _map_scalar_bin_pairs(compute::F, bins::AbstractVector) where {F<:Funct
     return out
 end
 
-function _map_scalar_bin_pairs(bins::AbstractVector, compute::F) where {F<:Function}
-    return _map_scalar_bin_pairs(compute, bins)
-end
+"""
+    _map_scalar_bin_reference(compute, bins)
 
+Apply `compute(s, vals)` independently to each scalar bin.
+
+# Arguments
+- `compute`: Mapping function for one bin.
+- `bins`: Scalar-bin collection.
+
+# Returns
+- `result`: Vector of outputs returned by `compute` for each bin.
+"""
 function _map_scalar_bin_reference(compute::F, bins::AbstractVector) where {F<:Function}
     out = Vector{NamedTuple}()
     for (s, vals) in bins
         push!(out, compute(s, vals))
     end
     return out
-end
-
-function _map_scalar_bin_reference(bins::AbstractVector, compute::F) where {F<:Function}
-    return _map_scalar_bin_reference(compute, bins)
 end
 
 """
@@ -187,11 +265,12 @@ Returns a vector of `(s1, s2, rel_change, D)`.
 - `num_bins`: Bin selection or binning control parameter.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+- `result`: Vector of named tuples with distinguishability metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability(
@@ -216,18 +295,19 @@ adds uncertainty output: each result has fields
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+- `result`: Vector of named tuples with distinguishability metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability(
@@ -253,17 +333,18 @@ returns `(scalar, D)` entries.
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `ref`: Input parameter `ref` used by this method.
+- `ref`: Reference sample used for bin-wise comparison.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+- `result`: Vector of named tuples with distinguishability metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability(
@@ -293,19 +374,20 @@ This overload uses Monte Carlo distinguishability with `num_draws` and returns
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `ref`: Input parameter `ref` used by this method.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `ref`: Reference sample used for bin-wise comparison.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
+- `result`: Vector of named tuples with distinguishability metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability(
@@ -338,15 +420,16 @@ Permutation-test version of `scalar_bin_distinguishability`. Returns a vector of
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+- `result`: Vector of named tuples with permutation-test metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability_permutation(
@@ -372,19 +455,20 @@ permutation test and returns the same fields.
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+- `result`: Vector of named tuples with permutation-test metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability_permutation(
@@ -411,19 +495,20 @@ This overload compares each scalar bin to reference sample `ref` and returns
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `ref`: Input parameter `ref` used by this method.
+- `ref`: Reference sample used for bin-wise comparison.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+- `result`: Vector of named tuples with permutation-test metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability_permutation(
@@ -455,20 +540,21 @@ per-bin fields.
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `ref`: Input parameter `ref` used by this method.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `ref`: Reference sample used for bin-wise comparison.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
+- `result`: Vector of named tuples with permutation-test metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_distinguishability_permutation(
@@ -498,8 +584,8 @@ Compute the Hellinger distance between two probability vectors.
 Assumes `p` and `q` are nonnegative and have equal length.
 
 # Arguments
-- `p`: Input parameter `p` used by this method.
-- `q`: Numeric control parameter for fitting/sampling resolution.
+- `p`: First probability vector.
+- `q`: Second probability vector.
 
 # Returns
 - `result::Float64`: Output of `hellinger_distance` with type annotation `Float64`.
@@ -518,6 +604,21 @@ function hellinger_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real}
     return sqrt(s / 2)
 end
 
+"""
+    _prepare_vectors_for_distance(vecs_a, vecs_b)
+
+Internal preprocessing for Hellinger-based distance computations.
+
+Pads all vectors in both datasets to a common length, then trims both datasets
+to the maximal nonzero coordinate observed across either set.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Returns
+- `result`: Tuple `(A, B)` of aligned `Vector{Vector{Float64}}` inputs ready for distance computation.
+"""
 function _prepare_vectors_for_distance(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -546,6 +647,17 @@ function _prepare_vectors_for_distance(
     return A, B
 end
 
+"""
+    _distance_matrix_exact(vecs)
+
+Build the exact pairwise Hellinger distance matrix for a vector dataset.
+
+# Arguments
+- `vecs`: Vector-valued input data.
+
+# Returns
+- `result`: Dense symmetric matrix `D` with `D[i, j] = hellinger_distance(vecs[i], vecs[j])`.
+"""
 function _distance_matrix_exact(vecs::Vector{<:AbstractVector{<:Real}})
     n = length(vecs)
     D = Matrix{Float64}(undef, n, n)
@@ -577,7 +689,7 @@ and then trimmed to the maximal nonzero bin of the union.
 - `hists_b`: Histogram input data.
 
 # Returns
-- `result`: Output of `histogram_distinguishability` as described in the summary above.
+- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -615,13 +727,13 @@ This overload uses Monte Carlo estimation with `num_draws` and returns
 # Arguments
 - `hists_a`: Histogram input data.
 - `hists_b`: Histogram input data.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `histogram_distinguishability` as described in the summary above.
+- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -662,7 +774,7 @@ This is the exact vector-input implementation (no dict normalization stage).
 - `vecs_b`: Vector-valued input data.
 
 # Returns
-- `result`: Output of `histogram_distinguishability` as described in the summary above.
+- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -712,13 +824,13 @@ Monte Carlo variant using `num_draws`; returns `(D, std)`.
 # Arguments
 - `vecs_a`: Vector-valued input data.
 - `vecs_b`: Vector-valued input data.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `histogram_distinguishability` as described in the summary above.
+- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
@@ -791,11 +903,11 @@ distinguishability and `z_coll` is the collider-style Z derived from `p_value`.
 - `hists_b`: Histogram input data.
 
 # Keyword Arguments
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+- `result`: Named tuple containing `D_obs`, `p_value`, `z_emp`, `z_coll`, and `std_Ts`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -835,14 +947,14 @@ returns the same fields.
 # Arguments
 - `hists_a`: Histogram input data.
 - `hists_b`: Histogram input data.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+- `result`: Named tuple containing `D_obs`, `p_value`, `z_emp`, `z_coll`, and `std_Ts`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -884,11 +996,11 @@ This is the vector-input implementation (no dict normalization stage).
 - `vecs_b`: Vector-valued input data.
 
 # Keyword Arguments
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+- `result`: Named tuple containing `D_obs`, `p_value`, `z_emp`, `z_coll`, and `std_Ts`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -1010,14 +1122,14 @@ permutations.
 # Arguments
 - `vecs_a`: Vector-valued input data.
 - `vecs_b`: Vector-valued input data.
-- `num_draws`: Numeric control parameter for fitting/sampling resolution.
+- `num_draws`: Number of Monte Carlo draws.
 
 # Keyword Arguments
-- `n_perm`: Numeric control parameter for fitting/sampling resolution.
+- `n_perm`: Number of permutations.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
+- `result`: Named tuple containing `D_obs`, `p_value`, `z_emp`, `z_coll`, and `std_Ts`.
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
@@ -1125,22 +1237,23 @@ This overload accepts histogram dictionaries, normalizes/densifies them, and
 delegates to the vector implementation.
 
 # Arguments
-- `A`: Input parameter `A` used by this method.
-- `B`: Input parameter `B` used by this method.
+- `A`: First histogram sample set.
+- `B`: Second histogram sample set.
 
 # Keyword Arguments
-- `regulator`: Keyword option `regulator` controlling this method's behavior.
-- `R`: Numeric control parameter for fitting/sampling resolution.
-- `q`: Numeric control parameter for fitting/sampling resolution.
-- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `R`: Number of baseline resampling runs.
+- `q`: Quantile parameter in [0, 1].
+- `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
-- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
-- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+- `symmetric`: If true, also evaluate the reverse direction.
+- `num_workers`: Number of distributed workers to use (>= 1).
 
 # Returns
-- `result`: Output of `mahalanobis_gap_distinguishability` as described in the summary above.
+- `result`: Named tuple with Mahalanobis-gap statistic, threshold comparison, and optional symmetric outputs.
 
 # Throws
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function mahalanobis_gap_distinguishability(
@@ -1199,16 +1312,18 @@ Dispatch helper that forwards homogeneous vectors-of-dicts or
 vectors-of-vectors to the corresponding concrete method.
 
 # Arguments
-- `vals_a`: Input parameter `vals_a` used by this method.
-- `vals_b`: Input parameter `vals_b` used by this method.
+- `vals_a`: First input sample collection.
+- `vals_b`: Second input sample collection.
 
 # Keyword Arguments
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
 
 # Returns
-- `result`: Output of `mahalanobis_gap_distinguishability` as described in the summary above.
+- `result`: Named tuple with Mahalanobis-gap statistic, threshold comparison, and optional symmetric outputs.
 
 # Throws
+- `TypeError`: Raised when vector-valued inputs contain non-`Real` elements.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function mahalanobis_gap_distinguishability(
@@ -1248,6 +1363,16 @@ function mahalanobis_gap_distinguishability(
             projection_tolerance = projection_tolerance,
         )
     elseif all(v -> v isa AbstractVector, vals_a) && all(v -> v isa AbstractVector, vals_b)
+        bad_a = findfirst(v -> any(x -> !(x isa Real), v), vals_a)
+        if bad_a !== nothing
+            bad_val = first(filter(x -> !(x isa Real), vals_a[bad_a]))
+            throw(TypeError(:mahalanobis_gap_distinguishability, "vector element", Real, bad_val))
+        end
+        bad_b = findfirst(v -> any(x -> !(x isa Real), v), vals_b)
+        if bad_b !== nothing
+            bad_val = first(filter(x -> !(x isa Real), vals_b[bad_b]))
+            throw(TypeError(:mahalanobis_gap_distinguishability, "vector element", Real, bad_val))
+        end
         vecs_a = [Vector{Float64}(v) for v in vals_a]
         vecs_b = [Vector{Float64}(v) for v in vals_b]
         return mahalanobis_gap_distinguishability(
@@ -1333,14 +1458,14 @@ are supported:
 the stabilized inverse covariance action to deviation vector `d`.
 
 # Arguments
-- `B`: Input parameter `B` used by this method.
-- `regulator`: Input parameter `regulator` used by this method.
+- `B`: Reference sample vectors used to fit mean and covariance.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
 
 # Keyword Arguments
-- `stabilization_method`: Keyword option `stabilization_method` controlling this method's behavior.
-- `projection_tolerance`: Keyword option `projection_tolerance` controlling this method's behavior.
-- `verbose`: Boolean toggle controlling output or execution behavior.
-- `rank_tol`: Keyword option `rank_tol` controlling this method's behavior.
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
 
 # Throws
 - `ArgumentError`: Raised when `stabilization_method` is not one of `:regularization` or `:projection`.
@@ -1407,12 +1532,12 @@ For each sample `x` in `X`, returns `sqrt((x-mu)' * Sigma^{-1} * (x-mu))`, with
 the inverse covariance action provided by `inv_mul`.
 
 # Arguments
-- `X`: Input coordinate/data values used in the computation.
-- `mu`: Input parameter `mu` used by this method.
-- `inv_mul`: Input parameter `inv_mul` used by this method.
+- `X`: Samples for which Mahalanobis sigmas are computed.
+- `mu`: Reference mean vector.
+- `inv_mul`: Function applying the stabilized inverse covariance.
 
 # Returns
-- `result`: Output of `_mahal_sigmas` as described in the summary above.
+- `result`: Vector of Mahalanobis sigma distances, one per input sample.
 
 """
 function _mahal_sigmas(
@@ -1438,11 +1563,11 @@ Returns the minimum when `q == 0.0` (smallest-gap criterion), otherwise returns
 the empirical `q`-quantile.
 
 # Arguments
-- `sigmas`: Input parameter `sigmas` used by this method.
-- `q`: Numeric control parameter for fitting/sampling resolution.
+- `sigmas`: Sigma-distance values to summarize.
+- `q`: Quantile parameter in [0, 1].
 
 # Returns
-- `result`: Output of `_summary_stat` as described in the summary above.
+- `result`: Scalar summary statistic (minimum for q==0, maximum for q==1, otherwise q-quantile).
 
 """
 function _summary_stat(sigmas::Vector{Float64}, q::Float64)
@@ -1454,6 +1579,28 @@ function _summary_stat(sigmas::Vector{Float64}, q::Float64)
     return Statistics.quantile(sigmas, q)
 end
 
+"""
+    _mahal_resample_once(seed, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol)
+
+Run one null-resampling draw for Mahalanobis-gap statistics.
+
+This helper uses `seed` to deterministically split `X` into equal halves,
+fits the reference model on one half, evaluates Mahalanobis sigmas on the
+other half, and reduces them with `_summary_stat(..., q)`.
+
+# Arguments
+- `seed`: Seed for the resampling RNG.
+- `X`: Vector-valued input data.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `q`: Quantile parameter in [0, 1].
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff for projection stabilization.
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+
+# Returns
+- `result`: Single resampled summary-statistic value.
+"""
 function _mahal_resample_once(
     seed::UInt64,
     X::Vector{Vector{Float64}},
@@ -1479,17 +1626,137 @@ function _mahal_resample_once(
 end
 
 """
+    _mahal_resample_many(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol)
+
+Compute Mahalanobis null-resampling statistics for multiple seeds in serial.
+
+# Arguments
+- `seeds`: Seed values for independent resampling draws.
+- `X`: Vector-valued input data.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `q`: Quantile parameter in [0, 1].
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff for projection stabilization.
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+
+# Returns
+- `result`: Vector of summary statistics, one value per seed.
+"""
+function _mahal_resample_many(
+    seeds::Vector{UInt64},
+    X::Vector{Vector{Float64}},
+    regulator::Float64,
+    q::Float64,
+    stabilization_method::Symbol,
+    projection_tolerance::Float64,
+    verbose::Bool,
+    rank_tol::Float64,
+)
+    out = Vector{Float64}(undef, length(seeds))
+    @inbounds for r in eachindex(seeds)
+        out[r] = _mahal_resample_once(
+            seeds[r],
+            X,
+            regulator,
+            q,
+            stabilization_method,
+            projection_tolerance,
+            verbose,
+            rank_tol,
+        )
+    end
+    return out
+end
+
+"""
+    _mahal_resample_chunk(args)
+
+Distributed helper that unpacks one resampling chunk payload and delegates to
+`_mahal_resample_many`.
+
+# Arguments
+- `args`: Tuple payload `(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol)`.
+
+# Returns
+- `result`: Vector of summary statistics for the provided seed chunk.
+"""
+function _mahal_resample_chunk(args)
+    seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol = args
+    return _mahal_resample_many(
+        seeds,
+        X,
+        regulator,
+        q,
+        stabilization_method,
+        projection_tolerance,
+        verbose,
+        rank_tol,
+    )
+end
+
+"""
+    _mahal_resample_many_distributed(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol, workers_to_use)
+
+Compute Mahalanobis null-resampling statistics in parallel across distributed workers.
+
+The seed vector is split into chunks, each chunk is processed by
+`_mahal_resample_chunk`, and results are stitched back in original seed order.
+
+# Arguments
+- `seeds`: Seed values for independent resampling draws.
+- `X`: Vector-valued input data.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `q`: Quantile parameter in [0, 1].
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff for projection stabilization.
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+- `workers_to_use`: Worker IDs used for distributed computation.
+
+# Returns
+- `result`: Vector of summary statistics, one value per input seed.
+"""
+function _mahal_resample_many_distributed(
+    seeds::Vector{UInt64},
+    X::Vector{Vector{Float64}},
+    regulator::Float64,
+    q::Float64,
+    stabilization_method::Symbol,
+    projection_tolerance::Float64,
+    verbose::Bool,
+    rank_tol::Float64,
+    workers_to_use::Vector{Int},
+)
+    pool = Distributed.CachingPool(workers_to_use)
+    chunk_count = max(1, min(length(workers_to_use), length(seeds)))
+    chunks = [seeds[r] for r in Iterators.partition(eachindex(seeds), cld(length(seeds), chunk_count))]
+    chunk_args = [
+        (chunk, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol) for
+        chunk in chunks
+    ]
+    pieces = Distributed.pmap(_mahal_resample_chunk, pool, chunk_args)
+    out = Vector{Float64}(undef, length(seeds))
+    t = 1
+    @inbounds for p in pieces
+        out[t:(t + length(p) - 1)] = p
+        t += length(p)
+    end
+    return out
+end
+
+"""
     _random_split_equal(B, rng)
 
 Internal helper for null resampling that randomly partitions `B` into two equal
 halves of size `length(B) ÷ 2` (dropping one element if odd).
 
 # Arguments
-- `B`: Input parameter `B` used by this method.
+- `B`: Sample set to split into two equal random halves.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Output of `_random_split_equal` as described in the summary above.
+- `result`: Tuple of equally sized random splits (B1, B2).
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
@@ -1528,17 +1795,17 @@ Named tuple
 - `vecs_b`: Vector-valued input data.
 
 # Keyword Arguments
-- `regulator`: Keyword option `regulator` controlling this method's behavior.
-- `R`: Numeric control parameter for fitting/sampling resolution.
-- `q`: Numeric control parameter for fitting/sampling resolution.
-- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `R`: Number of baseline resampling runs.
+- `q`: Quantile parameter in [0, 1].
+- `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
-- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
-- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
-- `verbose`: Boolean toggle controlling output or execution behavior.
-- `rank_tol`: Keyword option `rank_tol` controlling this method's behavior.
-- `stabilization_method`: Keyword option `stabilization_method` controlling this method's behavior.
-- `projection_tolerance`: Keyword option `projection_tolerance` controlling this method's behavior.
+- `symmetric`: If true, also evaluate the reverse direction.
+- `num_workers`: Number of distributed workers to use (>= 1).
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
@@ -1629,6 +1896,16 @@ function mahalanobis_gap_distinguishability(
                 @info "Using Distributed workers for mahalanobis resampling" workers = length(workers_to_use)
                 for w in workers_to_use
                     Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
+                    Distributed.remotecall_wait(
+                        Core.eval,
+                        w,
+                        Main,
+                        :(
+                            if !isdefined(CausalSetZoology, :_mahal_resample_chunk)
+                                Base.include(CausalSetZoology, $(joinpath(dirname(pathof(CausalSetZoology)), "data_analysis", "distinguishability.jl")))
+                            end
+                        ),
+                    )
                 end
                 use_distributed = true
             end
@@ -1640,37 +1917,28 @@ function mahalanobis_gap_distinguishability(
 
     try
         if use_distributed
-            pool = Distributed.CachingPool(workers_to_use)
-            exprs = [
-                quote
-                    rng_r = CausalSetZoology.Random.Xoshiro($(seeds[r]))
-                    X1, X2 = CausalSetZoology._random_split_equal($(B), rng_r)
-                    mu2, inv2 = CausalSetZoology._fit_reference(
-                        X2,
-                        $(regulator);
-                        stabilization_method = $(QuoteNode(stabilization_method)),
-                        projection_tolerance = $(projection_tolerance),
-                        verbose = $(verbose),
-                        rank_tol = $(rank_tol),
-                    )
-                    sig1 = CausalSetZoology._mahal_sigmas(X1, mu2, inv2)
-                    CausalSetZoology._summary_stat(sig1, $(q))
-                end for r in eachindex(seeds)
-            ]
-            S_base .= Distributed.pmap(Core.eval, pool, fill(Main, length(exprs)), exprs)
+            S_base .= _mahal_resample_many_distributed(
+                seeds,
+                B,
+                regulator,
+                q,
+                stabilization_method,
+                projection_tolerance,
+                verbose,
+                rank_tol,
+                workers_to_use,
+            )
         else
-            @inbounds for r in 1:R
-                S_base[r] = _mahal_resample_once(
-                    seeds[r],
-                    B,
-                    regulator,
-                    q,
-                    stabilization_method,
-                    projection_tolerance,
-                    verbose,
-                    rank_tol,
-                )
-            end
+            S_base .= _mahal_resample_many(
+                seeds,
+                B,
+                regulator,
+                q,
+                stabilization_method,
+                projection_tolerance,
+                verbose,
+                rank_tol,
+            )
         end
 
         threshold = _summary_stat(S_base, 1 - alpha)
@@ -1678,37 +1946,28 @@ function mahalanobis_gap_distinguishability(
             S_base_sym = Vector{Float64}(undef, R)
             seeds_sym = rand(rng, UInt64, R)
             if use_distributed
-                pool = Distributed.CachingPool(workers_to_use)
-                exprs_sym = [
-                    quote
-                        rng_r = CausalSetZoology.Random.Xoshiro($(seeds_sym[r]))
-                        X1, X2 = CausalSetZoology._random_split_equal($(A), rng_r)
-                        mu2, inv2 = CausalSetZoology._fit_reference(
-                            X2,
-                            $(regulator);
-                            stabilization_method = $(QuoteNode(stabilization_method)),
-                            projection_tolerance = $(projection_tolerance),
-                            verbose = $(verbose),
-                            rank_tol = $(rank_tol),
-                        )
-                        sig1 = CausalSetZoology._mahal_sigmas(X1, mu2, inv2)
-                        CausalSetZoology._summary_stat(sig1, $(q))
-                    end for r in eachindex(seeds_sym)
-                ]
-                S_base_sym .= Distributed.pmap(Core.eval, pool, fill(Main, length(exprs_sym)), exprs_sym)
+                S_base_sym .= _mahal_resample_many_distributed(
+                    seeds_sym,
+                    A,
+                    regulator,
+                    q,
+                    stabilization_method,
+                    projection_tolerance,
+                    verbose,
+                    rank_tol,
+                    workers_to_use,
+                )
             else
-                @inbounds for r in 1:R
-                    S_base_sym[r] = _mahal_resample_once(
-                        seeds_sym[r],
-                        A,
-                        regulator,
-                        q,
-                        stabilization_method,
-                        projection_tolerance,
-                        verbose,
-                        rank_tol,
-                    )
-                end
+                S_base_sym .= _mahal_resample_many(
+                    seeds_sym,
+                    A,
+                    regulator,
+                    q,
+                    stabilization_method,
+                    projection_tolerance,
+                    verbose,
+                    rank_tol,
+                )
             end
             threshold_sym = _summary_stat(S_base_sym, 1 - alpha)
         end
@@ -1734,13 +1993,7 @@ function mahalanobis_gap_distinguishability(
         )
     finally
         if !isempty(added_workers)
-            try
-                @info "Removing Distributed workers after mahalanobis resampling" removing = length(added_workers)
-                Distributed.rmprocs(added_workers...)
-                @info "Distributed workers removed" removed = length(added_workers) remaining = Distributed.nworkers()
-            catch err
-                @info "Failed to remove some Distributed workers" removing = length(added_workers) error = string(err)
-            end
+            @info "Keeping Distributed workers alive for reuse after mahalanobis resampling" kept = length(added_workers) total = Distributed.nworkers()
         end
     end
 end
@@ -1756,20 +2009,21 @@ Bin-pair version: compare every bin to every other bin. Returns a vector of
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
-- `regulator`: Keyword option `regulator` controlling this method's behavior.
-- `R`: Numeric control parameter for fitting/sampling resolution.
-- `q`: Numeric control parameter for fitting/sampling resolution.
-- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `R`: Number of baseline resampling runs.
+- `q`: Quantile parameter in [0, 1].
+- `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
-- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
-- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+- `symmetric`: If true, also evaluate the reverse direction.
+- `num_workers`: Number of distributed workers to use (>= 1).
 
 # Returns
-- `result`: Output of `scalar_bin_mahalanobis_gap_distinguishability` as described in the summary above.
+- `result`: Vector of named tuples with Mahalanobis-gap metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_mahalanobis_gap_distinguishability(
@@ -1834,6 +2088,16 @@ function scalar_bin_mahalanobis_gap_distinguishability(
                 @info "Using Distributed workers for scalar-bin pair resampling" workers = length(workers_to_use)
                 for w in workers_to_use
                     Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
+                    Distributed.remotecall_wait(
+                        Core.eval,
+                        w,
+                        Main,
+                        :(
+                            if !isdefined(CausalSetZoology, :_mahal_resample_chunk)
+                                Base.include(CausalSetZoology, $(joinpath(dirname(pathof(CausalSetZoology)), "data_analysis", "distinguishability.jl")))
+                            end
+                        ),
+                    )
                 end
                 use_distributed = true
             end
@@ -1912,24 +2176,25 @@ instead of comparing all bin pairs.
 
 # Arguments
 - `data`: Input dataset(s) consumed by this method.
-- `ref`: Input parameter `ref` used by this method.
+- `ref`: Reference sample used for bin-wise comparison.
 
 # Keyword Arguments
 - `num_bins`: Bin selection or binning control parameter.
-- `regulator`: Keyword option `regulator` controlling this method's behavior.
-- `R`: Numeric control parameter for fitting/sampling resolution.
-- `q`: Numeric control parameter for fitting/sampling resolution.
-- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `R`: Number of baseline resampling runs.
+- `q`: Quantile parameter in [0, 1].
+- `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
-- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
-- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
+- `symmetric`: If true, also evaluate the reverse direction.
+- `num_workers`: Number of distributed workers to use (>= 1).
 
 # Returns
-- `result`: Output of `scalar_bin_mahalanobis_gap_distinguishability` as described in the summary above.
+- `result`: Vector of named tuples with Mahalanobis-gap metrics per bin pair or per bin vs. reference.
 
 # Throws
 - `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
 - `TypeError`: Raised when value types do not match required contracts.
+- `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function scalar_bin_mahalanobis_gap_distinguishability(
@@ -1987,6 +2252,16 @@ function scalar_bin_mahalanobis_gap_distinguishability(
                 @info "Using Distributed workers for scalar-bin reference resampling" workers = length(workers_to_use)
                 for w in workers_to_use
                     Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
+                    Distributed.remotecall_wait(
+                        Core.eval,
+                        w,
+                        Main,
+                        :(
+                            if !isdefined(CausalSetZoology, :_mahal_resample_chunk)
+                                Base.include(CausalSetZoology, $(joinpath(dirname(pathof(CausalSetZoology)), "data_analysis", "distinguishability.jl")))
+                            end
+                        ),
+                    )
                 end
                 use_distributed = true
             end
