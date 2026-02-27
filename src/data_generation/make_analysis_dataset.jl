@@ -294,7 +294,9 @@ end
 
         elseif kind == "minkowski_quasicrystal"
             if big_crystal === nothing
-                @assert big_crystal_path !== nothing
+                if big_crystal_path === nothing
+                    throw(ArgumentError("big_crystal_path must be provided for kind = \"minkowski_quasicrystal\""))
+                end
                 big_crystal = _get_big_crystal(big_crystal_path)
             end
             ϵ = sqrt(cset_size_i / length(big_crystal[1]))

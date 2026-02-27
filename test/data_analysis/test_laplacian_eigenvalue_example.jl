@@ -32,7 +32,7 @@ end
     f2 = CausalSetZoology.plot_subgraph_colored_node_link(A, A, A, 2; apply_theme = false, fig_size = (900, 300))
     @test f2 isa Figure
 
-    @test_throws AssertionError CausalSetZoology.make_undirected_adjacency_from_subgraphs(4, 2, [1 0; 0 0])
-    @test_throws AssertionError CausalSetZoology.normalized_laplacian_eigenvalues(BitMatrix([0 1; 0 0]))
-    @test_throws AssertionError CausalSetZoology.normalized_laplacian_eigenvalues(A; zero_tol = -1.0)
+    @test_throws ArgumentError CausalSetZoology.make_undirected_adjacency_from_subgraphs(4, 2, [1 0; 0 0])
+    @test_throws ArgumentError CausalSetZoology.normalized_laplacian_eigenvalues(BitMatrix([0 1; 0 0]))
+    @test_throws ArgumentError CausalSetZoology.normalized_laplacian_eigenvalues(A; zero_tol = -1.0)
 end

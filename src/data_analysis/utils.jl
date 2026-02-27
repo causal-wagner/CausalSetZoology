@@ -15,7 +15,7 @@ The function opens `path` as a JLD2 file and returns `f["meta/config"]["cset_siz
 - This method has no keyword arguments.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function get_size(path::AbstractString)::Int
     return JLD2.jldopen(path, "r") do f
@@ -52,7 +52,7 @@ Each histogram is scaled by a denominator chosen from `normalization`.
 - `normalization`: Keyword option `normalization` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function normalize_hists(
     hists::AbstractVector{<:AbstractVector{<:AbstractDict}};
@@ -71,7 +71,9 @@ function normalize_hists(
                 denom = normalization
             end
 
-            @assert denom != 0.0
+            if !(denom != 0.0)
+                throw(ArgumentError("assertion failed: denom != 0.0"))
+            end
             out_hist = Dict{Int,Float64}()
             for (k, v) in hist
                 out_hist[k] = v / denom
@@ -109,7 +111,7 @@ See the main method `normalize_hists(hists; normalization)` for core behavior.
 - `result::Vector{Vector{Tuple{Dict{Int,Float64},Real}}}`: Output of `normalize_hists` with type annotation `Vector{Vector{Tuple{Dict{Int,Float64},Real}}}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function normalize_hists(
     hists::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractDict,<:Real}}};
@@ -119,7 +121,9 @@ function normalize_hists(
     isempty(hists) && return Vector{Vector{Tuple{Dict{Int,Float64},Real}}}()
 
     if num_bins !== nothing
-        @assert num_bins ≥ 1 "num_bins must be >= 1"
+        if !(num_bins ≥ 1)
+            throw(ArgumentError("num_bins must be >= 1"))
+        end
     end
 
     # build bin edges from all scalars if binning
@@ -155,7 +159,9 @@ function normalize_hists(
             else
                 denom = normalization
             end
-            @assert denom != 0.0
+            if !(denom != 0.0)
+                throw(ArgumentError("assertion failed: denom != 0.0"))
+            end
             out_hist = Dict{Int,Float64}()
             for (k, v) in d
                 out_hist[k] = v / denom
@@ -194,7 +200,7 @@ computed column-wise.
 - This method has no keyword arguments.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function average_histogram_with_std(
     hists::AbstractVector{<:AbstractDict},
@@ -232,23 +238,30 @@ Supports:
 - This method has no keyword arguments.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function average_vectors_with_std(
     vs::AbstractVector,
 )::Tuple{Vector{Float64},Vector{Float64}}
     isempty(vs) && return Float64[], Float64[]
-    @assert all(v -> v isa AbstractVector, vs) "all entries must be vectors"
-
+    if !(all(v -> v isa AbstractVector, vs))
+        throw(ArgumentError("all entries must be vectors"))
+    end
     # Detect nested vectors: Vector{Vector{Float64}} per sample
     if vs[1] isa AbstractVector && !isempty(vs[1]) && vs[1][1] isa AbstractVector
         nested = vs
-        @assert all(v -> v isa AbstractVector, nested) "nested entries must be vectors"
+        if !(all(v -> v isa AbstractVector, nested))
+            throw(ArgumentError("nested entries must be vectors"))
+        end
         n = length(nested[1][1])
         for v in nested
-            @assert all(w -> w isa AbstractVector, v) "nested entries must be vectors"
+            if !(all(w -> w isa AbstractVector, v))
+                throw(ArgumentError("nested entries must be vectors"))
+            end
             for w in v
-                @assert length(w) == n "all nested vectors must have the same length"
+                if !(length(w) == n)
+                    throw(ArgumentError("all nested vectors must have the same length"))
+                end
             end
         end
         # flatten nested samples by concatenation, then compute mean/std per index
@@ -263,7 +276,9 @@ function average_vectors_with_std(
 
     n = length(vs[1])
     for v in vs
-        @assert length(v) == n "all vectors must have the same length"
+        if !(length(v) == n)
+            throw(ArgumentError("all vectors must have the same length"))
+        end
     end
     X = Matrix{Float64}(undef, length(vs), n)
     for (i, v) in enumerate(vs)
@@ -300,7 +315,7 @@ See the main method `average_vectors_with_std(vs)` for the mean/std computation.
 - `result::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}`: Output of `average_vectors_with_std` with type annotation `Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function average_vectors_with_std(
     vs::AbstractVector{<:Tuple{<:AbstractVector,<:Real}};
@@ -309,7 +324,9 @@ function average_vectors_with_std(
     isempty(vs) && return Tuple{Real,Vector{Float64},Vector{Float64}}[]
 
     if num_bins !== nothing
-        @assert num_bins ≥ 1 "num_bins must be >= 1"
+        if !(num_bins ≥ 1)
+            throw(ArgumentError("num_bins must be >= 1"))
+        end
     end
 
     bin_edges = nothing
@@ -369,7 +386,7 @@ See the main method `average_histogram_with_std(hists)` for per-bin statistics.
 - `result::Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}`: Output of `average_histogram_with_std` with type annotation `Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function average_histogram_with_std(
     hists::AbstractVector{<:Tuple{<:AbstractDict,<:Real}};
@@ -378,7 +395,9 @@ function average_histogram_with_std(
     isempty(hists) && return Tuple{Real,Vector{Float64},Vector{Float64}}[]
 
     if num_bins !== nothing
-        @assert num_bins ≥ 1 "num_bins must be >= 1"
+        if !(num_bins ≥ 1)
+            throw(ArgumentError("num_bins must be >= 1"))
+        end
     end
 
     # optional binning of scalar values
@@ -395,7 +414,9 @@ function average_histogram_with_std(
 
     groups = Dict{Real,Vector{Dict}}()
     for (h, v) in hists
-        @assert v isa Real
+        if !(v isa Real)
+            throw(ArgumentError("assertion failed: v isa Real"))
+        end
         if bin_edges !== nothing
             # assign to evenly spaced bin center
             idx = searchsortedlast(bin_edges, v)
@@ -437,7 +458,7 @@ unchanged.
 - This method has no keyword arguments.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function replace_zeros(σ::AbstractVector{<:Real}; ϵ::Real=1e-3)
     nz = σ[σ .> 0]
@@ -470,7 +491,7 @@ Keys `k <= 1` are dropped.
 - This method has no keyword arguments.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function abundance_shift(hist::Dict{Int,Int};)
     out = Dict{Int,Int}()

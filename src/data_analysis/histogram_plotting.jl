@@ -53,7 +53,7 @@ defined on the same binning.
 - `result::CairoMakie.Figure`: Output of `plot_mean_histograms_with_std` with type annotation `CairoMakie.Figure`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_mean_histograms_with_std(
     data::Vector{Tuple{Vector{Float64},Vector{Float64}}};
@@ -79,10 +79,14 @@ function plot_mean_histograms_with_std(
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
 
     if hist_labels !== nothing
-        @assert length(hist_labels) == length(data) "hist_labels and data must have same length"
+        if !(length(hist_labels) == length(data))
+            throw(ArgumentError("hist_labels and data must have same length"))
+        end
     end
     if plot_types !== nothing
-        @assert length(plot_types) == length(data) "plot_types and data must have same length"
+        if !(length(plot_types) == length(data))
+            throw(ArgumentError("plot_types and data must have same length"))
+        end
     end
 
     figsize = apply_paper_theme!(
@@ -122,8 +126,9 @@ function plot_mean_histograms_with_std(
     end
 
     for (i, (mean, std)) in enumerate(data)
-        @assert length(mean) == length(std)
-
+        if !(length(mean) == length(std))
+            throw(ArgumentError("assertion failed: length(mean) == length(std)"))
+        end
         colors_obs = CairoMakie.theme(:palette).color
         colors = colors_obs isa Observables.Observable ? Observables.to_value(colors_obs) : colors_obs
         color = colors[mod1(i, length(colors))]
@@ -197,7 +202,7 @@ encoding plus colorbar rendering.
 - `result`: Output of `plot_mean_histograms_with_std` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_mean_histograms_with_std(
     data::AbstractVector{<:Tuple};
@@ -235,10 +240,14 @@ function plot_mean_histograms_with_std(
     data = [(Float64(d[1]), d[2], d[3]) for d in data]
 
     if hist_labels !== nothing
-        @assert length(hist_labels) == length(data) "hist_labels and data must have same length"
+        if !(length(hist_labels) == length(data))
+            throw(ArgumentError("hist_labels and data must have same length"))
+        end
     end
     if plot_types !== nothing
-        @assert length(plot_types) == length(data) "plot_types and data must have same length"
+        if !(length(plot_types) == length(data))
+            throw(ArgumentError("plot_types and data must have same length"))
+        end
     end
 
     figsize = apply_paper_theme!(
@@ -305,8 +314,9 @@ function plot_mean_histograms_with_std(
 
     iter = invert_color_scaling ? reverse(data) : data
     for (i, (val, mean, std)) in enumerate(iter)
-        @assert length(mean) == length(std)
-
+        if !(length(mean) == length(std))
+            throw(ArgumentError("assertion failed: length(mean) == length(std)"))
+        end
         t = (val - vmin) / denom
         t = invert_color_scaling ? (1 - t) : t
         color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
@@ -399,7 +409,7 @@ return the produced figure (or `(fig, ax)` when `return_axis=true`).
 - `result`: Output of `plot_and_save_hists` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_and_save_hists(
     hists::Vector{Vector{Dict{Int,Float64}}},
@@ -471,7 +481,7 @@ scalar-aware averages, and forwards colorbar-related keyword options to
 - `result`: Output of `plot_and_save_hists` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_and_save_hists(
     hists::Vector{Vector{Tuple{D,Real}}},
@@ -573,78 +583,7 @@ Vector analogue of `plot_and_save_hists`: compute per-group `(mean, std)` using
 - `result`: Output of `plot_and_save_vectors` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
-function plot_and_save_vectors(
-    vectors::AbstractVector,
-    fig_name::String;
-    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
-    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
-    logscale_x::Bool = true,
-    logscale_y::Bool = true,
-    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
-    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
-    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
-    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
-    double_column::Bool = false,
-    magnification::Real = 1.0,
-    legendpos = :rt,
-    legendpadding = (10, 8, 8, 8),
-    legendmargin = (5,5,5,5),
-    n_Legend_columns::Int = 1,
-    linewidth::Union{Nothing,Real} = nothing,
-    markersize::Union{Nothing,Real} = nothing,
-    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
-    return_axis::Bool = false,
-)::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
-    @assert all(v -> v isa AbstractVector, vectors) "vectors must be a collection of vector samples"
-    average_std = [average_vectors_with_std(vectors[i]) for i in 1:length(vectors)]
-    plot = plot_mean_histograms_with_std(
-        average_std;
-        xlim = xlim,
-        ylim = ylim,
-        logscale_x = logscale_x,
-        logscale_y = logscale_y,
-        plotlabel = plotlabel,
-        xlabel = xlabel,
-        ylabel = ylabel,
-        hist_labels = hist_labels,
-        double_column = double_column,
-        magnification = magnification,
-        legendpos = legendpos,
-        legendpadding = legendpadding,
-        legendmargin = legendmargin,
-        n_Legend_columns = n_Legend_columns,
-        linewidth = linewidth,
-        markersize = markersize,
-        plot_types = plot_types,
-        return_axis = return_axis,
-    )
-
-    CairoMakie.save(fig_path(fig_name), plot)
-    return plot
-end
-
-"""
-    plot_and_save_vectors(vectors::AbstractVector, fig_name; kwargs...)
-
-See `plot_and_save_vectors(vectors, fig_name; ...)`.
-
-Dispatch helper: if `vectors` looks like grouped `(vector, scalar)` tuples, it
-forwards to the scalar-aware overload; otherwise throws an informative error.
-
-# Arguments
-- `vectors`: Vector-valued input data.
-- `fig_name`: Output figure name/path used when saving plots.
-
-# Keyword Arguments
-- `kwargs`: Additional keyword arguments forwarded to inner methods.
-
-# Returns
-- `result`: Output of `plot_and_save_vectors` as described in the summary above.
-
-# Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_and_save_vectors(
     vectors::AbstractVector,
@@ -673,14 +612,16 @@ function plot_and_save_vectors(
     invert_color_scaling::Bool = false,
     colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
     colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    comp::Union{Nothing,AbstractVector} = nothing,
+    comp_color = :black,
+    comp_linewidth::Union{Nothing,Real} = 2,
     return_axis::Bool = false,
     num_bins::Union{Nothing,Int} = nothing,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
-    if !isempty(vectors) && vectors[1] isa AbstractVector &&
-       !isempty(vectors[1]) && vectors[1][1] isa Tuple &&
-       length(vectors[1][1]) == 2
-        return plot_and_save_vectors(
-            Vector{Vector{Tuple{AbstractVector,Real}}}(vectors),
+    scalar_groups = _coerce_scalar_vector_groups(vectors)
+    if scalar_groups !== nothing
+        return _plot_and_save_vectors_scalar(
+            scalar_groups,
             fig_name;
             xlim = xlim,
             ylim = ylim,
@@ -706,37 +647,133 @@ function plot_and_save_vectors(
             invert_color_scaling = invert_color_scaling,
             colorbar_pos = colorbar_pos,
             colorbar_size = colorbar_size,
+            comp = comp,
+            comp_color = comp_color,
+            comp_linewidth = comp_linewidth,
             return_axis = return_axis,
             num_bins = num_bins,
         )
     end
 
-    error("plot_and_save_vectors: input does not look like a vector+scalar tuple dataset; use the non-colorbar overload.")
+    plain_groups = _coerce_plain_vector_groups(vectors)
+    if plain_groups !== nothing
+        plain_legendpadding = isnothing(legendpadding) ? (10, 8, 8, 8) : legendpadding
+        plain_legendmargin = isnothing(legendmargin) ? (5, 5, 5, 5) : legendmargin
+        return _plot_and_save_vectors_plain(
+            plain_groups,
+            fig_name;
+            xlim = xlim,
+            ylim = ylim,
+            logscale_x = logscale_x,
+            logscale_y = logscale_y,
+            plotlabel = plotlabel,
+            xlabel = xlabel,
+            ylabel = ylabel,
+            hist_labels = hist_labels,
+            double_column = double_column,
+            magnification = magnification,
+            legendpos = legendpos,
+            legendpadding = plain_legendpadding,
+            legendmargin = plain_legendmargin,
+            n_Legend_columns = n_Legend_columns,
+            linewidth = linewidth,
+            markersize = markersize,
+            plot_types = plot_types,
+            return_axis = return_axis,
+        )
+    end
+
+    error("plot_and_save_vectors: unsupported input format.")
 end
 
-"""
-    plot_and_save_vectors(vectors::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractVector,<:Real}}}, fig_name; kwargs...)
+function _coerce_plain_vector_groups(vectors::AbstractVector)::Union{Nothing,Vector{Vector{AbstractVector}}}
+    isempty(vectors) && return Vector{Vector{AbstractVector}}()
+    groups = Vector{Vector{AbstractVector}}()
+    sizehint!(groups, length(vectors))
+    for group in vectors
+        group isa AbstractVector || return nothing
+        converted = Vector{AbstractVector}()
+        sizehint!(converted, length(group))
+        for sample in group
+            sample isa AbstractVector || return nothing
+            push!(converted, sample)
+        end
+        push!(groups, converted)
+    end
+    return groups
+end
 
-See `plot_and_save_vectors(vectors, fig_name; ...)`.
+function _coerce_scalar_vector_groups(vectors::AbstractVector)::Union{Nothing,Vector{Vector{Tuple{AbstractVector,Real}}}}
+    isempty(vectors) && return Vector{Vector{Tuple{AbstractVector,Real}}}()
+    groups = Vector{Vector{Tuple{AbstractVector,Real}}}()
+    sizehint!(groups, length(vectors))
+    for group in vectors
+        group isa AbstractVector || return nothing
+        converted = Vector{Tuple{AbstractVector,Real}}()
+        sizehint!(converted, length(group))
+        for sample in group
+            sample isa Tuple || return nothing
+            length(sample) == 2 || return nothing
+            sample[1] isa AbstractVector || return nothing
+            sample[2] isa Real || return nothing
+            push!(converted, (sample[1], sample[2]))
+        end
+        push!(groups, converted)
+    end
+    return groups
+end
 
-Scalar-aware overload for grouped `(vector, scalar)` data with colormap/colorbar
-support and optional comparison band.
+function _plot_and_save_vectors_plain(
+    vectors::Vector{Vector{AbstractVector}},
+    fig_name::String;
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = (10, 8, 8, 8),
+    legendmargin = (5,5,5,5),
+    n_Legend_columns::Int = 1,
+    linewidth::Union{Nothing,Real} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+    plot_types::Union{Nothing,Vector{Symbol}} = nothing,
+    return_axis::Bool = false,
+)::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
+    average_std = [average_vectors_with_std(vectors[i]) for i in 1:length(vectors)]
+    plot = plot_mean_histograms_with_std(
+        average_std;
+        xlim = xlim,
+        ylim = ylim,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        plotlabel = plotlabel,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        hist_labels = hist_labels,
+        double_column = double_column,
+        magnification = magnification,
+        legendpos = legendpos,
+        legendpadding = legendpadding,
+        legendmargin = legendmargin,
+        n_Legend_columns = n_Legend_columns,
+        linewidth = linewidth,
+        markersize = markersize,
+        plot_types = plot_types,
+        return_axis = return_axis,
+    )
 
-# Arguments
-- `vectors`: Vector-valued input data.
-- `fig_name`: Output figure name/path used when saving plots.
+    CairoMakie.save(fig_path(fig_name), plot)
+    return plot
+end
 
-# Keyword Arguments
-- `kwargs`: Additional keyword arguments forwarded to inner methods.
-
-# Returns
-- `result`: Output of `plot_and_save_vectors` as described in the summary above.
-
-# Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
-function plot_and_save_vectors(
-    vectors::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractVector,<:Real}}},
+function _plot_and_save_vectors_scalar(
+    vectors::Vector{Vector{Tuple{AbstractVector,Real}}},
     fig_name::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,

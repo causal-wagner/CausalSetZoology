@@ -28,5 +28,5 @@ end
     @test sz[2] > 0
 
     @test_throws ArgumentError CausalSetZoology._logticks_internal(0.0, 10.0)
-    @test_throws AssertionError CausalSetZoology.apply_paper_theme!(; color_transparency = 2.0)
+    @test_throws ArgumentError CausalSetZoology.apply_paper_theme!(; color_transparency = 2.0)
 end

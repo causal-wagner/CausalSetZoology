@@ -29,10 +29,10 @@ end
     bfit = CausalSetZoology.fit_histogram_bins(ys, f, (:a, :b), 3, 8; x_values = xs, init = (a = 1.0, b = 0.0))
     @test bfit.a ≈ 2.0 atol = 1e-2
 
-    @test_throws AssertionError CausalSetZoology.fit_histogram_bins(ys, f, (:a, :b), 0, 3)
+    @test_throws ArgumentError CausalSetZoology.fit_histogram_bins(ys, f, (:a, :b), 0, 3)
     @test_throws ErrorException CausalSetZoology.fit_curve(ys, f, (:a, :b); std_fn = (y, yhat, s, p) -> s)
-    @test_throws AssertionError CausalSetZoology.fit_curve(ys, f, (:a, :b); minimize_χ² = true)
-    @test_throws AssertionError CausalSetZoology.fit_curve(ys, f, (:a, :b); stds = [0.1], minimize_χ² = true)
+    @test_throws ArgumentError CausalSetZoology.fit_curve(ys, f, (:a, :b); minimize_χ² = true)
+    @test_throws ArgumentError CausalSetZoology.fit_curve(ys, f, (:a, :b); stds = [0.1], minimize_χ² = true)
     @test_throws TypeError CausalSetZoology.fit_curve(ys, f, (:a, :b); bounds = (1.0, 2.0))
     @test_throws ErrorException CausalSetZoology.fit_curve(ys, f, (:a, :b); bootstrap_errorbars = true, return_cov = true)
 end

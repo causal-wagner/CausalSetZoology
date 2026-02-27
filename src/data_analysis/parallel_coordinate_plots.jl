@@ -16,7 +16,7 @@ common value. If all values are approximately zero, input is returned unchanged.
 - `result`: Output of `transform_to_scale!` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function transform_to_scale!(col)
     min_val = minimum(col)
@@ -52,7 +52,7 @@ one dataset must have equal sample count. Rows are optionally thinned via
 - `result`: Output of `parallel_plot_df` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function parallel_plot_df(
     data,
@@ -64,13 +64,19 @@ function parallel_plot_df(
     nfields = length(observables)
     kinds === nothing && (kinds = ["set$(i)" for i in 1:npaths])
     dfs = Vector{DataFrames.DataFrame}(undef, npaths)
-    @assert 0.0 < thinning <= 1.0
+    if !(0.0 < thinning <= 1.0)
+        throw(ArgumentError("assertion failed: 0.0 < thinning <= 1.0"))
+    end
     for i in 1:npaths
         vals = data[i]
-        @assert length(vals) == nfields
+        if !(length(vals) == nfields)
+            throw(ArgumentError("assertion failed: length(vals) == nfields"))
+        end
         nsamples = length(vals[1])
         for j in 2:nfields
-            @assert length(vals[j]) == nsamples
+            if !(length(vals[j]) == nsamples)
+                throw(ArgumentError("assertion failed: length(vals[j]) == nsamples"))
+            end
         end
         step = max(1, round(Int, 1.0 / thinning))
         idxs = 1:step:nsamples
@@ -111,7 +117,7 @@ If `fig_path` is provided, the figure is saved.
 - `result::AlgebraOfGraphics.FigureGrid`: Output of `create_parallel_plot` with type annotation `AlgebraOfGraphics.FigureGrid`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function create_parallel_plot(
     plot_data::Vector{Vector{Vector{Float64}}},
@@ -139,7 +145,9 @@ function create_parallel_plot(
     end
     base_indices = collect(1:length(kinds))
     ordered_indices = order_vec === nothing ? base_indices : order_vec
-    @assert all(in.(ordered_indices, Ref(base_indices))) "order_vec must be valid indices of kinds"
+    if !(all(in.(ordered_indices, Ref(base_indices))))
+        throw(ArgumentError("order_vec must be valid indices of kinds"))
+    end
     selected_indices = choose_kinds === nothing ? ordered_indices : [i for i in ordered_indices if i in choose_kinds]
     selected_kinds = kinds[selected_indices]
     if choose_kinds !== nothing

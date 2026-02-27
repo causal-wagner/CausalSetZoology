@@ -29,7 +29,7 @@ end
     fig = CausalSetZoology.create_parallel_plot(data, obs, ["x", "y"]; thinning = 1.0, sample_n = 4, legend = true)
     @test fig !== nothing
 
-    @test_throws AssertionError CausalSetZoology.parallel_plot_df(data, obs; thinning = 0.0)
-    @test_throws AssertionError CausalSetZoology.parallel_plot_df([[[1.0], [1.0, 2.0]]], obs)
-    @test_throws AssertionError CausalSetZoology.create_parallel_plot(data, obs, ["x", "y"]; order_vec = [1, 3])
+    @test_throws ArgumentError CausalSetZoology.parallel_plot_df(data, obs; thinning = 0.0)
+    @test_throws ArgumentError CausalSetZoology.parallel_plot_df([[[1.0], [1.0, 2.0]]], obs)
+    @test_throws ArgumentError CausalSetZoology.create_parallel_plot(data, obs, ["x", "y"]; order_vec = [1, 3])
 end

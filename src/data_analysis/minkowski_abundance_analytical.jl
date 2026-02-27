@@ -23,15 +23,18 @@ The interval size `m` is inclusive (endpoints counted).
 - This method has no keyword arguments.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function minkowski_interval_abundance_2d_inclusive_asymptotic(
     m::Real,
     n::Real,
 )::Float64
-    @assert m ≥ 1
-    @assert n > 0
-
+    if !(m ≥ 1)
+        throw(ArgumentError("assertion failed: m ≥ 1"))
+    end
+    if !(n > 0)
+        throw(ArgumentError("assertion failed: n > 0"))
+    end
     if m == 1
         return float(n)
     end

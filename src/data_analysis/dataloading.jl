@@ -1,4 +1,271 @@
 """
+    _RunningMoments
+
+Internal mutable accumulator for online mean/std computation.
+
+# Arguments
+- `n`: Number of observed samples.
+- `sum`: Sum of sample values.
+- `sumsq`: Sum of squared sample values.
+"""
+mutable struct _RunningMoments
+    n::Int
+    sum::Float64
+    sumsq::Float64
+end
+
+_RunningMoments() = _RunningMoments(0, 0.0, 0.0)
+
+"""
+    _push_moment!(m::_RunningMoments, x::Float64)
+
+Update a running-moments accumulator with one new observation.
+
+# Arguments
+- `m`: Mutable running-moments state.
+- `x`: New scalar sample value.
+
+# Returns
+- `nothing`: The accumulator `m` is updated in place.
+"""
+function _push_moment!(m::_RunningMoments, x::Float64)
+    m.n += 1
+    m.sum += x
+    m.sumsq += x * x
+    return nothing
+end
+
+"""
+    _mean_std(m::_RunningMoments)::Tuple{Float64,Float64}
+
+Finalize running moments into `(mean, std)` using sample standard deviation.
+
+# Arguments
+- `m`: Running-moments state.
+
+# Returns
+- `stats::Tuple{Float64,Float64}`: `(mean, std)` for accumulated samples.
+"""
+function _mean_std(m::_RunningMoments)::Tuple{Float64,Float64}
+    n = m.n
+    n == 0 && return (NaN, NaN)
+    mean_val = m.sum / n
+    n == 1 && return (mean_val, 0.0)
+    var = (m.sumsq - n * mean_val * mean_val) / (n - 1)
+    return (mean_val, sqrt(max(var, 0.0)))
+end
+
+"""
+    _ScanConfig
+
+Internal scan configuration used by shared record iterators.
+
+# Arguments
+- `step`: Positive thinning step.
+- `offset`: Phase offset for modulo-based sample selection.
+"""
+struct _ScanConfig
+    step::Int
+    offset::Int
+end
+
+"""
+    _scan_config(thinning::Int)
+
+Normalize integer thinning into an internal scan configuration.
+
+# Arguments
+- `thinning`: Keep every `thinning`-th filtered sample.
+
+# Returns
+- `cfg::_ScanConfig`: Scan configuration with integer-step semantics.
+
+# Throws
+- `DomainError`: Raised when `thinning < 1`."""
+function _scan_config(thinning::Int)
+    if !(thinning >= 1)
+        throw(DomainError(thinning, "thinning must be >= 1"))
+    end
+    return _ScanConfig(thinning, 0)
+end
+
+"""
+    _scan_config(thinning::Float64)
+
+Normalize fractional thinning into an internal scan configuration.
+
+# Arguments
+- `thinning`: Fractional keep-rate in `(0, 1]`.
+
+# Returns
+- `cfg::_ScanConfig`: Scan configuration equivalent to the legacy fractional thinning behavior.
+
+# Throws
+- `DomainError`: Raised when `thinning` is outside `(0, 1]`."""
+function _scan_config(thinning::Float64)
+    if !(0.0 < thinning <= 1.0)
+        throw(DomainError(thinning, "thinning must be in (0, 1]"))
+    end
+    step = max(1, round(Int, 1.0 / thinning))
+    return _ScanConfig(step, 1)
+end
+
+"""
+    _keep_sample(seen::Int, cfg::_ScanConfig)
+
+Check whether the current filtered sample index should be kept.
+
+# Arguments
+- `seen`: One-based count of filtered records seen so far.
+- `cfg`: Internal scan configuration.
+
+# Returns
+- `keep::Bool`: `true` when the sample is selected by the thinning rule.
+"""
+_keep_sample(seen::Int, cfg::_ScanConfig) = ((seen - cfg.offset) % cfg.step) == 0
+
+"""
+    _normalize_filters(paths::Vector{<:AbstractString}, filters)
+
+Normalize optional filter inputs to a path-aligned vector.
+
+# Arguments
+- `paths`: Input data paths.
+- `filters`: `nothing` or a vector of per-path filters.
+
+# Returns
+- `filters_norm`: A filter vector of length `length(paths)`.
+
+# Throws
+- `DimensionMismatch`: Raised when provided `filters` has a different length than `paths`."""
+function _normalize_filters(paths::Vector{<:AbstractString}, filters)
+    n = length(paths)
+    if filters === nothing
+        return fill(nothing, n)
+    end
+    if !(length(filters) == n)
+        throw(DimensionMismatch("length(filters)=$(length(filters)) must equal number of paths n=$n"))
+    end
+    return filters
+end
+
+"""
+    _scan_records(visit!::Function, path::AbstractString, filter, cfg::_ScanConfig)
+
+Iterate records from one statistics file with shared filtering and thinning logic.
+
+# Arguments
+- `visit!`: Callback executed for each kept record.
+- `path`: Input `statistics.jld2` file path.
+- `filter`: Per-record predicate or `nothing`.
+- `cfg`: Internal scan configuration.
+
+# Returns
+- `nothing`: Side effects are produced via `visit!`.
+
+# Throws
+- Propagates I/O and callback errors from JLD2 access, filtering, and `visit!` execution."""
+function _scan_records(visit!::F, path::AbstractString, filter, cfg::_ScanConfig) where {F<:Function}
+    seen = 0
+    JLD2.jldopen(path, "r") do f
+        nbatches = f["meta/nbatches"]
+        for b in 1:nbatches
+            batch = f["batches/$b"]
+            for x in batch
+                filter !== nothing && !filter(x) && continue
+                seen += 1
+                _keep_sample(seen, cfg) || continue
+                visit!(x)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _extract_field_value(x, field::Symbol)
+
+Extract a direct field value from one record.
+
+# Arguments
+- `x`: Input record.
+- `field`: Symbolic field name.
+
+# Returns
+- `value`: Field value read via `getfield`.
+
+# Throws
+- Propagates errors from `getfield`."""
+function _extract_field_value(x, field::Symbol)
+    return getfield(x, field)
+end
+
+"""
+    _extract_field_value(x, field::Tuple{Symbol,Int64})
+
+Extract one histogram bin value from a record.
+
+# Arguments
+- `x`: Input record.
+- `field`: `(histogram_symbol, bin)` specification.
+
+# Returns
+- `value`: Histogram bin value, defaulting to `0` for missing bins.
+
+# Throws
+- Propagates errors from `getfield` and histogram access."""
+function _extract_field_value(x, field::Tuple{Symbol,Int64})
+    sym, bin = field
+    hist = getfield(x, sym)
+    return get(hist, bin, 0)
+end
+
+"""
+    _push_auto_typed!(vals::Vector{Any}, j::Int, value)
+
+Append a value to column `j`, initializing its concrete element vector lazily.
+
+# Arguments
+- `vals`: Per-column storage vector.
+- `j`: Target column index.
+- `value`: Value to append.
+
+# Returns
+- `nothing`: `vals` is mutated in place.
+
+# Throws
+- Propagates bounds errors for invalid column indices."""
+@inline function _push_auto_typed!(vals::Vector{Any}, j::Int, value)
+    if vals[j] === nothing
+        vals[j] = Vector{typeof(value)}()
+    end
+    push!(vals[j], value)
+    return nothing
+end
+
+"""
+    _finalize_any_columns(vals::Vector{Any}, nfields::Int)
+
+Convert internal lazy column buffers into the public `Vector{Any}` column layout.
+
+# Arguments
+- `vals`: Internal per-column buffers, possibly containing `nothing`.
+- `nfields`: Number of output columns.
+
+# Returns
+- `out::Vector{Any}`: Finalized column vectors, replacing missing buffers with `Any[]`.
+
+# Throws
+- Propagates bounds errors if `nfields` and `vals` are inconsistent."""
+function _finalize_any_columns(vals::Vector{Any}, nfields::Int)
+    out = Vector{Any}(undef, nfields)
+    for j in 1:nfields
+        out[j] = vals[j] === nothing ? Any[] : vals[j]
+    end
+    return out
+end
+
+"""
     load_and_average_std_scalar(
         data_paths::Vector{String},
         fields::Vector{Symbol},
@@ -27,8 +294,10 @@ Returns, for each dataset, a vector of `(scalar_value, stats)` pairs where
 - `result`: Output of `load_and_average_std_scalar` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised when no field data could be loaded.
+- `DimensionMismatch`: Propagated when delegated loading receives mismatched `paths`/`filters` lengths.
+- `DomainError`: Raised for invalid `num_bins`, or propagated for invalid delegated thinning settings.
+- `TypeError`: Propagated when delegated scalar fields are not `Real`."""
 function load_and_average_std_scalar(
     data_paths::Vector{String},
     fields::Vector{Symbol},
@@ -38,16 +307,20 @@ function load_and_average_std_scalar(
 )
     loaded = load_fields_from_paths(data_paths, fields, scalar; verbose = verbose)
 
-    out = Vector{Vector{Tuple{Real,Vector{Tuple{Float64,Float64}}}}}(undef, length(loaded))
+    out = Vector{Vector{Tuple{Float64,Vector{Tuple{Float64,Float64}}}}}(undef, length(loaded))
 
     for (i, dataset) in enumerate(loaded)
         # dataset[j] is Vector{Tuple{value, scalar}}
-        @assert !isempty(dataset) "no fields loaded"
-        scalars = [s for (_, s) in dataset[1]]
+        if !(!isempty(dataset))
+            throw(ArgumentError("no fields loaded"))
+        end
+        scalars = Float64[s for (_, s) in dataset[1]]
 
-        bin_edges = nothing
+        bin_edges::Union{Nothing,Vector{Float64}} = nothing
         if num_bins !== nothing
-            @assert num_bins ≥ 1 "num_bins must be >= 1"
+            if !(num_bins ≥ 1)
+                throw(DomainError(num_bins, "num_bins must be >= 1"))
+            end
             vmin, vmax = minimum(scalars), maximum(scalars)
             if vmin == vmax
                 bin_edges = [vmin, vmax + 1e-12]
@@ -56,28 +329,29 @@ function load_and_average_std_scalar(
             end
         end
 
-        groups = Dict{Real,Vector{Vector{Any}}}() # scalar => list of per-field value vectors
-        for j in 1:length(dataset)
-            for (v, s) in dataset[j]
+        nfields = length(dataset)
+        groups = Dict{Float64,Vector{_RunningMoments}}() # scalar => per-field running moments
+        for j in eachindex(dataset)
+            for (v_raw, s_raw) in dataset[j]
+                s = Float64(s_raw)
                 if bin_edges !== nothing
                     idx = searchsortedlast(bin_edges, s)
                     idx = clamp(idx, 1, length(bin_edges) - 1)
                     s = (bin_edges[idx] + bin_edges[idx + 1]) / 2
                 end
-                if !haskey(groups, s)
-                    groups[s] = [Any[] for _ in 1:length(dataset)]
+                per_field = get!(groups, s) do
+                    [_RunningMoments() for _ in 1:nfields]
                 end
-                push!(groups[s][j], v)
+                _push_moment!(per_field[j], Float64(v_raw))
             end
         end
 
-        scalars_sorted = sort(collect(keys(groups)))
-        out[i] = Vector{Tuple{Real,Vector{Tuple{Float64,Float64}}}}(undef, length(scalars_sorted))
+        scalars_sorted = sort!(collect(keys(groups)))
+        out[i] = Vector{Tuple{Float64,Vector{Tuple{Float64,Float64}}}}(undef, length(scalars_sorted))
         for (k, s) in enumerate(scalars_sorted)
-            stats = Vector{Tuple{Float64,Float64}}(undef, length(dataset))
-            for j in 1:length(dataset)
-                vals = groups[s][j]
-                stats[j] = (Statistics.mean(vals), Statistics.std(vals))
+            stats = Vector{Tuple{Float64,Float64}}(undef, nfields)
+            for j in 1:nfields
+                stats[j] = _mean_std(groups[s][j])
             end
             out[i][k] = (s, stats)
         end
@@ -117,8 +391,8 @@ Returns a vector `out` such that:
 - `result::Vector{Vector{Dict}}`: Output of `load_histograms_from_paths` with type annotation `Vector{Vector{Dict}}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `length(filters) != length(paths)`.
+- `DomainError`: Raised when `thinning < 1`."""
 function load_histograms_from_paths(
     paths::Vector{<:AbstractString},
     histname::Symbol;
@@ -126,41 +400,17 @@ function load_histograms_from_paths(
     thinning::Int = 1,
     verbose::Bool = false,
 )::Vector{Vector{Dict}}
+    cfg = _scan_config(thinning)
+    filters_norm = _normalize_filters(paths, filters)
+    extractor = _HistogramExtractor(histname, nothing)
+
     n = length(paths)
-    filters === nothing && (filters = fill(nothing, n))
-    @assert length(filters) == n
-    @assert thinning >= 1 "thinning must be >= 1"
-
     out = Vector{Vector{Dict}}(undef, n)
-
     Threads.@threads for i in 1:n
-        path   = paths[i]
-        filter = filters[i]
-
-        hists = Dict[]
-        seen = 0
-
-        JLD2.jldopen(path, "r") do f
-            nbatches = f["meta/nbatches"]
-
-            for b in 1:nbatches
-                batch = f["batches/$b"]
-
-                for x in batch
-                    filter !== nothing && !filter(x) && continue
-                    seen += 1
-                    if seen % thinning != 0
-                        continue
-                    end
-                    push!(hists, getfield(x, histname))
-                end
-            end
-        end
-
-        verbose && println("  Loaded $(length(hists)) histograms from $path")
-        out[i] = hists
+        vals = _load_histograms_one(paths[i], filters_norm[i], cfg, extractor)
+        verbose && println("  Loaded $(length(vals)) histograms from $(paths[i])")
+        out[i] = vals
     end
-
     return out
 end
 
@@ -171,7 +421,7 @@ end
         scalar::Symbol;
         filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
         thinning::Int = 1,
-    )::Vector{Vector{Tuple{Dict,Real}}}
+    )::Vector{Vector{Tuple{Dict,Float64}}}
 
 See the main method `load_histograms_from_paths(paths, histname; ...)` for core
 loading, filtering, and thinning behavior.
@@ -194,8 +444,9 @@ loading, filtering, and thinning behavior.
 - `result::Vector{Vector{Tuple{Dict,Real}}}`: Output of `load_histograms_from_paths` with type annotation `Vector{Vector{Tuple{Dict,Real}}}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `length(filters) != length(paths)`.
+- `DomainError`: Raised when `thinning < 1`.
+- `TypeError`: Raised when the loaded scalar field is not `Real`."""
 function load_histograms_from_paths(
     paths::Vector{<:AbstractString},
     histname::Symbol,
@@ -203,44 +454,18 @@ function load_histograms_from_paths(
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Int = 1,
     verbose::Bool = false,
-)::Vector{Vector{Tuple{Dict,Real}}}
+)::Vector{Vector{Tuple{Dict,Float64}}}
+    cfg = _scan_config(thinning)
+    filters_norm = _normalize_filters(paths, filters)
+    extractor = _HistogramExtractor(histname, scalar)
+
     n = length(paths)
-    filters === nothing && (filters = fill(nothing, n))
-    @assert length(filters) == n
-    @assert thinning >= 1 "thinning must be >= 1"
-
-    out = Vector{Vector{Tuple{Dict,Real}}}(undef, n)
-
+    out = Vector{Vector{Tuple{Dict,Float64}}}(undef, n)
     Threads.@threads for i in 1:n
-        path   = paths[i]
-        filter = filters[i]
-
-        pairs = Tuple{Dict,Real}[]
-        seen = 0
-
-        JLD2.jldopen(path, "r") do f
-            nbatches = f["meta/nbatches"]
-
-            for b in 1:nbatches
-                batch = f["batches/$b"]
-
-                for x in batch
-                    filter !== nothing && !filter(x) && continue
-                    seen += 1
-                    if seen % thinning != 0
-                        continue
-                    end
-                    v = getfield(x, scalar)
-                    @assert v isa Real "scalar field must be Real"
-                    push!(pairs, (getfield(x, histname), v))
-                end
-            end
-        end
-
-        verbose && println("  Loaded $(length(pairs)) histograms from $path with scalar $(scalar)")
-        out[i] = pairs
+        vals = _load_histograms_one(paths[i], filters_norm[i], cfg, extractor)
+        verbose && println("  Loaded $(length(vals)) histograms from $(paths[i]) with scalar $(scalar)")
+        out[i] = vals
     end
-
     return out
 end
 
@@ -253,25 +478,20 @@ Returns a matrix of size (Nsamples, nbins).
 # Arguments
 - `hists`: Histogram input data.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `densify_hists` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised when `hists` is empty (via `minimum`/`maximum` on empty collections)."""
 function densify_hists(hists::Vector{<:AbstractDict})
     min_k = minimum(minimum(keys(h)) for h in hists)
     max_k = maximum(maximum(keys(h)) for h in hists)
     shift = (min_k == 0)
 
     nbins = shift ? max_k + 1 : max_k
-    dense = Matrix{Float64}(undef, length(hists), nbins)
+    dense = zeros(Float64, length(hists), nbins)
 
     for (i, h) in enumerate(hists)
-        fill!(view(dense, i, :), 0.0)
         for (k, v) in h
             idx = shift ? k + 1 : k
             dense[i, idx] = v
@@ -292,15 +512,11 @@ all dictionaries along `i` have been added bin-wise.
 # Arguments
 - `hists`: Histogram input data.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result::Vector{Vector{Dict}}`: Output of `join_histograms` with type annotation `Vector{Vector{Dict}}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when nested histogram container dimensions are inconsistent."""
 function join_histograms(
     hists::Vector{Vector{Vector{Dict}}},
 )::Vector{Vector{Dict}}
@@ -311,9 +527,13 @@ function join_histograms(
     n_hists = length(hists[1][1])
 
     for i in 1:n_outer
-        @assert length(hists[i]) == n_groups
+        if !(length(hists[i]) == n_groups)
+            throw(DimensionMismatch("length(hists[$i])=$(length(hists[i])) must equal n_groups=$n_groups"))
+        end
         for j in 1:n_groups
-            @assert length(hists[i][j]) == n_hists
+            if !(length(hists[i][j]) == n_hists)
+                throw(DimensionMismatch("length(hists[$i][$j])=$(length(hists[i][j])) must equal n_hists=$n_hists"))
+            end
         end
     end
 
@@ -349,40 +569,44 @@ the aggregation logic.
 # Arguments
 - `hists`: Histogram input data.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `join_histograms` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when nested histogram container dimensions are inconsistent.
+- `DomainError`: Raised when scalar labels for the same `(j, k)` index do not match across inputs."""
 function join_histograms(
-    hists::Vector{Vector{Vector{Tuple{Dict,Real}}}},
-)::Vector{Vector{Tuple{Dict,Real}}}
-    isempty(hists) && return Vector{Vector{Tuple{Dict,Real}}}()
+    hists::Vector{Vector{Vector{Tuple{Dict,S}}}},
+)::Vector{Vector{Tuple{Dict,Float64}}} where {S<:Real}
+    isempty(hists) && return Vector{Vector{Tuple{Dict,Float64}}}()
 
     n_outer = length(hists)
     n_mid = length(hists[1])
     n_hists = length(hists[1][1])
 
     for i in 1:n_outer
-        @assert length(hists[i]) == n_mid
+        if !(length(hists[i]) == n_mid)
+            throw(DimensionMismatch("length(hists[$i])=$(length(hists[i])) must equal n_mid=$n_mid"))
+        end
         for j in 1:n_mid
-            @assert length(hists[i][j]) == n_hists
+            if !(length(hists[i][j]) == n_hists)
+                throw(DimensionMismatch("length(hists[$i][$j])=$(length(hists[i][j])) must equal n_hists=$n_hists"))
+            end
         end
     end
 
-    out = Vector{Vector{Tuple{Dict,Real}}}(undef, n_mid)
+    out = Vector{Vector{Tuple{Dict,Float64}}}(undef, n_mid)
     for j in 1:n_mid
-        out[j] = Vector{Tuple{Dict,Real}}(undef, n_hists)
+        out[j] = Vector{Tuple{Dict,Float64}}(undef, n_hists)
         for k in 1:n_hists
             d_sum = Dict{Int,Float64}()
-            s_ref = hists[1][j][k][2]
+            s_ref = Float64(hists[1][j][k][2])
             for i in 1:n_outer
                 d, s = hists[i][j][k]
-                @assert s == s_ref "scalar mismatch for histogram index ($j,$k)"
+                s64 = Float64(s)
+                if !(s64 == s_ref)
+                    throw(DomainError(s, "scalar mismatch for histogram index ($j,$k): expected $s_ref"))
+                end
                 for (bin, count) in d
                     d_sum[bin] = get(d_sum, bin, 0.0) + count
                 end
@@ -392,6 +616,293 @@ function join_histograms(
     end
 
     return out
+end
+
+"""
+    _FieldExtractor{S}
+
+Internal extractor plan for loading multiple fields (optionally with scalar pairing).
+
+# Arguments
+- `nfields`: Number of requested fields.
+- `symbol_specs`: Indexed direct-field extraction specs.
+- `hist_specs`: Indexed histogram-bin extraction specs.
+- `scalar`: Scalar field symbol or `nothing`.
+
+# Returns
+- `extractor::_FieldExtractor{S}`: Field extraction plan.
+"""
+struct _FieldExtractor{S}
+    nfields::Int
+    symbol_specs::Vector{Tuple{Int,Symbol}}
+    hist_specs::Vector{Tuple{Int,Symbol,Int64}}
+    scalar::S
+end
+
+"""
+    _HistogramExtractor{S}
+
+Internal extractor plan for loading histograms (optionally with scalar pairing).
+
+# Arguments
+- `histname`: Histogram field name.
+- `scalar`: Scalar field symbol or `nothing`.
+
+# Returns
+- `extractor::_HistogramExtractor{S}`: Histogram extraction plan.
+"""
+struct _HistogramExtractor{S}
+    histname::Symbol
+    scalar::S
+end
+
+"""
+    _split_field_specs(fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}})
+
+Split mixed field specs into direct-field and histogram-bin extraction lists.
+
+# Arguments
+- `fields`: Requested field specifications.
+
+# Returns
+- `symbol_specs`: Indexed `Symbol` extraction specs.
+- `hist_specs`: Indexed `(Symbol, Int64)` extraction specs.
+"""
+function _split_field_specs(fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}})
+    symbol_specs = Tuple{Int,Symbol}[]
+    hist_specs = Tuple{Int,Symbol,Int64}[]
+    for (j, field) in enumerate(fields)
+        if field isa Symbol
+            push!(symbol_specs, (j, field))
+        else
+            sym, bin = field
+            push!(hist_specs, (j, sym, bin))
+        end
+    end
+    return symbol_specs, hist_specs
+end
+
+"""
+    _field_extractor(fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}})
+
+Build a field extractor for plain field loading (no scalar pairing).
+
+# Arguments
+- `fields`: Requested field specifications.
+
+# Returns
+- `extractor::_FieldExtractor{Nothing}`: Internal extractor plan.
+"""
+function _field_extractor(fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}})
+    symbol_specs, hist_specs = _split_field_specs(fields)
+    return _FieldExtractor(length(fields), symbol_specs, hist_specs, nothing)
+end
+
+"""
+    _field_extractor(fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}}, scalar::Symbol)
+
+Build a field extractor for field loading with scalar pairing.
+
+# Arguments
+- `fields`: Requested field specifications.
+- `scalar`: Scalar field name to pair with each extracted value.
+
+# Returns
+- `extractor::_FieldExtractor{Symbol}`: Internal extractor plan.
+"""
+function _field_extractor(
+    fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}},
+    scalar::Symbol,
+)
+    symbol_specs, hist_specs = _split_field_specs(fields)
+    return _FieldExtractor(length(fields), symbol_specs, hist_specs, scalar)
+end
+
+"""
+    _load_fields_one(path, filter, cfg, extractor::_FieldExtractor{Nothing})
+
+Load one file's requested fields without scalar pairing.
+
+# Arguments
+- `path`: Input file path.
+- `filter`: Per-record predicate or `nothing`.
+- `cfg`: Internal scan configuration.
+- `extractor`: Plain field extractor plan.
+
+# Returns
+- `vals::Vector{Any}`: Per-field vectors for one file.
+
+# Throws
+- Propagates data access and callback errors from scanning and extraction."""
+function _load_fields_one(
+    path::AbstractString,
+    filter,
+    cfg::_ScanConfig,
+    extractor::_FieldExtractor{Nothing},
+)
+    vals = Vector{Any}(undef, extractor.nfields)
+    for j in 1:extractor.nfields
+        vals[j] = nothing
+    end
+    _scan_records(path, filter, cfg) do x
+        for (j, sym) in extractor.symbol_specs
+            _push_auto_typed!(vals, j, getfield(x, sym))
+        end
+        for (j, sym, bin) in extractor.hist_specs
+            hist = getfield(x, sym)
+            _push_auto_typed!(vals, j, get(hist, bin, 0))
+        end
+    end
+    return _finalize_any_columns(vals, extractor.nfields)
+end
+
+"""
+    _load_fields_one(path, filter, cfg, extractor::_FieldExtractor{Symbol})
+
+Load one file's requested fields paired with a scalar value.
+
+# Arguments
+- `path`: Input file path.
+- `filter`: Per-record predicate or `nothing`.
+- `cfg`: Internal scan configuration.
+- `extractor`: Scalar-paired field extractor plan.
+
+# Returns
+- `vals::Vector{Any}`: Per-field vectors of `(value, scalar)` pairs for one file.
+
+# Throws
+- `TypeError`: Raised when the loaded scalar field is not `Real`.
+- Propagates data access errors from scanning and extraction."""
+function _load_fields_one(
+    path::AbstractString,
+    filter,
+    cfg::_ScanConfig,
+    extractor::_FieldExtractor{Symbol},
+)
+    vals = Vector{Any}(undef, extractor.nfields)
+    for j in 1:extractor.nfields
+        vals[j] = nothing
+    end
+    scalar = extractor.scalar
+    _scan_records(path, filter, cfg) do x
+        s = getfield(x, scalar)
+        if !(s isa Real)
+            throw(TypeError(:load_fields_from_paths, "scalar field", Real, s))
+        end
+        s64 = Float64(s)
+        for (j, sym) in extractor.symbol_specs
+            _push_auto_typed!(vals, j, (getfield(x, sym), s64))
+        end
+        for (j, sym, bin) in extractor.hist_specs
+            hist = getfield(x, sym)
+            _push_auto_typed!(vals, j, (get(hist, bin, 0), s64))
+        end
+    end
+    return _finalize_any_columns(vals, extractor.nfields)
+end
+
+"""
+    _load_histograms_one(path, filter, cfg, extractor::_HistogramExtractor{Nothing})
+
+Load one file's histogram values without scalar pairing.
+
+# Arguments
+- `path`: Input file path.
+- `filter`: Per-record predicate or `nothing`.
+- `cfg`: Internal scan configuration.
+- `extractor`: Histogram extractor plan.
+
+# Returns
+- `hists::Vector{Dict}`: Loaded histograms for one file.
+
+# Throws
+- Propagates data access errors from scanning and extraction."""
+function _load_histograms_one(
+    path::AbstractString,
+    filter,
+    cfg::_ScanConfig,
+    extractor::_HistogramExtractor{Nothing},
+)
+    hists = Dict[]
+    _scan_records(path, filter, cfg) do x
+        push!(hists, getfield(x, extractor.histname))
+    end
+    return hists
+end
+
+"""
+    _load_histograms_one(path, filter, cfg, extractor::_HistogramExtractor{Symbol})
+
+Load one file's histogram values paired with scalar labels.
+
+# Arguments
+- `path`: Input file path.
+- `filter`: Per-record predicate or `nothing`.
+- `cfg`: Internal scan configuration.
+- `extractor`: Scalar-paired histogram extractor plan.
+
+# Returns
+- `pairs::Vector{Tuple{Dict,Float64}}`: Loaded histogram/scalar pairs for one file.
+
+# Throws
+- `TypeError`: Raised when the loaded scalar field is not `Real`.
+- Propagates data access errors from scanning and extraction."""
+function _load_histograms_one(
+    path::AbstractString,
+    filter,
+    cfg::_ScanConfig,
+    extractor::_HistogramExtractor{Symbol},
+)
+    pairs = Tuple{Dict,Float64}[]
+    scalar = extractor.scalar
+    _scan_records(path, filter, cfg) do x
+        v = getfield(x, scalar)
+        if !(v isa Real)
+            throw(TypeError(:load_histograms_from_paths, "scalar field", Real, v))
+        end
+        push!(pairs, (getfield(x, extractor.histname), Float64(v)))
+    end
+    return pairs
+end
+
+"""
+    _load_field_with_scalar_one(path, filter, cfg, field, scalar)
+
+Load one file's single field paired with scalar labels.
+
+# Arguments
+- `path`: Input file path.
+- `filter`: Per-record predicate or `nothing`.
+- `cfg`: Internal scan configuration.
+- `field`: Requested field specification.
+- `scalar`: Scalar field name.
+
+# Returns
+- `vals`: Concrete vector of `(value, Float64)` pairs for one file.
+
+# Throws
+- `TypeError`: Raised when the loaded scalar field is not `Real`.
+- Propagates data access errors from scanning and extraction."""
+function _load_field_with_scalar_one(
+    path::AbstractString,
+    filter,
+    cfg::_ScanConfig,
+    field::Union{Symbol,Tuple{Symbol,Int64}},
+    scalar::Symbol,
+)
+    vals = nothing
+    _scan_records(path, filter, cfg) do x
+        s = getfield(x, scalar)
+        if !(s isa Real)
+            throw(TypeError(:load_field_with_scalar, "scalar field", Real, s))
+        end
+        pair = (_extract_field_value(x, field), Float64(s))
+        if vals === nothing
+            vals = Vector{typeof(pair)}()
+        end
+        push!(vals, pair)
+    end
+    return vals === nothing ? Vector{Tuple{Any,Float64}}() : vals
 end
 
 """
@@ -424,8 +935,8 @@ Only the requested fields are loaded (RAM-safe). Optional per-file filters can b
 - `result`: Output of `load_fields_from_paths` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `length(filters) != length(paths)`.
+- `DomainError`: Raised when `thinning` is outside `(0, 1]`."""
 function load_fields_from_paths(
     paths::Vector{<:AbstractString},
     fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}};
@@ -433,56 +944,17 @@ function load_fields_from_paths(
     thinning::Float64 = 1.0,
     verbose::Bool = false,
 )
+    cfg = _scan_config(thinning)
+    filters_norm = _normalize_filters(paths, filters)
+    extractor = _field_extractor(fields)
+
     n = length(paths)
-    filters === nothing && (filters = fill(nothing, n))
-    @assert length(filters) == n
-    @assert 0.0 < thinning <= 1.0
-    step = max(1, round(Int, 1.0 / thinning))
-
-    nfields = length(fields)
-    out = [Vector{Vector}(undef, nfields) for _ in 1:n]
-
+    out = Vector{Vector{Any}}(undef, n)
     Threads.@threads for i in 1:n
-        path   = paths[i]
-        filter = filters[i]
-        vals = Vector{Any}(undef, nfields)
-        for j in 1:nfields
-            vals[j] = nothing
-        end
-        seen = 0
-
-        JLD2.jldopen(path, "r") do f
-            nbatches = f["meta/nbatches"]
-            for b in 1:nbatches
-                batch = f["batches/$b"]
-                for x in batch
-                    filter !== nothing && !filter(x) && continue
-                    seen += 1
-                    (seen - 1) % step != 0 && continue
-                    for (j, field) in enumerate(fields)
-                        local v
-                        if field isa Symbol
-                            v = getfield(x, field)
-                        else
-                            sym, bin = field
-                            hist = getfield(x, sym)
-                            v = get(hist, bin, 0)
-                        end
-                        if vals[j] === nothing
-                            vals[j] = Vector{typeof(v)}()
-                        end
-                        push!(vals[j], v)
-                    end
-                end
-            end
-        end
-
-        for j in 1:nfields
-            out[i][j] = vals[j] === nothing ? Any[] : vals[j]
-        end
-        verbose && println("  Loaded $(length(vals[1])) values per field from $path")
+        vals = _load_fields_one(paths[i], filters_norm[i], cfg, extractor)
+        verbose && println("  Loaded $(length(vals[1])) values per field from $(paths[i])")
+        out[i] = vals
     end
-
     return out
 end
 
@@ -518,8 +990,9 @@ selection, filtering, and thinning behavior.
 - `result`: Output of `load_fields_from_paths` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `length(filters) != length(paths)`.
+- `DomainError`: Raised when `thinning` is outside `(0, 1]`.
+- `TypeError`: Raised when the loaded scalar field is not `Real`."""
 function load_fields_from_paths(
     paths::Vector{<:AbstractString},
     fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}},
@@ -528,59 +1001,17 @@ function load_fields_from_paths(
     thinning::Float64 = 1.0,
     verbose::Bool = false,
 )
+    cfg = _scan_config(thinning)
+    filters_norm = _normalize_filters(paths, filters)
+    extractor = _field_extractor(fields, scalar)
+
     n = length(paths)
-    filters === nothing && (filters = fill(nothing, n))
-    @assert length(filters) == n
-    @assert 0.0 < thinning <= 1.0
-    step = max(1, round(Int, 1.0 / thinning))
-
-    nfields = length(fields)
-    out = [Vector{Vector}(undef, nfields) for _ in 1:n]
-
+    out = Vector{Vector{Any}}(undef, n)
     Threads.@threads for i in 1:n
-        path   = paths[i]
-        filter = filters[i]
-        vals = Vector{Any}(undef, nfields)
-        for j in 1:nfields
-            vals[j] = nothing
-        end
-        seen = 0
-
-        JLD2.jldopen(path, "r") do f
-            nbatches = f["meta/nbatches"]
-            for b in 1:nbatches
-                batch = f["batches/$b"]
-                for x in batch
-                    filter !== nothing && !filter(x) && continue
-                    seen += 1
-                    (seen - 1) % step != 0 && continue
-                    s = getfield(x, scalar)
-                    @assert s isa Real "scalar field must be Real"
-                    for (j, field) in enumerate(fields)
-                        local v
-                        if field isa Symbol
-                            v = getfield(x, field)
-                        else
-                            sym, bin = field
-                            hist = getfield(x, sym)
-                            v = get(hist, bin, 0)
-                        end
-                        pair = (v, s)
-                        if vals[j] === nothing
-                            vals[j] = Vector{typeof(pair)}()
-                        end
-                        push!(vals[j], pair)
-                    end
-                end
-            end
-        end
-
-        for j in 1:nfields
-            out[i][j] = vals[j] === nothing ? Any[] : vals[j]
-        end
-        verbose && println("  Loaded $(length(vals[1])) values per field from $path with scalar $(scalar)")
+        vals = _load_fields_one(paths[i], filters_norm[i], cfg, extractor)
+        verbose && println("  Loaded $(length(vals[1])) values per field from $(paths[i]) with scalar $(scalar)")
+        out[i] = vals
     end
-
     return out
 end
 
@@ -611,8 +1042,9 @@ Load a single field together with a scalar, returning a concrete-typed
 - `result`: Output of `load_field_with_scalar` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `length(filters) != length(paths)`.
+- `DomainError`: Raised when `thinning` is outside `(0, 1]`.
+- `TypeError`: Raised when the loaded scalar field is not `Real`."""
 function load_field_with_scalar(
     paths::Vector{<:AbstractString},
     field::Union{Symbol,Tuple{Symbol,Int64}},
@@ -621,56 +1053,20 @@ function load_field_with_scalar(
     thinning::Float64 = 1.0,
     verbose::Bool = false,
 )
+    cfg = _scan_config(thinning)
+    filters_norm = _normalize_filters(paths, filters)
     n = length(paths)
-    filters === nothing && (filters = fill(nothing, n))
-    @assert length(filters) == n
-    @assert 0.0 < thinning <= 1.0
-    step = max(1, round(Int, 1.0 / thinning))
 
     # infer element type from first path to keep a concrete output type
-    function load_one(path, filter)
-        vals = nothing
-        seen = 0
-        JLD2.jldopen(path, "r") do f
-            nbatches = f["meta/nbatches"]
-            for b in 1:nbatches
-                batch = f["batches/$b"]
-                for x in batch
-                    filter !== nothing && !filter(x) && continue
-                    seen += 1
-                    (seen - 1) % step != 0 && continue
-                    s = getfield(x, scalar)
-                    @assert s isa Real "scalar field must be Real"
-                    local v
-                    if field isa Symbol
-                        v = getfield(x, field)
-                    else
-                        sym, bin = field
-                        hist = getfield(x, sym)
-                        v = get(hist, bin, 0)
-                    end
-                    pair = (v, Float64(s))
-                    if vals === nothing
-                        vals = Vector{typeof(pair)}()
-                    end
-                    push!(vals, pair)
-                end
-            end
-        end
-        return vals === nothing ? Vector{Tuple{Any,Float64}}() : vals
-    end
-
-    first_vals = load_one(paths[1], filters[1])
+    first_vals = _load_field_with_scalar_one(paths[1], filters_norm[1], cfg, field, scalar)
     out = Vector{typeof(first_vals)}(undef, n)
     out[1] = first_vals
     verbose && println("  Loaded $(length(out[1])) values from $(paths[1]) with scalar $(scalar)")
 
     Threads.@threads for i in 2:n
-        path   = paths[i]
-        filter = filters[i]
-        vals = load_one(path, filter)
+        vals = _load_field_with_scalar_one(paths[i], filters_norm[i], cfg, field, scalar)
         out[i] = vals
-        verbose && println("  Loaded $(length(out[i])) values from $path with scalar $(scalar)")
+        verbose && println("  Loaded $(length(out[i])) values from $(paths[i]) with scalar $(scalar)")
     end
 
     return out
@@ -703,8 +1099,8 @@ scalar workflow.
 - `result`: Output of `load_and_average_std_scalar` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Propagated when delegated loading receives mismatched `paths`/`filters` lengths.
+- `DomainError`: Propagated for invalid delegated thinning settings."""
 function load_and_average_std_scalar(
     data_paths::Vector{String},
     fields::Vector{Symbol};

@@ -40,7 +40,7 @@ Generate a 2D lattice/grid in a box, sort points by time coordinate, and plot it
 - `fig_path`: Path or collection of paths used for loading/saving data.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function create_grid_and_plot(
     size::Int,
@@ -139,7 +139,7 @@ The plotted quantity is the magnitude of
 - `max_peak_order`: Keyword option `max_peak_order` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fourier_transform_grid_deviation(
     comp_hist::Vector{Float64}, 

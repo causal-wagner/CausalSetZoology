@@ -51,8 +51,8 @@ end
     @test shifted[0] == 11
     @test shifted[2] == 13
 
-    @test_throws AssertionError CausalSetZoology.normalize_hists([[Dict{Int,Int}()]]; normalization = :probability)
-    @test_throws AssertionError CausalSetZoology.average_vectors_with_std([[1.0], [1.0, 2.0]])
-    @test_throws AssertionError CausalSetZoology.average_vectors_with_std([([1.0], 1.0)]; num_bins = 0)
-    @test_throws AssertionError CausalSetZoology.average_histogram_with_std([(Dict(1 => 1), 1.0)]; num_bins = 0)
+    @test_throws ArgumentError CausalSetZoology.normalize_hists([[Dict{Int,Int}()]]; normalization = :probability)
+    @test_throws ArgumentError CausalSetZoology.average_vectors_with_std([[1.0], [1.0, 2.0]])
+    @test_throws ArgumentError CausalSetZoology.average_vectors_with_std([([1.0], 1.0)]; num_bins = 0)
+    @test_throws ArgumentError CausalSetZoology.average_histogram_with_std([(Dict(1 => 1), 1.0)]; num_bins = 0)
 end

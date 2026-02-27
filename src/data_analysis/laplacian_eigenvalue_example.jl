@@ -27,7 +27,7 @@ Create a symmetric adjacency matrix for an undirected simple graph.
 - `result::BitMatrix`: Output of `make_undirected_adjacency_from_subgraphs` with type annotation `BitMatrix`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function make_undirected_adjacency_from_subgraphs(
     n_nodes::Int,
@@ -36,15 +36,30 @@ function make_undirected_adjacency_from_subgraphs(
     p_internal::Float64 = 0.5,
     rng = nothing,
 )::BitMatrix
-    @assert n_nodes ≥ 1
-    @assert 1 ≤ n_subgraphs ≤ n_nodes
-    @assert size(inter_edges, 1) == n_subgraphs
-    @assert size(inter_edges, 2) == n_subgraphs
-    @assert LinearAlgebra.issymmetric(inter_edges)
-    @assert all(inter_edges .≥ 0)
-    @assert all(inter_edges[i, i] == 0 for i in 1:n_subgraphs) "inter_edges diagonal must be zero"
-    @assert 0.0 ≤ p_internal ≤ 1.0
-
+    if !(n_nodes ≥ 1)
+        throw(ArgumentError("assertion failed: n_nodes ≥ 1"))
+    end
+    if !(1 ≤ n_subgraphs ≤ n_nodes)
+        throw(ArgumentError("assertion failed: 1 ≤ n_subgraphs ≤ n_nodes"))
+    end
+    if !(size(inter_edges, 1) == n_subgraphs)
+        throw(ArgumentError("assertion failed: size(inter_edges, 1) == n_subgraphs"))
+    end
+    if !(size(inter_edges, 2) == n_subgraphs)
+        throw(ArgumentError("assertion failed: size(inter_edges, 2) == n_subgraphs"))
+    end
+    if !(LinearAlgebra.issymmetric(inter_edges))
+        throw(ArgumentError("assertion failed: LinearAlgebra.issymmetric(inter_edges)"))
+    end
+    if !(all(inter_edges .≥ 0))
+        throw(ArgumentError("assertion failed: all(inter_edges .≥ 0)"))
+    end
+    if !(all(inter_edges[i, i] == 0 for i in 1:n_subgraphs))
+        throw(ArgumentError("inter_edges diagonal must be zero"))
+    end
+    if !(0.0 ≤ p_internal ≤ 1.0)
+        throw(ArgumentError("assertion failed: 0.0 ≤ p_internal ≤ 1.0"))
+    end
     # near-equal partition sizes: first `r` subgraphs get one extra node
     q, r = divrem(n_nodes, n_subgraphs)
     sizes = fill(q, n_subgraphs)
@@ -87,8 +102,9 @@ function make_undirected_adjacency_from_subgraphs(
             nb = length(rb)
             requested = Int(inter_edges[a, b])
             max_possible = na * nb
-            @assert requested ≤ max_possible "requested inter-subgraph edges exceed possible unique pairs for ($a, $b)"
-
+            if !(requested ≤ max_possible)
+                throw(ArgumentError("requested inter-subgraph edges exceed possible unique pairs for ($a, $b)"))
+            end
             used = Set{Tuple{Int,Int}}()
             while length(used) < requested
                 u = first(ra) + randint(1, na) - 1
@@ -130,18 +146,25 @@ Eigenvalues with `abs(λ) < zero_tol` are returned as exact `0.0`.
 - `result::Vector{Float64}`: Output of `normalized_laplacian_eigenvalues` with type annotation `Vector{Float64}`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function normalized_laplacian_eigenvalues(
     A::BitMatrix;
     zero_tol::Float64 = 1e-12,
 )::Vector{Float64}
     n, m = size(A)
-    @assert n == m "adjacency matrix must be square"
-    @assert LinearAlgebra.issymmetric(A) "adjacency matrix must be symmetric"
-    @assert all(!A[i, i] for i in 1:n) "adjacency matrix diagonal must be zero"
-    @assert zero_tol ≥ 0.0 "zero_tol must be nonnegative"
-
+    if !(n == m)
+        throw(ArgumentError("adjacency matrix must be square"))
+    end
+    if !(LinearAlgebra.issymmetric(A))
+        throw(ArgumentError("adjacency matrix must be symmetric"))
+    end
+    if !(all(!A[i, i] for i in 1:n))
+        throw(ArgumentError("adjacency matrix diagonal must be zero"))
+    end
+    if !(zero_tol ≥ 0.0)
+        throw(ArgumentError("zero_tol must be nonnegative"))
+    end
     degrees = vec(sum(A, dims = 2))
     invsqrtdeg = zeros(Float64, n)
     for i in 1:n
@@ -201,7 +224,7 @@ values for intra- vs inter-subgraph connections.
 - `inter_edge_alpha`: Keyword option `inter_edge_alpha` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _draw_subgraph_colored_node_link!(
     ax,
@@ -215,13 +238,24 @@ function _draw_subgraph_colored_node_link!(
     inter_edge_alpha::Real = 0.08,
 )
     n, m = size(A)
-    @assert n == m "adjacency matrix must be square"
-    @assert LinearAlgebra.issymmetric(A) "adjacency matrix must be symmetric"
-    @assert 1 ≤ n_subgraphs ≤ n
-    @assert cluster_radius > 0
-    @assert local_base ≥ 0
-    @assert local_scale ≥ 0
-
+    if !(n == m)
+        throw(ArgumentError("adjacency matrix must be square"))
+    end
+    if !(LinearAlgebra.issymmetric(A))
+        throw(ArgumentError("adjacency matrix must be symmetric"))
+    end
+    if !(1 ≤ n_subgraphs ≤ n)
+        throw(ArgumentError("assertion failed: 1 ≤ n_subgraphs ≤ n"))
+    end
+    if !(cluster_radius > 0)
+        throw(ArgumentError("assertion failed: cluster_radius > 0"))
+    end
+    if !(local_base ≥ 0)
+        throw(ArgumentError("assertion failed: local_base ≥ 0"))
+    end
+    if !(local_scale ≥ 0)
+        throw(ArgumentError("assertion failed: local_scale ≥ 0"))
+    end
     # Same near-equal contiguous partition as in graph generation.
     q, r = divrem(n, n_subgraphs)
     sizes = fill(q, n_subgraphs)
@@ -327,7 +361,7 @@ This is the primary plotting method for this function name.
 - `result::CairoMakie.Figure`: Output of `plot_subgraph_colored_node_link` with type annotation `CairoMakie.Figure`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_subgraph_colored_node_link(
     A::BitMatrix,
@@ -427,7 +461,7 @@ layout controls.
 - `result`: Output of `plot_subgraph_colored_node_link` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function plot_subgraph_colored_node_link(
     A1::BitMatrix,

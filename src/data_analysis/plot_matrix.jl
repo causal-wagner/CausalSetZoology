@@ -54,7 +54,7 @@ Returns `fig` or `(fig, axs)` when `return_axis=true`.
 - `result`: Output of `hist_hist_vec_hist_plot_matrix` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function hist_hist_vec_hist_plot_matrix(
     data::Tuple{
@@ -93,11 +93,18 @@ function hist_hist_vec_hist_plot_matrix(
     colgap::Union{Nothing,Real} = 0.0,
     return_axis::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Vector{CairoMakie.Axis}}}
-    @assert length(xlim) == 4
-    @assert length(ylim) == 4
-    @assert length(xlabel) == 4
-    @assert length(ylabel) == 4
-
+    if !(length(xlim) == 4)
+        throw(ArgumentError("assertion failed: length(xlim) == 4"))
+    end
+    if !(length(ylim) == 4)
+        throw(ArgumentError("assertion failed: length(ylim) == 4"))
+    end
+    if !(length(xlabel) == 4)
+        throw(ArgumentError("assertion failed: length(xlabel) == 4"))
+    end
+    if !(length(ylabel) == 4)
+        throw(ArgumentError("assertion failed: length(ylabel) == 4"))
+    end
     h1, h2, v3, h4 = data
 
     avg1 = [average_histogram_with_std(h1[i]) for i in 1:length(h1)]
@@ -230,7 +237,9 @@ function hist_hist_vec_hist_plot_matrix(
 
         iter = invert_color_scaling ? reverse(data) : data
         for (val, mean, std) in iter
-            @assert length(mean) == length(std)
+            if !(length(mean) == length(std))
+                throw(ArgumentError("assertion failed: length(mean) == length(std)"))
+            end
             t = (val - vmin) / denom
             t = invert_color_scaling ? (1 - t) : t
             color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
@@ -291,9 +300,12 @@ function hist_hist_vec_hist_plot_matrix(
 
     xt = xticks === nothing ? fill(nothing, 4) : xticks
     yt = yticks === nothing ? fill(nothing, 4) : yticks
-    @assert length(xt) == 4
-    @assert length(yt) == 4
-
+    if !(length(xt) == 4)
+        throw(ArgumentError("assertion failed: length(xt) == 4"))
+    end
+    if !(length(yt) == 4)
+        throw(ArgumentError("assertion failed: length(yt) == 4"))
+    end
     plot_on_axis!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1])
     plot_on_axis!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2])
     plot_on_axis!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3])
@@ -325,7 +337,9 @@ function hist_hist_vec_hist_plot_matrix(
         cb.height = colorbar_size[2]
     end
     if colorbar_label !== nothing
-        @assert colorbar_label_pos in (:side, :top) "colorbar_label_pos must be :side or :top"
+        if !(colorbar_label_pos in (:side, :top))
+            throw(ArgumentError("colorbar_label_pos must be :side or :top"))
+        end
         if colorbar_label_pos == :top
             cb.label = ""
             if colorbar_side == :left
@@ -474,7 +488,7 @@ Returns the saved `CairoMakie.Figure`.
 - `result::CairoMakie.Figure`: Output of `hist_hist_vec_distinguishability_plot_matrix` with type annotation `CairoMakie.Figure`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function hist_hist_vec_distinguishability_plot_matrix(
     data_paths_in,
@@ -524,12 +538,21 @@ function hist_hist_vec_distinguishability_plot_matrix(
     rowgap::Union{Nothing,Real} = 0.0,
     colgap::Union{Nothing,Real} = 0.0,
 )::CairoMakie.Figure
-    @assert length(xlim) == 4
-    @assert length(ylim) == 4
-    @assert length(xlabel) == 4
-    @assert length(ylabel) == 4
-    @assert !symmetric "hist_hist_vec_distinguishability_plot_matrix enforces symmetric = false"
-
+    if !(length(xlim) == 4)
+        throw(ArgumentError("assertion failed: length(xlim) == 4"))
+    end
+    if !(length(ylim) == 4)
+        throw(ArgumentError("assertion failed: length(ylim) == 4"))
+    end
+    if !(length(xlabel) == 4)
+        throw(ArgumentError("assertion failed: length(xlabel) == 4"))
+    end
+    if !(length(ylabel) == 4)
+        throw(ArgumentError("assertion failed: length(ylabel) == 4"))
+    end
+    if !(!symmetric)
+        throw(ArgumentError("hist_hist_vec_distinguishability_plot_matrix enforces symmetric = false"))
+    end
     to_paths(x) = x isa AbstractString ? [String(x)] : String.(collect(x))
     data_paths = to_paths(data_paths_in)
     comp_paths = to_paths(comp_paths_in)
@@ -724,9 +747,12 @@ function hist_hist_vec_distinguishability_plot_matrix(
 
     xt = xticks === nothing ? fill(nothing, 4) : xticks
     yt = yticks === nothing ? fill(nothing, 4) : yticks
-    @assert length(xt) == 4
-    @assert length(yt) == 4
-
+    if !(length(xt) == 4)
+        throw(ArgumentError("assertion failed: length(xt) == 4"))
+    end
+    if !(length(yt) == 4)
+        throw(ArgumentError("assertion failed: length(yt) == 4"))
+    end
     function plot_hist_or_vec_panel!(
         ax,
         data::AbstractVector{<:Tuple},
@@ -867,7 +893,9 @@ function hist_hist_vec_distinguishability_plot_matrix(
         cb.height = colorbar_size[2]
     end
     if colorbar_label !== nothing
-        @assert colorbar_label_pos in (:side, :top) "colorbar_label_pos must be :side or :top"
+        if !(colorbar_label_pos in (:side, :top))
+            throw(ArgumentError("colorbar_label_pos must be :side or :top"))
+        end
         if colorbar_label_pos == :top
             cb.label = ""
             if colorbar_side == :left

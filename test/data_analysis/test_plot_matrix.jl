@@ -39,7 +39,7 @@ end
     )
     @test fig isa Figure
 
-    @test_throws AssertionError CausalSetZoology.hist_hist_vec_distinguishability_plot_matrix(
+    @test_throws ArgumentError CausalSetZoology.hist_hist_vec_distinguishability_plot_matrix(
         ["a"], ["b"], :scalar, "bad";
         xlim = [nothing],
         ylim = [nothing, nothing, nothing, nothing],
@@ -59,7 +59,7 @@ end
         logscale_y = false,
     )
 
-    @test_throws AssertionError CausalSetZoology.hist_hist_vec_distinguishability_plot_matrix(
+    @test_throws ArgumentError CausalSetZoology.hist_hist_vec_distinguishability_plot_matrix(
         ["missing_path"], ["missing_path"], :scalar, "bad2";
         xlim = [nothing, nothing, nothing, nothing],
         ylim = [nothing, nothing, nothing, nothing],

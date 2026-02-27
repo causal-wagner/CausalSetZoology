@@ -8,6 +8,6 @@ end
     @test CausalSetZoology.minkowski_interval_abundance_2d_inclusive_asymptotic(1, 10) == 10.0
     v = CausalSetZoology.minkowski_interval_abundance_2d_inclusive_asymptotic(3, 100)
     @test isfinite(v)
-    @test_throws AssertionError CausalSetZoology.minkowski_interval_abundance_2d_inclusive_asymptotic(0, 10)
-    @test_throws AssertionError CausalSetZoology.minkowski_interval_abundance_2d_inclusive_asymptotic(2, 0)
+    @test_throws ArgumentError CausalSetZoology.minkowski_interval_abundance_2d_inclusive_asymptotic(0, 10)
+    @test_throws ArgumentError CausalSetZoology.minkowski_interval_abundance_2d_inclusive_asymptotic(2, 0)
 end

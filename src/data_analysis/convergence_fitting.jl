@@ -21,7 +21,7 @@ Compute σ_k(N) for increasing sample size N and (optionally) averaged bins.
 - `bin_average`: Bin selection or binning control parameter.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function compute_sigma_evolution(
     X::AbstractMatrix{<:Real};
@@ -29,8 +29,12 @@ function compute_sigma_evolution(
     bin_average::Int = 1,
 )::Tuple{Vector{Int}, Matrix{Float64}}
 
-    @assert batchsize ≥ 1
-    @assert bin_average ≥ 1
+    if batchsize < 1
+        throw(ArgumentError("batchsize must be >= 1, got $batchsize"))
+    end
+    if bin_average < 1
+        throw(ArgumentError("bin_average must be >= 1, got $bin_average"))
+    end
 
     Nsamples, nbins = size(X)
 
@@ -90,7 +94,7 @@ Compute μₖ(N) (cumulative means) over sample size N.
 - `bin_average`: Bin selection or binning control parameter.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function compute_mu_evolution(
     X::AbstractMatrix{<:Real};
@@ -98,8 +102,12 @@ function compute_mu_evolution(
     bin_average::Int = 1,
 )::Tuple{Vector{Int}, Matrix{Float64}}
 
-    @assert batchsize ≥ 1
-    @assert bin_average ≥ 1
+    if batchsize < 1
+        throw(ArgumentError("batchsize must be >= 1, got $batchsize"))
+    end
+    if bin_average < 1
+        throw(ArgumentError("bin_average must be >= 1, got $bin_average"))
+    end
 
     Nsamples, nbins = size(X)
 
@@ -164,7 +172,7 @@ Returns `(σinf, α, A, objective)`.
 - `result::NamedTuple`: Output of `fit_sigma_infty_alpha` with type annotation `NamedTuple`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fit_sigma_infty_alpha(
     σn::AbstractVector{<:Real},
@@ -275,7 +283,7 @@ Returns `(μinf, β, B, objective)`.
 - `result::NamedTuple`: Output of `fit_mu_infty_beta` with type annotation `NamedTuple`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fit_mu_infty_beta(
     μn::AbstractVector{<:Real},
@@ -380,7 +388,7 @@ Returns a NamedTuple with fields:
 - `result`: Output of `fit_sigma_convergence` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fit_sigma_convergence(
     X::AbstractMatrix{<:Real};
@@ -489,7 +497,7 @@ Returns a NamedTuple with fields:
 - `result`: Output of `fit_mu_convergence` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fit_mu_convergence(
     X::AbstractMatrix{<:Real};

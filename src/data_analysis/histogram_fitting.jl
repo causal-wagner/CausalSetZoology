@@ -59,7 +59,7 @@ provided and `minimize_χ²=true`, weighted residuals are used (optionally via
 - `n_boot`: Numeric control parameter for fitting, binning, or Monte Carlo/permutation resolution.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fit_curve(
     y_values::Vector{Float64},
@@ -89,7 +89,9 @@ function fit_curve(
     end
 
     if !isnothing(stds)
-        @assert length(stds) == length(y_values) "stds length must match y_values length"
+        if !(length(stds) == length(y_values))
+            throw(ArgumentError("stds length must match y_values length"))
+        end
         stds = replace_zeros(stds; ϵ = ϵ)
         bad = (.!isfinite.(stds)) .| (stds .<= 0)
         if any(bad)
@@ -100,12 +102,15 @@ function fit_curve(
             stds[bad] .= fillval
         end
     else
-        @assert !minimize_χ² "minimize_χ² requires stds to be provided"
+        if !(!minimize_χ²)
+            throw(ArgumentError("minimize_χ² requires stds to be provided"))
+        end
     end
 
     p = length(param_syms)
-    @assert multistart ≥ 1 "multistart must be ≥ 1"
-
+    if !(multistart ≥ 1)
+        throw(ArgumentError("multistart must be ≥ 1"))
+    end
     to_vec(nt::NamedTuple) = [getfield(nt, s) for s in param_syms]
     to_nt(v::AbstractVector) = NamedTuple{param_syms}(Tuple(v))
 
@@ -121,7 +126,9 @@ function fit_curve(
             lower, upper = bounds
             lower_vec = to_vec(lower)
             upper_vec = to_vec(upper)
-            @assert length(lower_vec) == p && length(upper_vec) == p "bounds length must match param_syms"
+            if !(length(lower_vec) == p && length(upper_vec) == p)
+                throw(ArgumentError("bounds length must match param_syms"))
+            end
             bounds_vec = (lower_vec, upper_vec)
         else
             error("bounds must be a tuple (lower, upper)")
@@ -363,7 +370,7 @@ to the bin interval `[bin_lo, bin_hi]`, then forwards all fitting options to
 - `result`: Output of `fit_histogram_bins` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function fit_histogram_bins(
     y_values::Vector{Float64},
@@ -388,16 +395,22 @@ function fit_histogram_bins(
     verbose_step::Union{Nothing,Int} = nothing,
     return_cov::Bool = false,
 )
-    @assert 1 <= bin_lo <= bin_hi <= length(y_values) "bin range out of bounds"
+    if !(1 <= bin_lo <= bin_hi <= length(y_values))
+        throw(ArgumentError("bin range out of bounds"))
+    end
     if !isnothing(stds)
-        @assert length(stds) == length(y_values) "stds length must match y_values length"
+        if !(length(stds) == length(y_values))
+            throw(ArgumentError("stds length must match y_values length"))
+        end
         stds_slice = stds[bin_lo:bin_hi]
     else
         stds_slice = nothing
     end
 
     xs = if x_values !== nothing
-        @assert length(x_values) >= bin_hi "x_values length must be larger than bin_hi"
+        if !(length(x_values) >= bin_hi)
+            throw(ArgumentError("x_values length must be larger than bin_hi"))
+        end
         x_values[bin_lo:bin_hi]
     else
         collect(bin_lo:bin_hi)

@@ -35,9 +35,9 @@ Compute convergence of histogram standard deviations.
 - `magnification`: Keyword option `magnification` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
-function convergence_plots_std_change(
+- `BoundsError`: Raised when `bin_plot` is outside the valid bin range.
+- `DomainError`: Raised when no valid bin fits are available for plotting."""
+function convergence_plots_std_change( # can maybe be removed
     hists::Vector{<:AbstractDict};
     batchsize::Int = 1,
     bin_average::Int = 1,
@@ -136,7 +136,7 @@ function convergence_plots_std_change(
     ylim2 !== nothing && CairoMakie.ylims!(ax2, ylim2...)
 
     # Add a colorbar legend for sample size N
-    Colorbar(fig[1:2, 2];
+    CairoMakie.Colorbar(fig[1:2, 2];
         colormap = cmap,
         limits = (Ns_min, Ns_max),
         label = "sample size"
@@ -203,8 +203,8 @@ showing σ(N) and fitted envelope for that bin.
 - `result::CairoMakie.Figure`: Output of `plot_alpha_bins` with type annotation `CairoMakie.Figure`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `BoundsError`: Raised when `bin_plot` is outside the valid bin range.
+- `DomainError`: Raised when no valid bin fits are available for plotting."""
 function plot_alpha_bins(
     X::AbstractMatrix{<:Real};
     batchsize::Int = 1,
@@ -312,8 +312,9 @@ function plot_alpha_bins(
         end
     end
 
-    @assert !isempty(αs) "No bins with valid α fits"
-
+    if isempty(αs)
+        throw(DomainError((N0 = N0, flag_zero_frac = flag_zero_frac), "No bins with valid α fits after filtering"))
+    end
     # --- theme -------------------------------------------------------------
     figsize = apply_paper_theme!(
         double_column = double_column,
@@ -410,12 +411,17 @@ function plot_alpha_bins(
     end
 
     if bin_plot !== nothing
-        @assert 1 <= bin_plot <= nbins_orig "bin_plot out of range"
+        if !(1 <= bin_plot <= nbins_orig)
+            throw(BoundsError(Base.OneTo(nbins_orig), bin_plot))
+        end
         bin_plot_avg = bin_average == 1 ? bin_plot : cld(bin_plot, bin_average)
-        @assert 1 <= bin_plot_avg <= length(bin_fits) "bin_plot out of range"
+        if !(1 <= bin_plot_avg <= length(bin_fits))
+            throw(BoundsError(Base.OneTo(length(bin_fits)), bin_plot_avg))
+        end
         fit = bin_fits[bin_plot_avg]
-        @assert fit !== missing "bin_plot has no valid fit"
-
+        if fit === missing
+            throw(DomainError(bin_plot, "bin_plot has no valid α fit"))
+        end
         σn = view(σ, :, bin_plot_avg)
         mask = isfinite.(σn)
         if N0 !== nothing
@@ -519,8 +525,8 @@ showing μ(N) and fitted envelope for that bin.
 - `result::CairoMakie.Figure`: Output of `plot_beta_bins` with type annotation `CairoMakie.Figure`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `BoundsError`: Raised when `bin_plot` is outside the valid bin range.
+- `DomainError`: Raised when no valid bin fits are available for plotting."""
 function plot_beta_bins(
     X::AbstractMatrix{<:Real};
     batchsize::Int = 1,
@@ -629,8 +635,9 @@ function plot_beta_bins(
         end
     end
 
-    @assert !isempty(βs) "No bins with valid β fits"
-
+    if isempty(βs)
+        throw(DomainError((N0 = N0, flag_zero_frac = flag_zero_frac), "No bins with valid β fits after filtering"))
+    end
     figsize = apply_paper_theme!(
         double_column = double_column,
         magnification = magnification,
@@ -724,12 +731,17 @@ function plot_beta_bins(
     end
 
     if bin_plot !== nothing
-        @assert 1 <= bin_plot <= nbins_orig "bin_plot out of range"
+        if !(1 <= bin_plot <= nbins_orig)
+            throw(BoundsError(Base.OneTo(nbins_orig), bin_plot))
+        end
         bin_plot_avg = bin_average == 1 ? bin_plot : cld(bin_plot, bin_average)
-        @assert 1 <= bin_plot_avg <= length(bin_fits) "bin_plot out of range"
+        if !(1 <= bin_plot_avg <= length(bin_fits))
+            throw(BoundsError(Base.OneTo(length(bin_fits)), bin_plot_avg))
+        end
         fit = bin_fits[bin_plot_avg]
-        @assert fit !== missing "bin_plot has no valid fit"
-
+        if fit === missing
+            throw(DomainError(bin_plot, "bin_plot has no valid β fit"))
+        end
         μn = view(μ, :, bin_plot_avg)
         mask = isfinite.(μn)
         if N0 !== nothing

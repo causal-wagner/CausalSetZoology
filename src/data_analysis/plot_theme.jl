@@ -18,7 +18,7 @@ major-tick pattern.
 - `result`: Output of `_logticks_internal` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function _logticks_internal(lo::Real, hi::Real; base::Real = 10.0)
     lo <= 0 && throw(ArgumentError("logticks requires lo > 0"))
@@ -119,7 +119,7 @@ Return logarithmic major ticks and labels for the interval `[lo, hi]`.
 - `base`: Keyword option `base` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function logticks(lo::Real, hi::Real; base::Real = 10.0)
     ticks, labels, _ = _logticks_internal(lo, hi; base = base)
@@ -149,7 +149,7 @@ See the primary method `logticks(lo, hi; base)` for the major-tick selection.
 - `result`: Output of `logminorticks` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function logminorticks(lo::Real, hi::Real; base::Real = 10.0)
     ticks, _, kind = _logticks_internal(lo, hi; base = base)
@@ -209,7 +209,7 @@ for logarithmic axes.
 - `result`: Output of `function` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function CairoMakie.Makie.get_minor_tickvalues(
     ::typeof(logminorticks),
@@ -268,7 +268,7 @@ recommended figure size in pixels.
 - `color_transparency`: Keyword option `color_transparency` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
+- `ArgumentError`: Raised when explicit input preconditions fail.
 - `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
 function apply_paper_theme!(;
     double_column::Bool = false,
@@ -362,7 +362,9 @@ function apply_paper_theme!(;
     xticks !== nothing && (axis_kwargs = merge(axis_kwargs, (xticks = xticks,)))
     yticks !== nothing && (axis_kwargs = merge(axis_kwargs, (yticks = yticks,)))
 
-    @assert 0.0 <= color_transparency <= 1.0
+    if !(0.0 <= color_transparency <= 1.0)
+        throw(ArgumentError("assertion failed: 0.0 <= color_transparency <= 1.0"))
+    end
     base_colors = [
         Colors.colorant"#F1C21B",  # IBM Yellow
         Colors.colorant"#D12771",  # IBM Magenta

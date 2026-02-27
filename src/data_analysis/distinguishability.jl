@@ -7,17 +7,16 @@ Relative change between two positive scalars: |a-b|/(a+b).
 - `a`: Input parameter `a` used by this method.
 - `b`: Input parameter `b` used by this method.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result::Float64`: Output of `relative_change` with type annotation `Float64`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised for out-of-range numeric parameters.
+"""
 function relative_change(a::Real, b::Real)::Float64
-    @assert a > 0 && b > 0 "relative_change requires positive scalars"
+    if !(a > 0 && b > 0)
+        throw(DomainError((a, b), "relative_change requires positive scalars"))
+    end
     return abs(a - b) / (a + b)
 end
 
@@ -33,15 +32,12 @@ If `bin_edges` is provided, uses those edges; otherwise computes edges from the 
 - `num_bins`: Bin selection or binning control parameter.
 - `bin_edges`: Bin selection or binning control parameter.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `bin_scalar_pairs` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised for out-of-range numeric parameters.
+"""
 function bin_scalar_pairs(
     pairs::Vector{Tuple{T,Real}},
     num_bins::Union{Nothing,Int} = nothing,
@@ -51,7 +47,9 @@ function bin_scalar_pairs(
 
     scalars = [s for (_, s) in pairs]
     if num_bins !== nothing
-        @assert num_bins ≥ 1 "num_bins must be >= 1"
+        if !(num_bins ≥ 1)
+            throw(DomainError(num_bins, "num_bins must be >= 1"))
+        end
     end
     if num_bins !== nothing && bin_edges === nothing
         vmin, vmax = minimum(scalars), maximum(scalars)
@@ -79,6 +77,100 @@ function bin_scalar_pairs(
     return [(k, groups[k]) for k in keys_sorted]
 end
 
+struct _ScalarBinContext{T,S<:Real}
+    pairs::Vector{Tuple{T,Real}}
+    bins::Vector{Tuple{S,Vector{T}}}
+end
+
+function _normalize_scalar_pairs(pairs_raw::AbstractVector)
+    p1 = pairs_raw[1]
+    has_scalar_second = p1[2] isa Real
+    has_scalar_first = p1[1] isa Real
+    if !(has_scalar_second || has_scalar_first)
+        throw(TypeError(:distinguishability, "pair scalar slot", Real, p1))
+    end
+    if has_scalar_second
+        Tval = typeof(p1[1])
+        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
+        for (i, (v, s)) in enumerate(pairs_raw)
+            if !(s isa Real)
+                throw(TypeError(:distinguishability, "scalar", Real, s))
+            end
+            pairs[i] = (v, s)
+        end
+        return pairs
+    end
+    Tval = typeof(p1[2])
+    pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
+    for (i, (s, v)) in enumerate(pairs_raw)
+        if !(s isa Real)
+            throw(TypeError(:distinguishability, "scalar", Real, s))
+        end
+        pairs[i] = (v, s)
+    end
+    return pairs
+end
+
+function _prepare_scalar_bin_context(
+    data::AbstractVector{<:AbstractVector},
+    caller::AbstractString;
+    num_bins::Union{Nothing,Int} = nothing,
+    ref::Union{Nothing,AbstractVector} = nothing,
+)
+    if !(length(data) == 1)
+        throw(DimensionMismatch("$caller expects one dataset (one path), got length(data)=$(length(data))"))
+    end
+    pairs_raw = data[1]
+    if isempty(pairs_raw)
+        throw(ArgumentError("dataset must be non-empty"))
+    end
+    if ref !== nothing && isempty(ref)
+        throw(ArgumentError("reference set must be non-empty"))
+    end
+
+    pairs = _normalize_scalar_pairs(pairs_raw)
+    scalars = [s for (_, s) in pairs]
+    bin_edges = nothing
+    if num_bins !== nothing
+        vmin, vmax = minimum(scalars), maximum(scalars)
+        if vmin == vmax
+            bin_edges = [vmin, vmax + 1e-12]
+        else
+            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
+        end
+    end
+    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
+    return _ScalarBinContext(pairs, bins)
+end
+
+function _map_scalar_bin_pairs(compute::F, bins::AbstractVector) where {F<:Function}
+    out = Vector{NamedTuple}()
+    for i in 1:length(bins)
+        s1, vals1 = bins[i]
+        for j in (i + 1):length(bins)
+            s2, vals2 = bins[j]
+            push!(out, compute(s1, vals1, s2, vals2))
+        end
+    end
+    return out
+end
+
+function _map_scalar_bin_pairs(bins::AbstractVector, compute::F) where {F<:Function}
+    return _map_scalar_bin_pairs(compute, bins)
+end
+
+function _map_scalar_bin_reference(compute::F, bins::AbstractVector) where {F<:Function}
+    out = Vector{NamedTuple}()
+    for (s, vals) in bins
+        push!(out, compute(s, vals))
+    end
+    return out
+end
+
+function _map_scalar_bin_reference(bins::AbstractVector, compute::F) where {F<:Function}
+    return _map_scalar_bin_reference(compute, bins)
+end
+
 """
     scalar_bin_distinguishability(data::Vector{Vector{Tuple{T,Real}}}; num_bins=nothing)
 
@@ -98,60 +190,19 @@ Returns a vector of `(s1, s2, rel_change, D)`.
 - `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}};
     num_bins::Union{Nothing,Int} = nothing,
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
+    ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability"; num_bins = num_bins)
+    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
+        res = histogram_distinguishability(vals1, vals2)
+        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D)
     end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for i in 1:length(bins)
-        s1, vals1 = bins[i]
-        for j in (i + 1):length(bins)
-            s2, vals2 = bins[j]
-            res = histogram_distinguishability(vals1, vals2)
-            push!(out, (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D))
-        end
-    end
-    return out
 end
 
 """
@@ -175,62 +226,21 @@ adds uncertainty output: each result has fields
 - `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     num_draws::Int;
     num_bins::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
+    ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability"; num_bins = num_bins)
+    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
+        res = histogram_distinguishability(vals1, vals2, num_draws; rng = rng)
+        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D, std = res.std)
     end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for i in 1:length(bins)
-        s1, vals1 = bins[i]
-        for j in (i + 1):length(bins)
-            s2, vals2 = bins[j]
-            res = histogram_distinguishability(vals1, vals2, num_draws; rng = rng)
-            push!(out, (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D, std = res.std))
-        end
-    end
-    return out
 end
 
 """
@@ -252,58 +262,25 @@ returns `(scalar, D)` entries.
 - `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector;
     num_bins::Union{Nothing,Int} = nothing,
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-    @assert !isempty(ref) "reference set must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for (s, vals) in bins
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_distinguishability";
+        num_bins = num_bins,
+        ref = ref,
+    )
+    return _map_scalar_bin_reference(ctx.bins) do s, vals
         res = histogram_distinguishability(vals, ref)
-        push!(out, (scalar = s, D = res.D))
+        (scalar = s, D = res.D)
     end
-    return out
 end
 
 """
@@ -327,8 +304,10 @@ This overload uses Monte Carlo distinguishability with `num_draws` and returns
 - `result`: Output of `scalar_bin_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector,
@@ -336,51 +315,16 @@ function scalar_bin_distinguishability(
     num_bins::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-    @assert !isempty(ref) "reference set must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for (s, vals) in bins
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_distinguishability";
+        num_bins = num_bins,
+        ref = ref,
+    )
+    return _map_scalar_bin_reference(ctx.bins) do s, vals
         res = histogram_distinguishability(vals, ref, num_draws; rng = rng)
-        push!(out, (scalar = s, D = res.D, std = res.std))
+        (scalar = s, D = res.D, std = res.std)
     end
-    return out
 end
 
 """
@@ -401,62 +345,21 @@ Permutation-test version of `scalar_bin_distinguishability`. Returns a vector of
 - `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}};
     num_bins::Union{Nothing,Int} = nothing,
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability_permutation expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
+    ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability_permutation"; num_bins = num_bins)
+    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
+        res = histogram_distinguishability_permutation(vals1, vals2; n_perm = n_perm, rng = rng)
+        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
     end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for i in 1:length(bins)
-        s1, vals1 = bins[i]
-        for j in (i + 1):length(bins)
-            s2, vals2 = bins[j]
-            res = histogram_distinguishability_permutation(vals1, vals2; n_perm = n_perm, rng = rng)
-            push!(out, (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts))
-        end
-    end
-    return out
 end
 
 """
@@ -480,8 +383,10 @@ permutation test and returns the same fields.
 - `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}},
     num_draws::Int;
@@ -489,54 +394,11 @@ function scalar_bin_distinguishability_permutation(
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability_permutation expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
+    ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability_permutation"; num_bins = num_bins)
+    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
+        res = histogram_distinguishability_permutation(vals1, vals2, num_draws; n_perm = n_perm, rng = rng)
+        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
     end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for i in 1:length(bins)
-        s1, vals1 = bins[i]
-        for j in (i + 1):length(bins)
-            s2, vals2 = bins[j]
-            res = histogram_distinguishability_permutation(vals1, vals2, num_draws; n_perm = n_perm, rng = rng)
-            push!(out, (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts))
-        end
-    end
-    return out
 end
 
 """
@@ -560,8 +422,10 @@ This overload compares each scalar bin to reference sample `ref` and returns
 - `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector;
@@ -569,51 +433,16 @@ function scalar_bin_distinguishability_permutation(
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability_permutation expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-    @assert !isempty(ref) "reference set must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for (s, vals) in bins
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_distinguishability_permutation";
+        num_bins = num_bins,
+        ref = ref,
+    )
+    return _map_scalar_bin_reference(ctx.bins) do s, vals
         res = histogram_distinguishability_permutation(vals, ref; n_perm = n_perm, rng = rng)
-        push!(out, (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts))
+        (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
     end
-    return out
 end
 
 """
@@ -638,8 +467,10 @@ per-bin fields.
 - `result`: Output of `scalar_bin_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_distinguishability_permutation(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector,
@@ -648,51 +479,16 @@ function scalar_bin_distinguishability_permutation(
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 ) where {T}
-    @assert length(data) == 1 "scalar_bin_distinguishability_permutation expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-    @assert !isempty(ref) "reference set must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
-
-    out = Vector{NamedTuple}()
-    for (s, vals) in bins
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_distinguishability_permutation";
+        num_bins = num_bins,
+        ref = ref,
+    )
+    return _map_scalar_bin_reference(ctx.bins) do s, vals
         res = histogram_distinguishability_permutation(vals, ref, num_draws; n_perm = n_perm, rng = rng)
-        push!(out, (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts))
+        (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
     end
-    return out
 end
 
 """
@@ -705,22 +501,63 @@ Assumes `p` and `q` are nonnegative and have equal length.
 - `p`: Input parameter `p` used by this method.
 - `q`: Numeric control parameter for fitting/sampling resolution.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result::Float64`: Output of `hellinger_distance` with type annotation `Float64`.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+"""
 function hellinger_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real})::Float64
-    @assert length(p) == length(q) "Hellinger distance requires equal-length vectors"
+    if !(length(p) == length(q))
+        throw(DimensionMismatch("Hellinger distance requires equal-length vectors"))
+    end
     s = 0.0
     @inbounds for i in eachindex(p, q)
         s += (sqrt(p[i]) - sqrt(q[i]))^2
     end
     return sqrt(s / 2)
+end
+
+function _prepare_vectors_for_distance(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}},
+)
+    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
+    pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
+    A = [pad_to(v, maxlen) for v in vecs_a]
+    B = [pad_to(v, maxlen) for v in vecs_b]
+
+    max_nonzero = 0
+    for v in A
+        idx = findlast(>(0), v)
+        if idx !== nothing && idx > max_nonzero
+            max_nonzero = idx
+        end
+    end
+    for v in B
+        idx = findlast(>(0), v)
+        if idx !== nothing && idx > max_nonzero
+            max_nonzero = idx
+        end
+    end
+    max_nonzero == 0 && (max_nonzero = maxlen)
+    A = [v[1:max_nonzero] for v in A]
+    B = [v[1:max_nonzero] for v in B]
+    return A, B
+end
+
+function _distance_matrix_exact(vecs::Vector{<:AbstractVector{<:Real}})
+    n = length(vecs)
+    D = Matrix{Float64}(undef, n, n)
+    @inbounds for i in 1:n
+        D[i, i] = 0.0
+    end
+    @inbounds for i in 1:(n - 1), j in (i + 1):n
+        d = hellinger_distance(vecs[i], vecs[j])
+        D[i, j] = d
+        D[j, i] = d
+    end
+    return D
 end
 
 """
@@ -739,21 +576,19 @@ and then trimmed to the maximal nonzero bin of the union.
 - `hists_a`: Histogram input data.
 - `hists_b`: Histogram input data.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `histogram_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
 )
-    @assert !isempty(hists_a) && !isempty(hists_b) "inputs must be non-empty"
-
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
     norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
 
@@ -789,16 +624,17 @@ This overload uses Monte Carlo estimation with `num_draws` and returns
 - `result`: Output of `histogram_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
     num_draws::Int;
     rng = Random.default_rng(),
 )
-    @assert !isempty(hists_a) && !isempty(hists_b) "inputs must be non-empty"
-
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
     norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
 
@@ -825,48 +661,22 @@ This is the exact vector-input implementation (no dict normalization stage).
 - `vecs_a`: Vector-valued input data.
 - `vecs_b`: Vector-valued input data.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `histogram_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
 )
-    @assert !isempty(vecs_a) && !isempty(vecs_b) "inputs must be non-empty"
-
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     n1 = length(vecs_a)
     n2 = length(vecs_b)
-    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
-
-    pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
-    A = [pad_to(v, maxlen) for v in vecs_a]
-    B = [pad_to(v, maxlen) for v in vecs_b]
-
-    # trim to maximal nonzero bin across both sets
-    max_nonzero = 0
-    for v in A
-        idx = findlast(>(0), v)
-        if idx !== nothing && idx > max_nonzero
-            max_nonzero = idx
-        end
-    end
-    for v in B
-        idx = findlast(>(0), v)
-        if idx !== nothing && idx > max_nonzero
-            max_nonzero = idx
-        end
-    end
-    max_nonzero == 0 && (max_nonzero = maxlen)
-    A = [v[1:max_nonzero] for v in A]
-    B = [v[1:max_nonzero] for v in B]
-
-    # energy distance components (exact)
+    A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
     sum_xy = 0.0
     for i in 1:n1, j in 1:n2
         sum_xy += hellinger_distance(A[i], B[j])
@@ -911,43 +721,26 @@ Monte Carlo variant using `num_draws`; returns `(D, std)`.
 - `result`: Output of `histogram_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised for out-of-range numeric parameters.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
     num_draws::Int;
     rng = Random.default_rng(),
 )
-    @assert !isempty(vecs_a) && !isempty(vecs_b) "inputs must be non-empty"
-
-    n1 = length(vecs_a)
-    n2 = length(vecs_b)
-    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
-
-    pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
-    A = [pad_to(v, maxlen) for v in vecs_a]
-    B = [pad_to(v, maxlen) for v in vecs_b]
-
-    # trim to maximal nonzero bin across both sets
-    max_nonzero = 0
-    for v in A
-        idx = findlast(>(0), v)
-        if idx !== nothing && idx > max_nonzero
-            max_nonzero = idx
-        end
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
     end
-    for v in B
-        idx = findlast(>(0), v)
-        if idx !== nothing && idx > max_nonzero
-            max_nonzero = idx
-        end
-    end
-    max_nonzero == 0 && (max_nonzero = maxlen)
-    A = [v[1:max_nonzero] for v in A]
-    B = [v[1:max_nonzero] for v in B]
+    A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
+    n1 = length(A)
+    n2 = length(B)
+    Dmat = _distance_matrix_exact(vcat(A, B))
 
-    @assert num_draws > 0 "num_draws must be positive"
+    if !(num_draws > 0)
+        throw(DomainError(num_draws, "num_draws must be positive"))
+    end
     m = num_draws
 
     dxy = Vector{Float64}(undef, m)
@@ -956,11 +749,11 @@ function histogram_distinguishability(
 
     for t in 1:m
         i = rand(rng, 1:n1); j = rand(rng, 1:n2)
-        dxy[t] = hellinger_distance(A[i], B[j])
+        dxy[t] = Dmat[i, n1 + j]
         i1 = rand(rng, 1:n1); i2 = rand(rng, 1:n1)
-        dxx[t] = hellinger_distance(A[i1], A[i2])
+        dxx[t] = Dmat[i1, i2]
         j1 = rand(rng, 1:n2); j2 = rand(rng, 1:n2)
-        dyy[t] = hellinger_distance(B[j1], B[j2])
+        dyy[t] = Dmat[n1 + j1, n1 + j2]
     end
 
     exy = Statistics.mean(dxy)
@@ -1005,16 +798,17 @@ distinguishability and `z_coll` is the collider-style Z derived from `p_value`.
 - `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability_permutation(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict};
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 )
-    @assert !isempty(hists_a) && !isempty(hists_b) "inputs must be non-empty"
-
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
     norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
 
@@ -1051,8 +845,8 @@ returns the same fields.
 - `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability_permutation(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
@@ -1060,8 +854,9 @@ function histogram_distinguishability_permutation(
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 )
-    @assert !isempty(hists_a) && !isempty(hists_b) "inputs must be non-empty"
-
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
     norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
 
@@ -1096,16 +891,17 @@ This is the vector-input implementation (no dict normalization stage).
 - `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability_permutation(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}};
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 )
-    @assert !isempty(vecs_a) && !isempty(vecs_b) "inputs must be non-empty"
-
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     n1 = length(vecs_a)
     n2 = length(vecs_b)
     n = min(n1, n2)
@@ -1224,8 +1020,9 @@ permutations.
 - `result`: Output of `histogram_distinguishability_permutation` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised for out-of-range numeric parameters.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function histogram_distinguishability_permutation(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -1233,8 +1030,9 @@ function histogram_distinguishability_permutation(
     n_perm::Int = 1000,
     rng = Random.default_rng(),
 )
-    @assert !isempty(vecs_a) && !isempty(vecs_b) "inputs must be non-empty"
-
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     n1 = length(vecs_a)
     n2 = length(vecs_b)
     n = min(n1, n2)
@@ -1245,36 +1043,15 @@ function histogram_distinguishability_permutation(
     idx_a = n1 == n ? collect(1:n1) : sort!(Random.randperm(rng, n1)[1:n])
     idx_b = n2 == n ? collect(1:n2) : sort!(Random.randperm(rng, n2)[1:n])
 
-    A = vecs_a[idx_a]
-    B = vecs_b[idx_b]
-
-    maxlen = maximum(length.(vcat(A, B)))
-    pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
-    Ap = [pad_to(v, maxlen) for v in A]
-    Bp = [pad_to(v, maxlen) for v in B]
-
-    max_nonzero = 0
-    for v in Ap
-        idx = findlast(>(0), v)
-        if idx !== nothing && idx > max_nonzero
-            max_nonzero = idx
-        end
-    end
-    for v in Bp
-        idx = findlast(>(0), v)
-        if idx !== nothing && idx > max_nonzero
-            max_nonzero = idx
-        end
-    end
-    max_nonzero == 0 && (max_nonzero = maxlen)
-    Ap = [v[1:max_nonzero] for v in Ap]
-    Bp = [v[1:max_nonzero] for v in Bp]
-
+    Ap, Bp = _prepare_vectors_for_distance(vecs_a[idx_a], vecs_b[idx_b])
     C = vcat(Ap, Bp)
     n_total = length(C)
     n_per = n
+    Dmat = _distance_matrix_exact(C)
 
-    @assert num_draws > 0 "num_draws must be positive"
+    if !(num_draws > 0)
+        throw(DomainError(num_draws, "num_draws must be positive"))
+    end
     pairs_u = Vector{Int}(undef, num_draws)
     pairs_v = Vector{Int}(undef, num_draws)
     dists = Vector{Float64}(undef, num_draws)
@@ -1287,7 +1064,7 @@ function histogram_distinguishability_permutation(
         end
         pairs_u[k] = i
         pairs_v[k] = j
-        dists[k] = hellinger_distance(C[i], C[j])
+        dists[k] = Dmat[i, j]
     end
 
     labels_obs = vcat(fill(true, n_per), fill(false, n_per))
@@ -1364,8 +1141,8 @@ delegates to the vector implementation.
 - `result`: Output of `mahalanobis_gap_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function mahalanobis_gap_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict};
@@ -1381,7 +1158,9 @@ function mahalanobis_gap_distinguishability(
     stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
 )
-    @assert !isempty(hists_a) && !isempty(hists_b) "inputs must be non-empty"
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
     norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
 
@@ -1430,8 +1209,8 @@ vectors-of-vectors to the corresponding concrete method.
 - `result`: Output of `mahalanobis_gap_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function mahalanobis_gap_distinguishability(
     vals_a::AbstractVector,
     vals_b::AbstractVector;
@@ -1447,8 +1226,9 @@ function mahalanobis_gap_distinguishability(
     stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
 )
-    @assert !isempty(vals_a) && !isempty(vals_b) "inputs must be non-empty"
-
+    if !(!isempty(vals_a) && !isempty(vals_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
     if all(v -> v isa AbstractDict, vals_a) && all(v -> v isa AbstractDict, vals_b)
         hists_a = AbstractDict[v for v in vals_a]
         hists_b = AbstractDict[v for v in vals_b]
@@ -1486,7 +1266,7 @@ function mahalanobis_gap_distinguishability(
             projection_tolerance = projection_tolerance,
         )
     else
-        error("mahalanobis_gap_distinguishability expects vectors of dicts or vectors of numeric vectors.")
+        throw(ArgumentError("mahalanobis_gap_distinguishability expects vectors of dicts or vectors of numeric vectors"))
     end
 end
 
@@ -1506,12 +1286,8 @@ Tuple `(A, B)` where both entries are `Vector{Vector{Float64}}`.
 - `vecs_a`: Vector-valued input data.
 - `vecs_b`: Vector-valued input data.
 
-# Keyword Arguments
-- This method has no keyword arguments.
 
-# Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+"""
 function _prepare_vectors_for_mahalanobis(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
@@ -1567,8 +1343,10 @@ the stabilized inverse covariance action to deviation vector `d`.
 - `rank_tol`: Keyword option `rank_tol` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised when `stabilization_method` is not one of `:regularization` or `:projection`.
+- `DomainError`: Raised when covariance stabilization cannot produce a usable inverse under the chosen settings.
+
+"""
 function _fit_reference(
     B::Vector{Vector{Float64}},
     regulator::Float64;
@@ -1597,7 +1375,7 @@ function _fit_reference(
         evecs = eig.vectors
         keep = evals .> projection_tolerance
         if !any(keep)
-            error("All eigenvalues below projection_tolerance; cannot form pseudoinverse.")
+            throw(DomainError(projection_tolerance, "All eigenvalues are below projection_tolerance; cannot form pseudoinverse"))
         end
         if verbose
             println("Projection kept directions: $(count(keep))/$d (tol=$(projection_tolerance))")
@@ -1611,12 +1389,12 @@ function _fit_reference(
         Sigma_reg = Sigma + regulator * LinearAlgebra.I
         F = LinearAlgebra.cholesky(LinearAlgebra.Symmetric(Sigma_reg); check = false)
         if !LinearAlgebra.issuccess(F)
-            error("Covariance matrix not invertible. Increase regularization (regulator > 0) or use stabilization_method = :projection.")
+            throw(DomainError(regulator, "Covariance matrix not invertible; increase regulator or use stabilization_method = :projection"))
         end
         inv_mul = dvec -> F \ dvec
         return mu, inv_mul
     else
-        error("Unknown stabilization_method: $stabilization_method. Use :regularization or :projection.")
+        throw(ArgumentError("Unknown stabilization_method=$stabilization_method. Use :regularization or :projection"))
     end
 end
 
@@ -1633,15 +1411,10 @@ the inverse covariance action provided by `inv_mul`.
 - `mu`: Input parameter `mu` used by this method.
 - `inv_mul`: Input parameter `inv_mul` used by this method.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `_mahal_sigmas` as described in the summary above.
 
-# Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+"""
 function _mahal_sigmas(
     X::Vector{Vector{Float64}},
     mu::Vector{Float64},
@@ -1668,20 +1441,41 @@ the empirical `q`-quantile.
 - `sigmas`: Input parameter `sigmas` used by this method.
 - `q`: Numeric control parameter for fitting/sampling resolution.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `_summary_stat` as described in the summary above.
 
-# Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+"""
 function _summary_stat(sigmas::Vector{Float64}, q::Float64)
     if q == 0.0
         return minimum(sigmas)
+    elseif q == 1.0
+        return maximum(sigmas)  
     end
     return Statistics.quantile(sigmas, q)
+end
+
+function _mahal_resample_once(
+    seed::UInt64,
+    X::Vector{Vector{Float64}},
+    regulator::Float64,
+    q::Float64,
+    stabilization_method::Symbol,
+    projection_tolerance::Float64,
+    verbose::Bool,
+    rank_tol::Float64,
+)
+    rng_r = Random.Xoshiro(seed)
+    X1, X2 = _random_split_equal(X, rng_r)
+    mu2, inv2 = _fit_reference(
+        X2,
+        regulator;
+        stabilization_method = stabilization_method,
+        projection_tolerance = projection_tolerance,
+        verbose = verbose,
+        rank_tol = rank_tol,
+    )
+    sig1 = _mahal_sigmas(X1, mu2, inv2)
+    return _summary_stat(sig1, q)
 end
 
 """
@@ -1694,19 +1488,18 @@ halves of size `length(B) ÷ 2` (dropping one element if odd).
 - `B`: Input parameter `B` used by this method.
 - `rng`: Random number generator used for stochastic steps.
 
-# Keyword Arguments
-- This method has no keyword arguments.
-
 # Returns
 - `result`: Output of `_random_split_equal` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised for out-of-range numeric parameters.
+"""
 function _random_split_equal(B::Vector{Vector{Float64}}, rng)
     n = length(B)
     n2 = n ÷ 2
-    @assert n2 >= 1 "need at least 2 samples to split"
+    if !(n2 >= 1)
+        throw(DomainError(n2, "need at least 2 samples to split"))
+    end
     perm = Random.randperm(rng, n)
     B1 = B[perm[1:n2]]
     B2 = B[perm[(n2 + 1):(2 * n2)]]
@@ -1748,8 +1541,9 @@ Named tuple
 - `projection_tolerance`: Keyword option `projection_tolerance` controlling this method's behavior.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised for out-of-range numeric parameters.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function mahalanobis_gap_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}};
@@ -1765,13 +1559,24 @@ function mahalanobis_gap_distinguishability(
     stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
 )
-    @assert !isempty(vecs_a) && !isempty(vecs_b) "inputs must be non-empty"
-    @assert R > 0 "R must be positive"
-    @assert num_workers >= 1 "num_workers must be >= 1"
-    @assert 0.0 <= q <= 1.0 "q must be in [0,1]"
-    @assert 0.0 <= alpha < 1.0 "alpha must be in [0,1)"
-    @assert regulator >= 0.0 "regulator must be nonnegative"
-
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
+    if !(R > 0)
+        throw(DomainError(R, "R must be positive"))
+    end
+    if !(num_workers >= 1)
+        throw(DomainError(num_workers, "num_workers must be >= 1"))
+    end
+    if !(0.0 <= q <= 1.0)
+        throw(DomainError(q, "q must be in [0,1]"))
+    end
+    if !(0.0 <= alpha < 1.0)
+        throw(DomainError(alpha, "alpha must be in [0,1)"))
+    end
+    if !(regulator >= 0.0)
+        throw(DomainError(regulator, "regulator must be nonnegative"))
+    end
     A, B = _prepare_vectors_for_mahalanobis(vecs_a, vecs_b)
 
     muB, invB = _fit_reference(
@@ -1804,20 +1609,6 @@ function mahalanobis_gap_distinguishability(
 
     S_base = Vector{Float64}(undef, R)
     seeds = rand(rng, UInt64, R)
-    run_one = function (seed::UInt64, X::Vector{Vector{Float64}})
-        rng_r = Random.Xoshiro(seed)
-        X1, X2 = _random_split_equal(X, rng_r)
-        mu2, inv2 = _fit_reference(
-            X2,
-            regulator;
-            stabilization_method = stabilization_method,
-            projection_tolerance = projection_tolerance,
-            verbose = verbose,
-            rank_tol = rank_tol,
-        )
-        sig1 = _mahal_sigmas(X1, mu2, inv2)
-        return _summary_stat(sig1, q)
-    end
 
     workers_to_use = Int[]
     added_workers = Int[]
@@ -1836,14 +1627,8 @@ function mahalanobis_gap_distinguishability(
             workers_to_use = Distributed.workers()[1:min(num_workers, Distributed.nworkers())]
             if !isempty(workers_to_use)
                 @info "Using Distributed workers for mahalanobis resampling" workers = length(workers_to_use)
-                utils_file = @__FILE__
                 for w in workers_to_use
-                    Distributed.remotecall_wait(w) do
-                        if !isdefined(Main, :mahalanobis_gap_distinguishability)
-                            include(utils_file)
-                        end
-                        nothing
-                    end
+                    Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
                 end
                 use_distributed = true
             end
@@ -1856,26 +1641,76 @@ function mahalanobis_gap_distinguishability(
     try
         if use_distributed
             pool = Distributed.CachingPool(workers_to_use)
-            S_base .= Distributed.pmap(seed -> run_one(seed, B), pool, seeds)
+            exprs = [
+                quote
+                    rng_r = CausalSetZoology.Random.Xoshiro($(seeds[r]))
+                    X1, X2 = CausalSetZoology._random_split_equal($(B), rng_r)
+                    mu2, inv2 = CausalSetZoology._fit_reference(
+                        X2,
+                        $(regulator);
+                        stabilization_method = $(QuoteNode(stabilization_method)),
+                        projection_tolerance = $(projection_tolerance),
+                        verbose = $(verbose),
+                        rank_tol = $(rank_tol),
+                    )
+                    sig1 = CausalSetZoology._mahal_sigmas(X1, mu2, inv2)
+                    CausalSetZoology._summary_stat(sig1, $(q))
+                end for r in eachindex(seeds)
+            ]
+            S_base .= Distributed.pmap(Core.eval, pool, fill(Main, length(exprs)), exprs)
         else
             @inbounds for r in 1:R
-                S_base[r] = run_one(seeds[r], B)
+                S_base[r] = _mahal_resample_once(
+                    seeds[r],
+                    B,
+                    regulator,
+                    q,
+                    stabilization_method,
+                    projection_tolerance,
+                    verbose,
+                    rank_tol,
+                )
             end
         end
 
-        threshold = alpha == 0.0 ? maximum(S_base) : Statistics.quantile(S_base, 1 - alpha)
+        threshold = _summary_stat(S_base, 1 - alpha)
         if symmetric
             S_base_sym = Vector{Float64}(undef, R)
             seeds_sym = rand(rng, UInt64, R)
             if use_distributed
                 pool = Distributed.CachingPool(workers_to_use)
-                S_base_sym .= Distributed.pmap(seed -> run_one(seed, A), pool, seeds_sym)
+                exprs_sym = [
+                    quote
+                        rng_r = CausalSetZoology.Random.Xoshiro($(seeds_sym[r]))
+                        X1, X2 = CausalSetZoology._random_split_equal($(A), rng_r)
+                        mu2, inv2 = CausalSetZoology._fit_reference(
+                            X2,
+                            $(regulator);
+                            stabilization_method = $(QuoteNode(stabilization_method)),
+                            projection_tolerance = $(projection_tolerance),
+                            verbose = $(verbose),
+                            rank_tol = $(rank_tol),
+                        )
+                        sig1 = CausalSetZoology._mahal_sigmas(X1, mu2, inv2)
+                        CausalSetZoology._summary_stat(sig1, $(q))
+                    end for r in eachindex(seeds_sym)
+                ]
+                S_base_sym .= Distributed.pmap(Core.eval, pool, fill(Main, length(exprs_sym)), exprs_sym)
             else
                 @inbounds for r in 1:R
-                    S_base_sym[r] = run_one(seeds_sym[r], A)
+                    S_base_sym[r] = _mahal_resample_once(
+                        seeds_sym[r],
+                        A,
+                        regulator,
+                        q,
+                        stabilization_method,
+                        projection_tolerance,
+                        verbose,
+                        rank_tol,
+                    )
                 end
             end
-            threshold_sym = alpha == 0.0 ? maximum(S_base_sym) : Statistics.quantile(S_base_sym, 1 - alpha)
+            threshold_sym = _summary_stat(S_base_sym, 1 - alpha)
         end
 
         if symmetric
@@ -1933,8 +1768,10 @@ Bin-pair version: compare every bin to every other bin. Returns a vector of
 - `result`: Output of `scalar_bin_mahalanobis_gap_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_mahalanobis_gap_distinguishability(
     data::AbstractVector{<:AbstractVector};
     num_bins::Union{Nothing,Int} = nothing,
@@ -1952,43 +1789,12 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     progress::Bool = false,
     progress_step::Union{Nothing,Int} = nothing,
 )
-    @assert length(data) == 1 "scalar_bin_mahalanobis_gap_distinguishability expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_mahalanobis_gap_distinguishability";
+        num_bins = num_bins,
+    )
+    bins = ctx.bins
 
     n_bins = length(bins)
     total = n_bins * (n_bins - 1) ÷ 2
@@ -2026,14 +1832,8 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             workers_to_use = Distributed.workers()[1:min(num_workers, Distributed.nworkers())]
             if !isempty(workers_to_use)
                 @info "Using Distributed workers for scalar-bin pair resampling" workers = length(workers_to_use)
-                utils_file = @__FILE__
                 for w in workers_to_use
-                    Distributed.remotecall_wait(w) do
-                        if !isdefined(Main, :scalar_bin_mahalanobis_gap_distinguishability)
-                            include(utils_file)
-                        end
-                        nothing
-                    end
+                    Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
                 end
                 use_distributed = true
             end
@@ -2128,8 +1928,10 @@ instead of comparing all bin pairs.
 - `result`: Output of `scalar_bin_mahalanobis_gap_distinguishability` as described in the summary above.
 
 # Throws
-- `AssertionError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised for incompatible input sizes or expected dataset counts.
+- `TypeError`: Raised when value types do not match required contracts.
+- `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
+"""
 function scalar_bin_mahalanobis_gap_distinguishability(
     data::AbstractVector{<:AbstractVector},
     ref::AbstractVector;
@@ -2148,44 +1950,13 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     progress::Bool = false,
     progress_step::Union{Nothing,Int} = nothing,
 )
-    @assert length(data) == 1 "scalar_bin_mahalanobis_gap_distinguishability expects one dataset (one path)"
-    pairs_raw = data[1]
-    @assert !isempty(pairs_raw) "dataset must be non-empty"
-    @assert !isempty(ref) "reference set must be non-empty"
-
-    # normalize to (value, scalar) with scalar::Real
-    p1 = pairs_raw[1]
-    has_scalar_second = p1[2] isa Real
-    has_scalar_first = p1[1] isa Real
-    @assert has_scalar_second || has_scalar_first "could not find scalar in pair"
-    if has_scalar_second
-        Tval = typeof(p1[1])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (v, s)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    else
-        Tval = typeof(p1[2])
-        pairs = Vector{Tuple{Tval,Real}}(undef, length(pairs_raw))
-        for (i, (s, v)) in enumerate(pairs_raw)
-            @assert s isa Real "scalar must be Real"
-            pairs[i] = (v, s)
-        end
-    end
-
-    scalars = [s for (_, s) in pairs]
-    bin_edges = nothing
-    if num_bins !== nothing
-        vmin, vmax = minimum(scalars), maximum(scalars)
-        if vmin == vmax
-            bin_edges = [vmin, vmax + 1e-12]
-        else
-            bin_edges = collect(range(vmin, vmax; length = num_bins + 1))
-        end
-    end
-
-    bins = bin_scalar_pairs(pairs, num_bins, bin_edges)
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_mahalanobis_gap_distinguishability";
+        num_bins = num_bins,
+        ref = ref,
+    )
+    bins = ctx.bins
 
     total = length(bins)
     seeds = rand(rng, UInt64, total)
@@ -2214,14 +1985,8 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             workers_to_use = Distributed.workers()[1:min(num_workers, Distributed.nworkers())]
             if !isempty(workers_to_use)
                 @info "Using Distributed workers for scalar-bin reference resampling" workers = length(workers_to_use)
-                utils_file = @__FILE__
                 for w in workers_to_use
-                    Distributed.remotecall_wait(w) do
-                        if !isdefined(Main, :scalar_bin_mahalanobis_gap_distinguishability)
-                            include(utils_file)
-                        end
-                        nothing
-                    end
+                    Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
                 end
                 use_distributed = true
             end

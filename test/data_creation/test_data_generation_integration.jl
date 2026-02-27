@@ -30,8 +30,9 @@
             length(αin) >= min_points && break
         end
         length(αin) >= min_points || error("Could not build large-enough quasicrystal sample for tests.")
-        @assert length(αin) == length(αout)
-
+        if !(length(αin) == length(αout))
+            throw(ArgumentError("assertion failed: length(αin) == length(αout)"))
+        end
         tmp = mktempdir()
         path = joinpath(tmp, "test_quasicrystal.jld2")
         JLD2.jldopen(path, "w") do f
