@@ -10,12 +10,14 @@ end
 
 
 @testitem "distinguishability: relative_change" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: relative_change behavior and output contract.
     @test CausalSetZoology.relative_change(2.0, 4.0) ≈ 1 / 3
     @test CausalSetZoology.relative_change(3.0, 3.0) == 0.0
 end
 
 
 @testitem "distinguishability: bin_scalar_pairs" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: bin_scalar_pairs behavior and output contract.
     pairs = Tuple{Vector{Float64},Real}[([1.0], 1.0), ([2.0], 2.0), ([3.0], 2.0)]
 
     exact_bins = CausalSetZoology.bin_scalar_pairs(pairs, nothing, nothing)
@@ -34,6 +36,7 @@ end
 
 
 @testitem "distinguishability helpers: typed scalar pairs" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: typed scalar pairs behavior and output contract.
     pairs_vs = Any[(Float64[1.0], 1.0), (Float64[2.0], 2.0)]
     out_vs = CausalSetZoology._typed_scalar_pairs(pairs_vs)
     @test out_vs == Tuple{Vector{Float64},Float64}[(Float64[1.0], 1.0), (Float64[2.0], 2.0)]
@@ -44,6 +47,7 @@ end
 
 
 @testitem "distinguishability helpers: typed scalar pairs validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: typed scalar pairs validation behavior and output contract.
     bad_slot = Any[("x", "y"), ("u", "v")]
     bad_scalar = Any[(Float64[0.0], 1.0), (Float64[1.0], "bad")]
     @test_throws TypeError CausalSetZoology._typed_scalar_pairs(bad_slot)
@@ -52,6 +56,7 @@ end
 
 
 @testitem "distinguishability helpers: prepare scalar bin context" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: prepare scalar bin context behavior and output contract.
     data = [Any[
         (Float64[0.0], 1.0), (Float64[0.1], 1.0),
         (Float64[1.0], 2.0), (Float64[1.1], 2.0),
@@ -72,6 +77,7 @@ end
 
 
 @testitem "distinguishability helpers: prepare scalar bin context validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: prepare scalar bin context validation behavior and output contract.
     data = [Any[(Float64[0.0], 1.0)]]
     @test_throws DimensionMismatch CausalSetZoology._prepare_scalar_bin_context(vcat(data, data), "ctx")
     @test_throws ArgumentError CausalSetZoology._prepare_scalar_bin_context([Any[]], "ctx")
@@ -81,6 +87,7 @@ end
 
 
 @testitem "distinguishability helpers: map scalar-bin pairs" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: map scalar-bin pairs behavior and output contract.
     bins = [(1.0, [Float64[0.0], Float64[0.1]]), (2.0, [Float64[1.0]]), (3.0, [Float64[2.0]])]
     compute = (s1, v1, s2, v2) -> (s1 = s1, s2 = s2, n1 = length(v1), n2 = length(v2))
 
@@ -93,6 +100,7 @@ end
 
 
 @testitem "distinguishability helpers: map scalar-bin reference" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: map scalar-bin reference behavior and output contract.
     bins = [(1.0, [Float64[0.0], Float64[0.1]]), (2.0, [Float64[1.0]])]
     compute = (s, v) -> (scalar = s, n = length(v))
 
@@ -102,6 +110,7 @@ end
 
 
 @testitem "distinguishability: scalar_bin_distinguishability wrappers" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distinguishability wrappers behavior and output contract.
     rng = Random.Xoshiro(5353)
     data = [Tuple{Vector{Float64},Real}[
         ([0.0], 1.0), ([0.1], 1.0), ([0.2], 1.0), ([0.3], 1.0),
@@ -135,6 +144,7 @@ end
 
 
 @testitem "distinguishability: scalar_bin_distinguishability_permutation wrappers" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distinguishability_permutation wrappers behavior and output contract.
     rng = Random.Xoshiro(1234)
     data = [Tuple{Vector{Float64},Real}[
         ([0.0], 1.0), ([0.1], 1.0), ([0.2], 1.0), ([0.3], 1.0),
@@ -169,6 +179,7 @@ end
 
 
 @testitem "distinguishability: scalar_bin_distinguishability validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distinguishability validation behavior and output contract.
     rng = Random.Xoshiro(1234)
     data = [Tuple{Vector{Float64},Real}[([0.0], 1.0), ([1.0], 2.0)]]
     ref_empty = Vector{Vector{Float64}}()
@@ -178,6 +189,7 @@ end
 end
 
 @testitem "distinguishability: scalar_bin_distinguishability reference validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distinguishability reference validation behavior and output contract.
     rng = Random.Xoshiro(1234)
     data = [Tuple{Vector{Float64},Real}[([0.0], 1.0), ([1.0], 2.0)]]
     ref_empty = Vector{Vector{Float64}}()
@@ -187,6 +199,7 @@ end
 end
 
 @testitem "distinguishability: scalar_bin_distinguishability_permutation validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distinguishability_permutation validation behavior and output contract.
     rng = Random.Xoshiro(1234)
     data = [Tuple{Vector{Float64},Real}[([0.0], 1.0), ([1.0], 2.0)]]
     ref_empty = Vector{Vector{Float64}}()
@@ -199,12 +212,14 @@ end
 
 
 @testitem "distinguishability: hellinger_distance" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: hellinger_distance behavior and output contract.
     @test CausalSetZoology.hellinger_distance([1.0, 0.0], [1.0, 0.0]) ≈ 0.0 atol = 1e-12
     @test CausalSetZoology.hellinger_distance([1.0, 0.0], [0.0, 1.0]) ≈ 1.0 atol = 1e-12
 end
 
 
 @testitem "distinguishability helpers: prepare vectors for distance" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: prepare vectors for distance behavior and output contract.
     a = [[1.0, 0.0], [0.5]]
     b = [[0.2], [0.0, 0.0, 0.1]]
     A, B = CausalSetZoology._prepare_vectors_for_distance(a, b)
@@ -217,6 +232,7 @@ end
 
 
 @testitem "distinguishability helpers: distance matrix exact" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: distance matrix exact behavior and output contract.
     vecs = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
     D = CausalSetZoology._distance_matrix_exact(vecs)
     @test size(D) == (3, 3)
@@ -228,6 +244,7 @@ end
 
 
 @testitem "distinguishability: basic helper validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: basic helper validation behavior and output contract.
     pairs = Tuple{Vector{Float64},Real}[([1.0], 1.0), ([2.0], 2.0)]
     @test_throws DomainError CausalSetZoology.relative_change(0.0, 1.0)
     @test_throws DomainError CausalSetZoology.bin_scalar_pairs(pairs, 0, nothing)
@@ -236,6 +253,7 @@ end
 
 
 @testitem "distinguishability: histogram_distinguishability vectors" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: histogram_distinguishability vectors behavior and output contract.
     rng = Random.Xoshiro(123)
     a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05]]
     b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95]]
@@ -253,6 +271,7 @@ end
 
 
 @testitem "distinguishability: histogram_distinguishability histograms" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: histogram_distinguishability histograms behavior and output contract.
     h_a = [Dict(1 => 10, 2 => 0), Dict(1 => 9, 2 => 1)]
     h_b = [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9)]
 
@@ -266,6 +285,7 @@ end
 
 
 @testitem "distinguishability: histogram_distinguishability validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: histogram_distinguishability validation behavior and output contract.
     a = [[1.0, 0.0], [0.9, 0.1]]
     b = [[0.0, 1.0], [0.1, 0.9]]
     h_b = [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9)]
@@ -276,6 +296,7 @@ end
 
 
 @testitem "distinguishability: histogram permutation vectors" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: histogram permutation vectors behavior and output contract.
     rng = Random.Xoshiro(7)
     a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05], [0.85, 0.15]]
     b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95], [0.15, 0.85]]
@@ -298,6 +319,7 @@ end
 
 
 @testitem "distinguishability: histogram permutation histograms" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: histogram permutation histograms behavior and output contract.
     h_a = [Dict(1 => 10, 2 => 0), Dict(1 => 9, 2 => 1), Dict(1 => 8, 2 => 2)]
     h_b = [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9), Dict(1 => 2, 2 => 8)]
 
@@ -310,6 +332,7 @@ end
 
 
 @testitem "distinguishability: histogram permutation validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: histogram permutation validation behavior and output contract.
     rng = Random.Xoshiro(7)
     a = [[1.0, 0.0], [0.9, 0.1]]
     b = [[0.0, 1.0], [0.1, 0.9]]
@@ -319,6 +342,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis core histogram overload" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis core histogram overload behavior and output contract.
     h_a = [Dict(1 => 3, 2 => 1), Dict(1 => 4, 2 => 2), Dict(1 => 2, 2 => 2), Dict(1 => 5, 2 => 1), Dict(1 => 4, 2 => 1), Dict(1 => 3, 2 => 2)]
     h_b = [Dict(1 => 0, 2 => 4), Dict(1 => 1, 2 => 3), Dict(1 => 0, 2 => 5), Dict(1 => 2, 2 => 2), Dict(1 => 1, 2 => 4), Dict(1 => 2, 2 => 3)]
     res_h = CausalSetZoology.mahalanobis_gap_distinguishability(h_a, h_b; R = 30, rng = Random.Xoshiro(99), regulator = 1e-8)
@@ -327,6 +351,7 @@ end
 
 
 @testitem "distinguishability: _prepare_vectors_for_mahalanobis" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: _prepare_vectors_for_mahalanobis behavior and output contract.
     A, B = CausalSetZoology._prepare_vectors_for_mahalanobis([[1.0, 0.0], [0.5]], [[0.2, 0.0], [0.1, 0.0, 0.0]])
     @test all(length(v) == 1 for v in vcat(A, B))
     @test A == [[1.0], [0.5]]
@@ -339,6 +364,7 @@ end
 
 
 @testitem "distinguishability: _fit_reference" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: _fit_reference behavior and output contract.
     Bref = [[0.0, 0.0], [0.1, 0.2], [0.2, 0.4], [0.3, 0.6], [0.4, 0.8]]
     mu, inv_mul = CausalSetZoology._fit_reference(Bref, 1e-6)
     @test length(mu) == 2
@@ -375,6 +401,7 @@ end
 
 
 @testitem "distinguishability: _mahal_sigmas" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: _mahal_sigmas behavior and output contract.
     X = [[1.0, 2.0], [3.0, 4.0]]
     mu = [1.0, 1.0]
     inv_mul_id = d -> d
@@ -403,6 +430,7 @@ end
 
 
 @testitem "distinguishability: _summary_stat" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: _summary_stat behavior and output contract.
     x = [1.0, 2.0, 3.0, 4.0]
     @test CausalSetZoology._summary_stat(x, 0.0) == 1.0
     @test CausalSetZoology._summary_stat(x, 0.25) == Statistics.quantile(x, 0.25)
@@ -412,6 +440,7 @@ end
 
 
 @testitem "distinguishability helpers: mahalanobis resampling serial and chunk" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: mahalanobis resampling serial and chunk behavior and output contract.
     X = [[0.0], [0.1], [0.2], [0.3], [0.4], [0.5]]
     seeds = UInt64[11, 22, 33, 44]
     args = (seeds, X, 1e-8, 0.0, :regularization, 1e-10, false, 1e-12)
@@ -430,6 +459,7 @@ end
 
 
 @testitem "distinguishability helpers: mahalanobis resampling distributed" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: mahalanobis resampling distributed behavior and output contract.
     n_before = Distributed.nworkers()
     let added = Int[]
         try
@@ -468,12 +498,14 @@ end
 
 
 @testitem "distinguishability helpers: mahalanobis resampling validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: mahalanobis resampling validation behavior and output contract.
     X = [[0.0], [0.1], [0.2], [0.3]]
     @test_throws ArgumentError CausalSetZoology._mahal_resample_once(UInt64(1), X, 0.0, 0.0, :bad_method, 1e-10, false, 1e-12)
 end
 
 
 @testitem "distinguishability: _random_split_equal" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: _random_split_equal behavior and output contract.
     B = [[0.0], [0.1], [0.2], [0.3]]
     b1, b2 = CausalSetZoology._random_split_equal(B, Random.Xoshiro(22))
     @test length(b1) == 2
@@ -494,6 +526,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis helper validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis helper validation behavior and output contract.
     @test_throws DomainError CausalSetZoology._random_split_equal([[0.0]], Random.Xoshiro(1))
 
     Bref = [[0.0, 0.0], [0.1, 0.2], [0.2, 0.4], [0.3, 0.6], [0.4, 0.8]]
@@ -506,6 +539,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis core contract and analytic M_obs" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis core contract and analytic M_obs behavior and output contract.
     b = [[0.0], [1.0], [2.0], [3.0]]
     a_far = [[10.0], [11.0], [12.0], [13.0]]
     reg = 1e-8
@@ -535,6 +569,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis core reproducibility" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis core reproducibility behavior and output contract.
     b = [[0.0], [1.0], [2.0], [3.0]]
     a_far = [[10.0], [11.0], [12.0], [13.0]]
     reg = 1e-8
@@ -562,6 +597,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis core q and alpha behavior" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis core q and alpha behavior behavior and output contract.
     b = [[0.0], [1.0], [2.0], [3.0]]
     a_far = [[10.0], [11.0], [12.0], [13.0]]
     reg = 1e-8
@@ -605,6 +641,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis core symmetric mode" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis core symmetric mode behavior and output contract.
     b = [[0.0], [1.0], [2.0], [3.0]]
     a_far = [[10.0], [11.0], [12.0], [13.0]]
     reg = 1e-8
@@ -630,6 +667,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis core near vs far" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis core near vs far behavior and output contract.
     b = [[0.0], [1.0], [2.0], [3.0]]
     a_far = [[10.0], [11.0], [12.0], [13.0]]
     reg = 1e-8
@@ -660,6 +698,7 @@ end
 
 
 @testitem "distinguishability: distributed mahalanobis path" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: distributed mahalanobis path behavior and output contract.
     n_before = Distributed.nworkers()
     let added = Int[]
         try
@@ -709,6 +748,7 @@ end
 end
 
 @testitem "distinguishability: scalar_bin_mahalanobis wrappers" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_mahalanobis wrappers behavior and output contract.
     rng = Random.Xoshiro(5353)
     data = [Tuple{Vector{Float64},Real}[
         ([0.0], 1.0), ([0.1], 1.0), ([0.2], 1.0), ([0.3], 1.0),
@@ -730,6 +770,7 @@ end
 
 
 @testitem "distinguishability: mahalanobis wrapper validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis wrapper validation behavior and output contract.
     a = [[3.0], [2.9], [3.1], [3.2]]
     b = [[0.0], [0.1], [-0.1], [0.2]]
     rng = Random.Xoshiro(99)

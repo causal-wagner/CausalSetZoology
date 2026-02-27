@@ -18,6 +18,7 @@
 end
 
 @testitem "convergence_plotting: std-change structure and metadata" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: std-change structure and metadata behavior and output contract.
     hists = [
         Dict(1 => 1.0, 2 => 2.0),
         Dict(1 => 2.0, 2 => 1.0),
@@ -47,6 +48,7 @@ end
 end
 
 @testitem "convergence_plotting: std-change bin-averaged labeling" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: std-change bin-averaged labeling behavior and output contract.
     hists = [
         Dict(1 => 1.0, 2 => 2.0, 3 => 1.0),
         Dict(1 => 1.5, 2 => 2.5, 3 => 1.2),
@@ -59,6 +61,7 @@ end
 end
 
 @testitem "convergence_plotting: alpha bins structure" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: alpha bins structure behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
 
     fig = CausalSetZoology.plot_alpha_bins(X; batchsize = 1, legend = true, plot_mean = true)
@@ -75,6 +78,7 @@ end
 end
 
 @testitem "convergence_plotting: alpha plot_mean changes plotted content" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: alpha plot_mean changes plotted content behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
 
     fig_no_mean = CausalSetZoology.plot_alpha_bins(X; batchsize = 1, plot_mean = false)
@@ -86,6 +90,7 @@ end
 end
 
 @testitem "convergence_plotting: alpha bin-specific overlay adds second axis" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: alpha bin-specific overlay adds second axis behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
 
     fig = CausalSetZoology.plot_alpha_bins(X; batchsize = 1, N0 = 2.0, bin_plot = 1)
@@ -99,6 +104,7 @@ end
 end
 
 @testitem "convergence_plotting: beta bins structure" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: beta bins structure behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
 
     fig = CausalSetZoology.plot_beta_bins(X; batchsize = 1, legend = true, plot_mean = true)
@@ -115,6 +121,7 @@ end
 end
 
 @testitem "convergence_plotting: beta plot_mean changes plotted content" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: beta plot_mean changes plotted content behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
 
     fig_no_mean = CausalSetZoology.plot_beta_bins(X; batchsize = 1, plot_mean = false)
@@ -126,6 +133,7 @@ end
 end
 
 @testitem "convergence_plotting: beta bin-specific overlay adds second axis" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: beta bin-specific overlay adds second axis behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
 
     fig = CausalSetZoology.plot_beta_bins(X; batchsize = 1, N0 = 2.0, bin_plot = 1)
@@ -139,12 +147,14 @@ end
 end
 
 @testitem "convergence_plotting: invalid bin_plot throws" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: invalid bin_plot throws behavior and output contract.
     X = [1.0 2.0; 2.0 2.5; 2.5 3.0; 3.0 3.5; 3.2 3.8]
     @test_throws BoundsError CausalSetZoology.plot_alpha_bins(X; batchsize = 1, bin_plot = 99)
     @test_throws BoundsError CausalSetZoology.plot_beta_bins(X; batchsize = 1, bin_plot = 99)
 end
 
 @testitem "convergence_plotting: domain errors for missing fits" setup=[setupConvergencePlotting] begin
+    # Test intent: validate convergence_plotting: domain errors for missing fits behavior and output contract.
     # With only two samples, no bin has enough points for convergence fits.
     X_short = [1.0 2.0; 2.0 3.0]
     @test_throws DomainError CausalSetZoology.plot_alpha_bins(X_short; batchsize = 1)

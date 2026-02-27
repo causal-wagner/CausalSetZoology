@@ -7,6 +7,7 @@
 end
 
 @testitem "convergence_fitting: sigma/mu evolution" setup=[setupConvergenceFitting] begin
+    # Test intent: validate convergence_fitting: sigma/mu evolution behavior and output contract.
     X = [1.0 2.0; 2.0 3.0; 3.0 4.0; 4.0 5.0]
 
     Ns, σ = CausalSetZoology.compute_sigma_evolution(X; batchsize = 1, bin_average = 1)
@@ -34,6 +35,7 @@ end
 end
 
 @testitem "convergence_fitting: sigma infty/alpha fit" setup=[setupConvergenceFitting] begin
+    # Test intent: validate convergence_fitting: sigma infty/alpha fit behavior and output contract.
     ns = Float64.(1:10)
     σinf_true = 1.0
     α_true = 0.5
@@ -75,6 +77,7 @@ end
 end
 
 @testitem "convergence_fitting: mu infty/beta fit" setup=[setupConvergenceFitting] begin
+    # Test intent: validate convergence_fitting: mu infty/beta fit behavior and output contract.
     ns = Float64.(1:10)
     μinf_true = 3.0
     β_true = 0.7
@@ -114,6 +117,7 @@ end
 end
 
 @testitem "convergence_fitting: convergence wrappers" setup=[setupConvergenceFitting] begin
+    # Test intent: validate convergence_fitting: convergence wrappers behavior and output contract.
     X = [1.0 2.0; 2.0 3.0; 3.0 4.0; 4.0 5.0]
 
     sc = CausalSetZoology.fit_sigma_convergence(X; batchsize = 1)
@@ -132,6 +136,7 @@ end
 end
 
 @testitem "convergence_fitting: validation errors" setup=[setupConvergenceFitting] begin
+    # Test intent: validate convergence_fitting: validation errors behavior and output contract.
     X = [1.0 2.0; 2.0 3.0; 3.0 4.0; 4.0 5.0]
     @test_throws ArgumentError CausalSetZoology.compute_sigma_evolution(X; batchsize = 0)
     @test_throws ArgumentError CausalSetZoology.compute_mu_evolution(X; bin_average = 0)

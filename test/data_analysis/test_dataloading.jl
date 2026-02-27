@@ -67,6 +67,7 @@
 end
 
 @testitem "dataloading helpers: running moments" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: running moments behavior and output contract.
     m = CausalSetZoology._RunningMoments()
     μ0, σ0 = CausalSetZoology._mean_std(m)
     @test isnan(μ0)
@@ -82,6 +83,7 @@ end
 end
 
 @testitem "dataloading helpers: scan config and keep_sample" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: scan config and keep_sample behavior and output contract.
     c_int = CausalSetZoology._scan_config(2)
     @test c_int.step == 2
     @test c_int.offset == 0
@@ -103,6 +105,7 @@ end
 end
 
 @testitem "dataloading helpers: filter normalization" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: filter normalization behavior and output contract.
     paths = ["a", "b"]
     fs = CausalSetZoology._normalize_filters(paths, nothing)
     @test fs == [nothing, nothing]
@@ -113,6 +116,7 @@ end
 end
 
 @testitem "dataloading helpers: scan_records" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: scan_records behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     seen_scores = Float64[]
@@ -125,6 +129,7 @@ end
 end
 
 @testitem "dataloading helpers: extraction and column helpers" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: extraction and column helpers behavior and output contract.
     x = _DLRec(Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0)
     @test CausalSetZoology._extract_field_value(x, :score) == 1.0
     @test CausalSetZoology._extract_field_value(x, (:in_degree_hist_link, 1)) == 1.0
@@ -140,6 +145,7 @@ end
 end
 
 @testitem "dataloading: load_and_average_std_scalar grouped" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_and_average_std_scalar grouped behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     avs = CausalSetZoology.load_and_average_std_scalar([p1], [:score], :scalar)
@@ -153,6 +159,7 @@ end
 end
 
 @testitem "dataloading: load_and_average_std_scalar grouped validation" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_and_average_std_scalar grouped validation behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     @test_throws DomainError CausalSetZoology.load_and_average_std_scalar([p1], [:score], :scalar; num_bins = 0)
@@ -160,6 +167,7 @@ end
 end
 
 @testitem "dataloading: load_histograms_from_paths plain" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_histograms_from_paths plain behavior and output contract.
     p1, p2 = _make_dl_fixture()
 
     h = CausalSetZoology.load_histograms_from_paths([p1, p2], :in_degree_hist_link)
@@ -170,6 +178,7 @@ end
 end
 
 @testitem "dataloading: load_histograms_from_paths scalar" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_histograms_from_paths scalar behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     hs = CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link, :scalar)
@@ -181,6 +190,7 @@ end
 end
 
 @testitem "dataloading: load_histograms filtering and thinning" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_histograms filtering and thinning behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     filt = Union{Nothing,Function}[x -> x.score > 1.5]
@@ -195,6 +205,7 @@ end
 end
 
 @testitem "dataloading: load_histograms validation" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_histograms validation behavior and output contract.
     p1, _ = _make_dl_fixture()
     pbad = _make_dl_bad_scalar_fixture()
 
@@ -212,6 +223,7 @@ end
 end
 
 @testitem "dataloading: densify_hists values" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: densify_hists values behavior and output contract.
     dense = CausalSetZoology.densify_hists([Dict(0 => 1.0, 2 => 2.0), Dict(1 => 1.0)])
     @test size(dense) == (2, 3)
     @test dense[1, :] == [1.0, 0.0, 2.0]
@@ -223,10 +235,12 @@ end
 end
 
 @testitem "dataloading: densify_hists empty throws" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: densify_hists empty throws behavior and output contract.
     @test_throws ArgumentError CausalSetZoology.densify_hists(Dict{Int,Float64}[])
 end
 
 @testitem "dataloading: join_histograms plain" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: join_histograms plain behavior and output contract.
     h1 = [
         [Dict(1 => 1, 2 => 2), Dict(1 => 3)],
         [Dict(1 => 4), Dict(2 => 5)],
@@ -246,6 +260,7 @@ end
 end
 
 @testitem "dataloading: join_histograms scalar" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: join_histograms scalar behavior and output contract.
     hs1 = [[(Dict(1 => 1.0), 10.0), (Dict(2 => 2.0), 20.0)]]
     hs2 = [[(Dict(1 => 3.0, 2 => 1.0), 10.0), (Dict(2 => 4.0), 20.0)]]
 
@@ -260,6 +275,7 @@ end
 end
 
 @testitem "dataloading: join_histograms shape validation" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: join_histograms shape validation behavior and output contract.
     plain_a = [[Dict(1 => 1)::Dict]]
     plain_b_bad_groups = [[Dict(1 => 2)::Dict], [Dict(1 => 3)::Dict]]
     @test_throws DimensionMismatch CausalSetZoology.join_histograms(Vector{Vector{Vector{Dict}}}([plain_a, plain_b_bad_groups]))
@@ -274,6 +290,7 @@ end
 end
 
 @testitem "dataloading helpers: field extractor planning" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: field extractor planning behavior and output contract.
     fields = Union{Symbol,Tuple{Symbol,Int64}}[:score, (:in_degree_hist_link, 1), :scalar]
     symbol_specs, hist_specs = CausalSetZoology._split_field_specs(fields)
     @test symbol_specs == [(1, :score), (3, :scalar)]
@@ -293,6 +310,7 @@ end
 end
 
 @testitem "dataloading helpers: low-level loaders" setup=[setupDataloading] begin
+    # Test intent: validate dataloading helpers: low-level loaders behavior and output contract.
     p1, _ = _make_dl_fixture()
     pbad = _make_dl_bad_scalar_fixture()
 
@@ -317,6 +335,7 @@ end
 end
 
 @testitem "dataloading: load_fields_from_paths plain" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_fields_from_paths plain behavior and output contract.
     p1, _ = _make_dl_fixture()
     fields = Union{Symbol,Tuple{Symbol,Int64}}[:score, (:in_degree_hist_link, 1)]
 
@@ -325,6 +344,7 @@ end
 end
 
 @testitem "dataloading: load_fields_from_paths scalar" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_fields_from_paths scalar behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     fs = CausalSetZoology.load_fields_from_paths([p1], [:score], :scalar)
@@ -333,6 +353,7 @@ end
 end
 
 @testitem "dataloading: load_fields_from_paths validation" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_fields_from_paths validation behavior and output contract.
     p1, _ = _make_dl_fixture()
     pbad = _make_dl_bad_scalar_fixture()
     fields = Union{Symbol,Tuple{Symbol,Int64}}[:score, (:in_degree_hist_link, 1)]
@@ -351,6 +372,7 @@ end
 end
 
 @testitem "dataloading: load_field_with_scalar" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_field_with_scalar behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     one_sym = CausalSetZoology.load_field_with_scalar([p1], :score, :scalar)
@@ -361,6 +383,7 @@ end
 end
 
 @testitem "dataloading: load_field_with_scalar validation" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_field_with_scalar validation behavior and output contract.
     p1, _ = _make_dl_fixture()
     pbad = _make_dl_bad_scalar_fixture()
 
@@ -370,6 +393,7 @@ end
 end
 
 @testitem "dataloading: load_and_average_std_scalar plain" setup=[setupDataloading] begin
+    # Test intent: validate dataloading: load_and_average_std_scalar plain behavior and output contract.
     p1, _ = _make_dl_fixture()
 
     av = CausalSetZoology.load_and_average_std_scalar([p1], [:score])
