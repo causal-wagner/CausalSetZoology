@@ -4,7 +4,11 @@
 
     function _run_capture(cmd::Cmd)
         out = Pipe()
-        proc = run(pipeline(ignorestatus(cmd), stdout = out, stderr = out); wait = false)
+        sep = Sys.iswindows() ? ";" : ":"
+        base_lp = get(ENV, "JULIA_LOAD_PATH", "@")
+        lp = occursin("@stdlib", base_lp) ? base_lp : string(base_lp, sep, "@stdlib")
+        cmd_env = setenv(cmd, Dict("JULIA_LOAD_PATH" => lp))
+        proc = run(pipeline(ignorestatus(cmd_env), stdout = out, stderr = out); wait = false)
         close(out.in)
         text = read(out, String)
         wait(proc)

@@ -376,7 +376,8 @@ end
     X = reduce(vcat, permutedims.(Bref))
     Σ = Statistics.cov(X; dims = 1)
     y_expected = (Σ + 1e-6 * LinearAlgebra.I) \ d
-    @test y ≈ y_expected atol = 1e-6
+    # Cholesky solve can differ at ~1e-6 across BLAS/LAPACK backends (local vs CI).
+    @test y ≈ y_expected atol = 5e-6 rtol = 1e-12
 
     mu_p, inv_mul_p = CausalSetZoology._fit_reference(
         Bref,

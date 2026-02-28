@@ -16,7 +16,8 @@
     root_dir = normpath(joinpath(@__DIR__, "..", ".."))
     src_project = joinpath(root_dir, "src")
     test_project = joinpath(root_dir, "test")
-    scripts_load_path = test_project * ":" * src_project * ":@stdlib"
+    sep = Sys.iswindows() ? ";" : ":"
+    scripts_load_path = test_project * sep * src_project * sep * "@stdlib"
 
     dataset_seq_script = joinpath(root_dir, "src", "data_generation", "make_analysis_dataset_sequential.jl")
     stats_script = joinpath(root_dir, "src", "data_generation", "make_analysis_statistics.jl")
