@@ -28,29 +28,10 @@ jobs:
       - name: Cache Julia artifacts
         uses: julia-actions/cache@v2
 
-      - name: Instantiate src environment
+      - name: Instantiate test environment
         shell: bash
-        run: julia --project=src -e 'using Pkg; Pkg.instantiate()'
+        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
 
-      - name: Parse Julia sources (syntax smoke test)
+      - name: Run tests
         shell: bash
-        run: |
-          julia --project=src -e '
-            roots = ["src", "analysis", "test"]
-            for root in roots
-              isdir(root) || continue
-              for (dir, _, files) in walkdir(root)
-                for file in files
-                  endswith(file, ".jl") || continue
-                  path = joinpath(dir, file)
-                  src = read(path, String)
-                  Meta.parseall(src)
-                  println("parsed ", path)
-                end
-              end
-            end
-          '
-
-      - name: Project smoke check
-        shell: bash
-        run: julia --project=src -e 'include("src/make_analysis_dataset_sequential.jl"); println("ok")'
+        run: julia --project=test test/runtests.jl
