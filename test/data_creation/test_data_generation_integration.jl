@@ -54,7 +54,8 @@
 
     function _patched_seq_script_for_quasicrystal(quasicrystal_file::String)
         src = read(dataset_seq_script, String)
-        patched = replace(src, quasicrystal_path_literal => quasicrystal_file)
+        # Replace the full quoted literal so Windows backslashes are escaped correctly.
+        patched = replace(src, "\"$quasicrystal_path_literal\"" => repr(quasicrystal_file))
         tmp = mktempdir()
         script_path = joinpath(tmp, "make_analysis_dataset_sequential_quasicrystal_test.jl")
         write(script_path, patched)
