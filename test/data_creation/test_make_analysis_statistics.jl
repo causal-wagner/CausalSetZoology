@@ -20,7 +20,11 @@
 
     function _run_capture(cmd::Cmd)
         out = Pipe()
-        proc = run(pipeline(ignorestatus(cmd), stdout = out, stderr = out); wait = false)
+        cmd_env = setenv(
+            cmd,
+            "JULIA_LOAD_PATH" => get(ENV, "JULIA_LOAD_PATH", "@:@stdlib") * ":@stdlib",
+        )
+        proc = run(pipeline(ignorestatus(cmd_env), stdout = out, stderr = out); wait = false)
         close(out.in)
         text = read(out, String)
         wait(proc)
