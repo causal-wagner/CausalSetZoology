@@ -1,3 +1,181 @@
+function validate_series_meta_lengths(n::Int, hist_labels, plot_types)
+    if hist_labels !== nothing && length(hist_labels) != n
+        throw(ArgumentError("hist_labels and data must have same length"))
+    end
+    if plot_types !== nothing && length(plot_types) != n
+        throw(ArgumentError("plot_types and data must have same length"))
+    end
+    return nothing
+end
+
+function create_hist_axis(;
+    xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    logscale_x::Bool = false,
+    logscale_y::Bool = false,
+    plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    legendpos = :rt,
+    legendpadding = nothing,
+    legendmargin = nothing,
+    n_Legend_columns::Int = 1,
+)
+    figsize = apply_paper_theme!(
+        double_column = double_column,
+        magnification = magnification,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        legendpos = legendpos,
+        legendpadding = legendpadding,
+        legendmargin = legendmargin,
+        n_Legend_columns = n_Legend_columns,
+    )
+    fig = CairoMakie.Figure(size = figsize)
+    ax = CairoMakie.Axis(
+        fig[1, 1];
+        xscale = logscale_x ? log10 : identity,
+        yscale = logscale_y ? log10 : identity,
+    )
+    ax.ylabel = ylabel === nothing ? "count" : ylabel
+    ax.xlabel = xlabel === nothing ? LaTeXStrings.L"n" : xlabel
+    plotlabel !== nothing && (ax.title = plotlabel)
+    xlim !== nothing && CairoMakie.xlims!(ax, xlim...)
+    ylim !== nothing && CairoMakie.ylims!(ax, ylim...)
+    return fig, ax
+end
+
+function compute_log_eps_from_means(all_means, ylim, logscale_y::Bool)
+    if !logscale_y
+        return -Inf
+    end
+    if ylim !== nothing
+        return ylim[1] * 1e-3
+    end
+    positives = [v for mean in all_means for v in mean if v > 0]
+    if isempty(positives)
+        throw(DomainError(logscale_y, "logscale_y=true requires at least one positive mean value"))
+    end
+    return minimum(positives) * 1e-3
+end
+
+function prepare_plot_series(mean, std, logscale_y::Bool, eps)
+    if length(mean) != length(std)
+        throw(ArgumentError("mean and std vectors must have equal length"))
+    end
+    x = collect(1:length(mean))
+    ylo = mean .- std
+    yhi = mean .+ std
+    if logscale_y
+        mask = mean .> 0
+        x = x[mask]
+        mean = mean[mask]
+        ylo = max.(ylo[mask], eps)
+        yhi = max.(yhi[mask], eps)
+    end
+    return x, mean, ylo, yhi
+end
+
+function draw_series!(
+    ax,
+    x,
+    mean,
+    ylo,
+    yhi,
+    color,
+    plot_type::Symbol;
+    plot_std::Bool = true,
+    label = nothing,
+    linewidth::Union{Nothing,Real} = nothing,
+    markersize::Union{Nothing,Real} = nothing,
+)
+    if plot_type == :line
+        plot_std && CairoMakie.band!(ax, x, ylo, yhi; color = (color, 0.2))
+        if label === nothing
+            isnothing(linewidth) ? CairoMakie.lines!(ax, x, mean; color = color) :
+                CairoMakie.lines!(ax, x, mean; color = color, linewidth = linewidth)
+        else
+            isnothing(linewidth) ? CairoMakie.lines!(ax, x, mean; color = color, label = label) :
+                CairoMakie.lines!(ax, x, mean; color = color, linewidth = linewidth, label = label)
+        end
+    elseif plot_type == :scatter
+        if label === nothing
+            isnothing(markersize) ? CairoMakie.scatter!(ax, x, mean; color = color) :
+                CairoMakie.scatter!(ax, x, mean; color = color, markersize = markersize)
+        else
+            isnothing(markersize) ? CairoMakie.scatter!(ax, x, mean; color = color, label = label) :
+                CairoMakie.scatter!(ax, x, mean; color = color, label = label, markersize = markersize)
+        end
+        if plot_std
+            err = mean .- ylo
+            CairoMakie.errorbars!(ax, x, mean, err, err; color = color)
+        end
+    else
+        throw(ArgumentError("plot_types entries must be :line or :scatter"))
+    end
+end
+
+function maybe_add_legend!(ax, hist_labels, legendpos, legendpadding, legendmargin, n_Legend_columns::Int)
+    if hist_labels === nothing
+        return nothing
+    end
+    legend_kwargs = (position = legendpos,)
+    legendpadding !== nothing && (legend_kwargs = merge(legend_kwargs, (padding = legendpadding,)))
+    legendmargin !== nothing && (legend_kwargs = merge(legend_kwargs, (margin = legendmargin,)))
+    n_Legend_columns > 1 && (legend_kwargs = merge(legend_kwargs, (nbanks = n_Legend_columns,)))
+    CairoMakie.axislegend(ax; legend_kwargs...)
+    return nothing
+end
+
+function save_plot_result(plot, fig_name::String, return_axis::Bool)
+    if return_axis
+        fig, _ = plot
+        CairoMakie.save(fig_path(fig_name), fig)
+        return plot
+    end
+    CairoMakie.save(fig_path(fig_name), plot)
+    return plot
+end
+
+function coerce_plain_vector_groups(vectors::AbstractVector)::Union{Nothing,Vector{Vector{AbstractVector}}}
+    isempty(vectors) && return Vector{Vector{AbstractVector}}()
+    groups = Vector{Vector{AbstractVector}}()
+    sizehint!(groups, length(vectors))
+    for group in vectors
+        group isa AbstractVector || return nothing
+        converted = Vector{AbstractVector}()
+        sizehint!(converted, length(group))
+        for sample in group
+            sample isa AbstractVector || return nothing
+            push!(converted, sample)
+        end
+        push!(groups, converted)
+    end
+    return groups
+end
+
+function coerce_scalar_vector_groups(vectors::AbstractVector)::Union{Nothing,Vector{Vector{Tuple{AbstractVector,Real}}}}
+    isempty(vectors) && return Vector{Vector{Tuple{AbstractVector,Real}}}()
+    groups = Vector{Vector{Tuple{AbstractVector,Real}}}()
+    sizehint!(groups, length(vectors))
+    for group in vectors
+        group isa AbstractVector || return nothing
+        converted = Vector{Tuple{AbstractVector,Real}}()
+        sizehint!(converted, length(group))
+        for sample in group
+            sample isa Tuple || return nothing
+            length(sample) == 2 || return nothing
+            sample[1] isa AbstractVector || return nothing
+            sample[2] isa Real || return nothing
+            push!(converted, (sample[1], sample[2]))
+        end
+        push!(groups, converted)
+    end
+    return groups
+end
+
 """
     plot_mean_histograms_with_std(
         data::Vector{Tuple{Vector{Float64},Vector{Float64}}};
@@ -27,7 +205,7 @@ Each element of `data` must be `(mean, std)`, where both are vectors
 defined on the same binning.
 
 # Arguments
-- `data`: Input dataset(s) consumed by this method.
+- `data`: Collection of `(mean, std)` vectors, one per series.
 
 # Keyword Arguments
 - `xlim`: Axis limits for plotting.
@@ -50,11 +228,11 @@ defined on the same binning.
 - `return_axis`: Boolean toggle controlling output or execution behavior.
 
 # Returns
-- `result::CairoMakie.Figure`: Output of `plot_mean_histograms_with_std` with type annotation `CairoMakie.Figure`.
+- `result`: `Figure` or `(Figure, Axis)` when `return_axis=true`.
 
 # Throws
 - `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised when log-scale plotting is requested without positive values."""
 function plot_mean_histograms_with_std(
     data::Vector{Tuple{Vector{Float64},Vector{Float64}}};
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
@@ -78,108 +256,41 @@ function plot_mean_histograms_with_std(
     return_axis::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
 
-    if hist_labels !== nothing
-        if !(length(hist_labels) == length(data))
-            throw(ArgumentError("hist_labels and data must have same length"))
-        end
-    end
-    if plot_types !== nothing
-        if !(length(plot_types) == length(data))
-            throw(ArgumentError("plot_types and data must have same length"))
-        end
-    end
-
-    figsize = apply_paper_theme!(
-        double_column = double_column,
-        magnification = magnification,
+    validate_series_meta_lengths(length(data), hist_labels, plot_types)
+    fig, ax = create_hist_axis(
+        xlim = xlim,
+        ylim = ylim,
         logscale_x = logscale_x,
         logscale_y = logscale_y,
+        plotlabel = plotlabel,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        double_column = double_column,
+        magnification = magnification,
         legendpos = legendpos,
         legendpadding = legendpadding,
         legendmargin = legendmargin,
         n_Legend_columns = n_Legend_columns,
     )
-
-    fig = CairoMakie.Figure(size = figsize)
-    ax = CairoMakie.Axis(
-        fig[1, 1];
-        xscale = logscale_x ? log10 : identity,
-        yscale = logscale_y ? log10 : identity,
-    )
-
-    ax.ylabel = ylabel === nothing ? "count" : ylabel
-    ax.xlabel = xlabel === nothing ? LaTeXStrings.L"n" : xlabel
-    plotlabel !== nothing && (ax.title  = plotlabel)
-
-    xlim !== nothing && CairoMakie.xlims!(ax, xlim...)
-    ylim !== nothing && CairoMakie.ylims!(ax, ylim...)
-
-    eps = if logscale_y
-        if ylim !== nothing
-            ylim[1] * 1e-3
-        else
-            minpos = minimum(v for (m, _) in data for v in m if v > 0)
-            minpos * 1e-3
-        end
-    else
-        -Inf
-    end
+    eps = compute_log_eps_from_means((m for (m, _) in data), ylim, logscale_y)
 
     for (i, (mean, std)) in enumerate(data)
-        if !(length(mean) == length(std))
-            throw(ArgumentError("assertion failed: length(mean) == length(std)"))
-        end
         colors_obs = CairoMakie.theme(:palette).color
         colors = colors_obs isa Observables.Observable ? Observables.to_value(colors_obs) : colors_obs
         color = colors[mod1(i, length(colors))]
-
-        x   = collect(1:length(mean))
-        ylo = mean .- std
-        yhi = mean .+ std
-
-        if logscale_y
-            mask = mean .> 0
-            x = x[mask]
-            mean = mean[mask]
-            ylo = ylo[mask]
-            yhi = yhi[mask]
-
-            ylo = max.(ylo, eps)
-            yhi = max.(yhi, eps)
-        end
-
+        x, mean_plot, ylo, yhi = prepare_plot_series(mean, std, logscale_y, eps)
         plot_type = plot_types === nothing ? :line : plot_types[i]
-        if plot_type == :line
-            if plot_std
-                CairoMakie.band!(ax, x, ylo, yhi; color = (color, 0.2))
-            end
-            if hist_labels === nothing
-                isnothing(linewidth) ? CairoMakie.lines!(ax, x, mean; color = color) : CairoMakie.lines!(ax, x, mean; color = color, linewidth = linewidth)
-            else
-                isnothing(linewidth) ? CairoMakie.lines!(ax, x, mean; color = color, label = hist_labels[i]) : CairoMakie.lines!(ax, x, mean; color = color, linewidth = linewidth, label = hist_labels[i])
-            end
-        elseif plot_type == :scatter
-            if hist_labels === nothing
-                isnothing(markersize) ? CairoMakie.scatter!(ax, x, mean; color = color) : CairoMakie.scatter!(ax, x, mean; color = color, markersize = markersize)
-            else
-                isnothing(markersize) ? CairoMakie.scatter!(ax, x, mean; color = color, label = hist_labels[i]) : CairoMakie.scatter!(ax, x, mean; color = color, label = hist_labels[i], markersize = markersize)
-            end
-            if plot_std
-                err = mean .- ylo
-                CairoMakie.errorbars!(ax, x, mean, err, err; color = color)
-            end
-        else
-            error("plot_types entries must be :line or :scatter")
-        end
+        label = hist_labels === nothing ? nothing : hist_labels[i]
+        draw_series!(
+            ax, x, mean_plot, ylo, yhi, color, plot_type;
+            plot_std = plot_std,
+            label = label,
+            linewidth = linewidth,
+            markersize = markersize,
+        )
     end
 
-    if hist_labels !== nothing
-        legend_kwargs = (position = legendpos,)
-        legendpadding !== nothing && (legend_kwargs = merge(legend_kwargs, (padding = legendpadding,)))
-        legendmargin !== nothing && (legend_kwargs = merge(legend_kwargs, (margin = legendmargin,)))
-        n_Legend_columns > 1 && (legend_kwargs = merge(legend_kwargs, (nbanks = n_Legend_columns,)))
-        CairoMakie.axislegend(ax; legend_kwargs...)
-    end
+    maybe_add_legend!(ax, hist_labels, legendpos, legendpadding, legendmargin, n_Legend_columns)
 
     return return_axis ? (fig, ax) : fig
 end
@@ -193,17 +304,17 @@ This overload expects `(value, mean, std)` tuples and uses `value` for colormap
 encoding plus colorbar rendering.
 
 # Arguments
-- `data`: Input dataset(s) consumed by this method.
+- `data`: Collection of `(scalar, mean, std)` tuples.
 
 # Keyword Arguments
-- `kwargs`: Additional keyword arguments forwarded to inner methods.
+- Same as the plain overload plus colorbar/comparison options (`colormap`, `colorbar_*`, `comp`, ...).
 
 # Returns
-- `result`: Output of `plot_mean_histograms_with_std` as described in the summary above.
+- `result`: `Figure` or `(Figure, Axis)` when `return_axis=true`.
 
 # Throws
 - `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised when log-scale plotting is requested without positive values."""
 function plot_mean_histograms_with_std(
     data::AbstractVector{<:Tuple};
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
@@ -237,54 +348,29 @@ function plot_mean_histograms_with_std(
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
 
     # coerce to concrete (Real, Vector{Float64}, Vector{Float64}) tuples
-    data = [(Float64(d[1]), d[2], d[3]) for d in data]
-
-    if hist_labels !== nothing
-        if !(length(hist_labels) == length(data))
-            throw(ArgumentError("hist_labels and data must have same length"))
-        end
-    end
-    if plot_types !== nothing
-        if !(length(plot_types) == length(data))
-            throw(ArgumentError("plot_types and data must have same length"))
-        end
+    data = try
+        [(Float64(d[1]), d[2], d[3]) for d in data]
+    catch
+        throw(ArgumentError("data entries must be tuples of the form (scalar, mean, std)"))
     end
 
-    figsize = apply_paper_theme!(
-        double_column = double_column,
-        magnification = magnification,
+    validate_series_meta_lengths(length(data), hist_labels, plot_types)
+    fig, ax = create_hist_axis(
+        xlim = xlim,
+        ylim = ylim,
         logscale_x = logscale_x,
         logscale_y = logscale_y,
+        plotlabel = plotlabel,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        double_column = double_column,
+        magnification = magnification,
         legendpos = legendpos,
         legendpadding = legendpadding,
         legendmargin = legendmargin,
         n_Legend_columns = n_Legend_columns,
     )
-
-    fig = CairoMakie.Figure(size = figsize)
-    ax = CairoMakie.Axis(
-        fig[1, 1];
-        xscale = logscale_x ? log10 : identity,
-        yscale = logscale_y ? log10 : identity,
-    )
-
-    ax.ylabel = ylabel === nothing ? "count" : ylabel
-    ax.xlabel = xlabel === nothing ? LaTeXStrings.L"n" : xlabel
-    plotlabel !== nothing && (ax.title  = plotlabel)
-
-    xlim !== nothing && CairoMakie.xlims!(ax, xlim...)
-    ylim !== nothing && CairoMakie.ylims!(ax, ylim...)
-
-    eps = if logscale_y
-        if ylim !== nothing
-            ylim[1] * 1e-3
-        else
-            minpos = minimum(v for (_, m, _) in data for v in m if v > 0)
-            minpos * 1e-3
-        end
-    else
-        -Inf
-    end
+    eps = compute_log_eps_from_means((m for (_, m, _) in data), ylim, logscale_y)
 
     values = [v for (v, _, _) in data]
     vmin, vmax = minimum(values), maximum(values)
@@ -295,18 +381,10 @@ function plot_mean_histograms_with_std(
     # optional comparison band, plotted first
     if comp !== nothing
         mean_comp, std_comp = comp
-        x = collect(1:length(mean_comp))
-        ylo = mean_comp .- std_comp
-        yhi = mean_comp .+ std_comp
-        if logscale_y
-            mask = mean_comp .> 0
-            x = x[mask]
-            mean_comp = mean_comp[mask]
-            ylo = ylo[mask]
-            yhi = yhi[mask]
-            ylo = max.(ylo, eps)
-            yhi = max.(yhi, eps)
+        if length(mean_comp) != length(std_comp)
+            throw(ArgumentError("comp mean and std must have equal length"))
         end
+        x, mean_comp, ylo, yhi = prepare_plot_series(mean_comp, std_comp, logscale_y, eps)
         CairoMakie.band!(ax, x, ylo, yhi; color = (comp_color, 0.2))
         comp_x = x
         comp_mean = mean_comp
@@ -314,51 +392,19 @@ function plot_mean_histograms_with_std(
 
     iter = invert_color_scaling ? reverse(data) : data
     for (i, (val, mean, std)) in enumerate(iter)
-        if !(length(mean) == length(std))
-            throw(ArgumentError("assertion failed: length(mean) == length(std)"))
-        end
         t = (val - vmin) / denom
         t = invert_color_scaling ? (1 - t) : t
         color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
-
-        x   = collect(1:length(mean))
-        ylo = mean .- std
-        yhi = mean .+ std
-
-        if logscale_y
-            mask = mean .> 0
-            x = x[mask]
-            mean = mean[mask]
-            ylo = ylo[mask]
-            yhi = yhi[mask]
-
-            ylo = max.(ylo, eps)
-            yhi = max.(yhi, eps)
-        end
-
+        x, mean_plot, ylo, yhi = prepare_plot_series(mean, std, logscale_y, eps)
         plot_type = plot_types === nothing ? :line : plot_types[i]
-        if plot_type == :line
-            if plot_std
-                CairoMakie.band!(ax, x, ylo, yhi; color = (color, 0.2))
-            end
-            if hist_labels === nothing
-                isnothing(linewidth) ? CairoMakie.lines!(ax, x, mean; color = color) : CairoMakie.lines!(ax, x, mean; color = color, linewidth = linewidth)
-            else
-                isnothing(linewidth) ? CairoMakie.lines!(ax, x, mean; color = color, label = hist_labels[i]) : CairoMakie.lines!(ax, x, mean; color = color, linewidth = linewidth, label = hist_labels[i])
-            end
-        elseif plot_type == :scatter
-            if hist_labels === nothing
-                isnothing(markersize) ? CairoMakie.scatter!(ax, x, mean; color = color) : CairoMakie.scatter!(ax, x, mean; color = color, markersize = markersize)
-            else
-                isnothing(markersize) ? CairoMakie.scatter!(ax, x, mean; color = color, label = hist_labels[i]) : CairoMakie.scatter!(ax, x, mean; color = color, label = hist_labels[i], markersize = markersize)
-            end
-            if plot_std
-                err = mean .- ylo
-                CairoMakie.errorbars!(ax, x, mean, err, err; color = color)
-            end
-        else
-            error("plot_types entries must be :line or :scatter")
-        end
+        label = hist_labels === nothing ? nothing : hist_labels[i]
+        draw_series!(
+            ax, x, mean_plot, ylo, yhi, color, plot_type;
+            plot_std = plot_std,
+            label = label,
+            linewidth = linewidth,
+            markersize = markersize,
+        )
     end
 
     if comp_x !== nothing
@@ -368,9 +414,9 @@ function plot_mean_histograms_with_std(
 
     cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
     cb = if colorbar_pos === nothing
-        Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = cb_cmap)
+        CairoMakie.Colorbar(fig[1, 2], limits = (vmin, vmax), colormap = cb_cmap)
     else
-        cb = Colorbar(fig[1, 1], limits = (vmin, vmax), colormap = cb_cmap)
+        cb = CairoMakie.Colorbar(fig[1, 1], limits = (vmin, vmax), colormap = cb_cmap)
         cb.halign = colorbar_pos[1]
         cb.valign = colorbar_pos[2]
         cb.tellwidth = false
@@ -406,11 +452,11 @@ return the produced figure (or `(fig, ax)` when `return_axis=true`).
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
 
 # Returns
-- `result`: Output of `plot_and_save_hists` as described in the summary above.
+- `result`: `Figure` or `(Figure, Axis)` when `return_axis=true`.
 
 # Throws
 - `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Propagated from inner plotting when log-scale constraints are violated."""
 function plot_and_save_hists(
     hists::Vector{Vector{Dict{Int,Float64}}},
     fig_name::String;
@@ -456,9 +502,7 @@ function plot_and_save_hists(
         return_axis = return_axis,
         )
 
-    CairoMakie.save(fig_path(fig_name), plot)
-
-    return plot
+    return save_plot_result(plot, fig_name, return_axis)
 end
 
 """
@@ -478,11 +522,11 @@ scalar-aware averages, and forwards colorbar-related keyword options to
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
 
 # Returns
-- `result`: Output of `plot_and_save_hists` as described in the summary above.
+- `result`: `Figure` or `(Figure, Axis)` when `return_axis=true`.
 
 # Throws
 - `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Propagated from inner plotting when log-scale constraints are violated."""
 function plot_and_save_hists(
     hists::Vector{Vector{Tuple{D,Real}}},
     fig_name::String;
@@ -555,14 +599,7 @@ function plot_and_save_hists(
         return_axis = return_axis,
     )
 
-    if return_axis
-        fig, ax = plot
-        CairoMakie.save(fig_path(fig_name), fig)
-        return plot
-    else
-        CairoMakie.save(fig_path(fig_name), plot)
-        return plot
-    end
+    return save_plot_result(plot, fig_name, return_axis)
 end
 
 """
@@ -580,11 +617,11 @@ Vector analogue of `plot_and_save_hists`: compute per-group `(mean, std)` using
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
 
 # Returns
-- `result`: Output of `plot_and_save_vectors` as described in the summary above.
+- `result`: `Figure` or `(Figure, Axis)` when `return_axis=true`.
 
 # Throws
 - `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Propagated from inner plotting when log-scale constraints are violated."""
 function plot_and_save_vectors(
     vectors::AbstractVector,
     fig_name::String;
@@ -618,9 +655,9 @@ function plot_and_save_vectors(
     return_axis::Bool = false,
     num_bins::Union{Nothing,Int} = nothing,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, CairoMakie.Axis}}
-    scalar_groups = _coerce_scalar_vector_groups(vectors)
+    scalar_groups = coerce_scalar_vector_groups(vectors)
     if scalar_groups !== nothing
-        return _plot_and_save_vectors_scalar(
+        return plot_and_save_vectors_scalar(
             scalar_groups,
             fig_name;
             xlim = xlim,
@@ -655,11 +692,11 @@ function plot_and_save_vectors(
         )
     end
 
-    plain_groups = _coerce_plain_vector_groups(vectors)
+    plain_groups = coerce_plain_vector_groups(vectors)
     if plain_groups !== nothing
         plain_legendpadding = isnothing(legendpadding) ? (10, 8, 8, 8) : legendpadding
         plain_legendmargin = isnothing(legendmargin) ? (5, 5, 5, 5) : legendmargin
-        return _plot_and_save_vectors_plain(
+        return plot_and_save_vectors_plain(
             plain_groups,
             fig_name;
             xlim = xlim,
@@ -683,47 +720,10 @@ function plot_and_save_vectors(
         )
     end
 
-    error("plot_and_save_vectors: unsupported input format.")
+    throw(ArgumentError("plot_and_save_vectors: unsupported input format"))
 end
 
-function _coerce_plain_vector_groups(vectors::AbstractVector)::Union{Nothing,Vector{Vector{AbstractVector}}}
-    isempty(vectors) && return Vector{Vector{AbstractVector}}()
-    groups = Vector{Vector{AbstractVector}}()
-    sizehint!(groups, length(vectors))
-    for group in vectors
-        group isa AbstractVector || return nothing
-        converted = Vector{AbstractVector}()
-        sizehint!(converted, length(group))
-        for sample in group
-            sample isa AbstractVector || return nothing
-            push!(converted, sample)
-        end
-        push!(groups, converted)
-    end
-    return groups
-end
-
-function _coerce_scalar_vector_groups(vectors::AbstractVector)::Union{Nothing,Vector{Vector{Tuple{AbstractVector,Real}}}}
-    isempty(vectors) && return Vector{Vector{Tuple{AbstractVector,Real}}}()
-    groups = Vector{Vector{Tuple{AbstractVector,Real}}}()
-    sizehint!(groups, length(vectors))
-    for group in vectors
-        group isa AbstractVector || return nothing
-        converted = Vector{Tuple{AbstractVector,Real}}()
-        sizehint!(converted, length(group))
-        for sample in group
-            sample isa Tuple || return nothing
-            length(sample) == 2 || return nothing
-            sample[1] isa AbstractVector || return nothing
-            sample[2] isa Real || return nothing
-            push!(converted, (sample[1], sample[2]))
-        end
-        push!(groups, converted)
-    end
-    return groups
-end
-
-function _plot_and_save_vectors_plain(
+function plot_and_save_vectors_plain(
     vectors::Vector{Vector{AbstractVector}},
     fig_name::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
@@ -768,11 +768,10 @@ function _plot_and_save_vectors_plain(
         return_axis = return_axis,
     )
 
-    CairoMakie.save(fig_path(fig_name), plot)
-    return plot
+    return save_plot_result(plot, fig_name, return_axis)
 end
 
-function _plot_and_save_vectors_scalar(
+function plot_and_save_vectors_scalar(
     vectors::Vector{Vector{Tuple{AbstractVector,Real}}},
     fig_name::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
@@ -844,12 +843,5 @@ function _plot_and_save_vectors_scalar(
         return_axis = return_axis,
     )
 
-    if return_axis
-        fig, ax = plot
-        CairoMakie.save(fig_path(fig_name), fig)
-        return plot
-    else
-        CairoMakie.save(fig_path(fig_name), plot)
-        return plot
-    end
+    return save_plot_result(plot, fig_name, return_axis)
 end

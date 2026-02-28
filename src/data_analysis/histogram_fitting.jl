@@ -47,8 +47,10 @@ end
 
 """Internal weighting-mode marker type for `fit_curve` helpers."""
 abstract type _FitWeightingMode end
+
 """Weighting mode for ordinary least squares (unweighted residuals)."""
 struct _UnweightedMode <: _FitWeightingMode end
+
 """Weighting mode for chi-squared style weighted residuals."""
 struct _WeightedMode <: _FitWeightingMode
     stds::Vector{Float64}
@@ -209,13 +211,17 @@ end
 """Return stored standard deviations for the given weighting mode."""
 _fit_curve_stds(:: _UnweightedMode) = nothing
 _fit_curve_stds(mode::_WeightedMode) = mode.stds
+
 """Return stored standard-deviation callback for the given weighting mode."""
 _fit_curve_std_fn(:: _UnweightedMode) = nothing
 _fit_curve_std_fn(mode::_WeightedMode) = mode.std_fn
+
 """Predicate indicating whether weighting mode carries standard deviations."""
 _fit_curve_has_stds(mode::_FitWeightingMode) = mode isa _WeightedMode
+
 """Human-readable label used for progress output for a weighting mode."""
 _fit_curve_label(mode::_FitWeightingMode) = _fit_curve_has_stds(mode) ? "χ²" : "rel_rms"
+
 """Convert internal bounds mode back to optional tuple representation."""
 _fit_curve_bounds_tuple(:: _NoBounds) = nothing
 _fit_curve_bounds_tuple(bounds::_BoxBounds) = (bounds.lower, bounds.upper)

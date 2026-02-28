@@ -254,86 +254,6 @@ end
     @test_throws DimensionMismatch CausalSetZoology._fit_curve_prepare_inputs(ys, syms; x_values = [1.0, 2.0])
 end
 
-# Verifies multistart run summary and finalized internal result assembly.
-@testitem "histogram_fitting helpers: run and finalize" setup=[setupHistogramFitting] begin
-    # Use a deterministic linear fit setup to test orchestration helpers.
-    xs = collect(1.0:8.0)
-    f(x, p) = p.a * x + p.b
-    ys = f.(xs, Ref((a = 2.0, b = 1.0)))
-    _, _, cfg = CausalSetZoology._fit_curve_prepare_inputs(
-        ys,
-        (:a, :b);
-        x_values = xs,
-        init = (a = 0.0, b = 0.0),
-        multistart = 3,
-        rng = Random.Xoshiro(123),
-    )
-
-    # Multistart should return a typed summary and callable solver callback.
-    run, solve_local = CausalSetZoology._fit_curve_run_multistart(ys, f, xs, cfg)
-    @test run isa CausalSetZoology._FitRunSummary
-    @test length(run.best_x) == 2
-    @test run.best_f >= 0.0
-    @test solve_local isa Function
-
-    # Finalized result should carry fitted params and residual vector.
-    result = CausalSetZoology._fit_curve_finalize_result(ys, f, xs, cfg, run, solve_local)
-    @test result isa CausalSetZoology._FitResult
-    @test result.params.a ≈ 2.0 atol = 1e-2
-    @test result.params.b ≈ 1.0 atol = 1e-2
-    @test length(result.residuals) == length(ys)
-    @test result.χ² === nothing
-    @test result.cov === nothing
-    @test result.stderr === nothing
-end
-
-# Verifies public output shaping across all combinations of diagnostics/covariance modes.
-@testitem "histogram_fitting helpers: public output shaping" setup=[setupHistogramFitting] begin
-    ys = [2.0, 4.0, 8.0]
-    result = CausalSetZoology._FitResult(
-        (a = 2.0, b = 1.0),
-        [0.2, -0.4, 0.8],
-        1.25,
-        [1.0 0.0; 0.0 2.0],
-        (a = 1.0, b = sqrt(2.0)),
-    )
-
-    # Plain mode: returns only params NamedTuple.
-    _, _, cfg_plain = CausalSetZoology._fit_curve_prepare_inputs(ys, (:a, :b))
-    out_plain = CausalSetZoology._fit_curve_public_output(result, ys, cfg_plain)
-    @test out_plain == (a = 2.0, b = 1.0)
-
-    # Covariance-only mode.
-    _, _, cfg_cov = CausalSetZoology._fit_curve_prepare_inputs(ys, (:a, :b); return_cov = true)
-    out_cov = CausalSetZoology._fit_curve_public_output(result, ys, cfg_cov)
-    @test haskey(out_cov, :params)
-    @test haskey(out_cov, :cov)
-    @test haskey(out_cov, :stderr)
-    @test !haskey(out_cov, :χ²)
-
-    # Unweighted goodness-of-fit mode.
-    _, _, cfg_gof = CausalSetZoology._fit_curve_prepare_inputs(ys, (:a, :b); goodness_of_fit = true)
-    out_gof = CausalSetZoology._fit_curve_public_output(result, ys, cfg_gof)
-    @test haskey(out_gof, :params)
-    @test haskey(out_gof, :rel_residuals)
-    @test !haskey(out_gof, :χ²)
-
-    # Weighted goodness-of-fit + covariance mode.
-    _, _, cfg_all = CausalSetZoology._fit_curve_prepare_inputs(
-        ys,
-        (:a, :b);
-        stds = [0.1, 0.1, 0.1],
-        goodness_of_fit = true,
-        return_cov = true,
-    )
-    out_all = CausalSetZoology._fit_curve_public_output(result, ys, cfg_all)
-    @test haskey(out_all, :params)
-    @test haskey(out_all, :rel_residuals)
-    @test haskey(out_all, :χ²)
-    @test haskey(out_all, :cov)
-    @test haskey(out_all, :stderr)
-end
-
 # Verifies unweighted/weighted objective behavior and bounds clamping effect.
 @testitem "histogram_fitting helpers: objective" setup=[setupHistogramFitting] begin
     # Setup deterministic linear data so optimum is known exactly.
@@ -724,6 +644,86 @@ end
         n_boot = 1,
         rng = rng,
     )
+end
+
+# Verifies multistart run summary and finalized internal result assembly.
+@testitem "histogram_fitting helpers: run and finalize" setup=[setupHistogramFitting] begin
+    # Use a deterministic linear fit setup to test orchestration helpers.
+    xs = collect(1.0:8.0)
+    f(x, p) = p.a * x + p.b
+    ys = f.(xs, Ref((a = 2.0, b = 1.0)))
+    _, _, cfg = CausalSetZoology._fit_curve_prepare_inputs(
+        ys,
+        (:a, :b);
+        x_values = xs,
+        init = (a = 0.0, b = 0.0),
+        multistart = 3,
+        rng = Random.Xoshiro(123),
+    )
+
+    # Multistart should return a typed summary and callable solver callback.
+    run, solve_local = CausalSetZoology._fit_curve_run_multistart(ys, f, xs, cfg)
+    @test run isa CausalSetZoology._FitRunSummary
+    @test length(run.best_x) == 2
+    @test run.best_f >= 0.0
+    @test solve_local isa Function
+
+    # Finalized result should carry fitted params and residual vector.
+    result = CausalSetZoology._fit_curve_finalize_result(ys, f, xs, cfg, run, solve_local)
+    @test result isa CausalSetZoology._FitResult
+    @test result.params.a ≈ 2.0 atol = 1e-2
+    @test result.params.b ≈ 1.0 atol = 1e-2
+    @test length(result.residuals) == length(ys)
+    @test result.χ² === nothing
+    @test result.cov === nothing
+    @test result.stderr === nothing
+end
+
+# Verifies public output shaping across all combinations of diagnostics/covariance modes.
+@testitem "histogram_fitting helpers: public output shaping" setup=[setupHistogramFitting] begin
+    ys = [2.0, 4.0, 8.0]
+    result = CausalSetZoology._FitResult(
+        (a = 2.0, b = 1.0),
+        [0.2, -0.4, 0.8],
+        1.25,
+        [1.0 0.0; 0.0 2.0],
+        (a = 1.0, b = sqrt(2.0)),
+    )
+
+    # Plain mode: returns only params NamedTuple.
+    _, _, cfg_plain = CausalSetZoology._fit_curve_prepare_inputs(ys, (:a, :b))
+    out_plain = CausalSetZoology._fit_curve_public_output(result, ys, cfg_plain)
+    @test out_plain == (a = 2.0, b = 1.0)
+
+    # Covariance-only mode.
+    _, _, cfg_cov = CausalSetZoology._fit_curve_prepare_inputs(ys, (:a, :b); return_cov = true)
+    out_cov = CausalSetZoology._fit_curve_public_output(result, ys, cfg_cov)
+    @test haskey(out_cov, :params)
+    @test haskey(out_cov, :cov)
+    @test haskey(out_cov, :stderr)
+    @test !haskey(out_cov, :χ²)
+
+    # Unweighted goodness-of-fit mode.
+    _, _, cfg_gof = CausalSetZoology._fit_curve_prepare_inputs(ys, (:a, :b); goodness_of_fit = true)
+    out_gof = CausalSetZoology._fit_curve_public_output(result, ys, cfg_gof)
+    @test haskey(out_gof, :params)
+    @test haskey(out_gof, :rel_residuals)
+    @test !haskey(out_gof, :χ²)
+
+    # Weighted goodness-of-fit + covariance mode.
+    _, _, cfg_all = CausalSetZoology._fit_curve_prepare_inputs(
+        ys,
+        (:a, :b);
+        stds = [0.1, 0.1, 0.1],
+        goodness_of_fit = true,
+        return_cov = true,
+    )
+    out_all = CausalSetZoology._fit_curve_public_output(result, ys, cfg_all)
+    @test haskey(out_all, :params)
+    @test haskey(out_all, :rel_residuals)
+    @test haskey(out_all, :χ²)
+    @test haskey(out_all, :cov)
+    @test haskey(out_all, :stderr)
 end
 
 # End-to-end fit_curve smoke test on noiseless linear data.

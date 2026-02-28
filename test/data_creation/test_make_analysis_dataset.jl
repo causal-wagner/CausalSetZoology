@@ -1,5 +1,6 @@
 @testsnippet setupMakeAnalysisDataset begin
     using Test
+    using JLD2
     import CausalSetZoology
 
     function _extract_block(src::AbstractString, start_marker::AbstractString, end_marker::AbstractString)
@@ -25,6 +26,30 @@
         text = read(out, String)
         wait(proc)
         return proc.exitcode, text
+    end
+
+    root_dir = normpath(joinpath(@__DIR__, "..", ".."))
+    src_project = joinpath(root_dir, "src")
+    test_project = joinpath(root_dir, "test")
+    scripts_load_path = test_project * ":" * src_project * ":@stdlib"
+
+    function _run_dataset_script(; kind::String, size::Int, N::Int, batchsize::Int, seed::Int, num_processes::Int)
+        tmp = mktempdir()
+        out_path = joinpath(tmp, "dataset.jld2")
+        cmd = `$(Base.julia_cmd()) $dataset_script --out $out_path --N $N --kind $kind --size $size --batchsize $batchsize --seed $seed --num_processes $num_processes`
+        code, out = _run_capture(setenv(cmd, Dict("JULIA_LOAD_PATH" => scripts_load_path)))
+        return out_path, code, out
+    end
+
+    function _load_all_adjs(path::String)
+        JLD2.jldopen(path, "r") do f
+            nbatches = f["meta/nbatches"]
+            adjs = BitMatrix[]
+            for b in 1:nbatches
+                append!(adjs, f["batches/$b/adjs"])
+            end
+            return adjs
+        end
     end
 
     dataset_script = joinpath(@__DIR__, "..", "..", "src", "data_generation", "make_analysis_dataset.jl")
@@ -96,4 +121,69 @@ end
     @test occursin("function generate_batch(", dataset_src)
     @test occursin("if nprocs() - 1 < num_workers", dataset_src)
     @test occursin("Random.seed!(seed)", dataset_seq_src)
+end
+
+@testitem "make_analysis_dataset: multiprocessing batches produce distinct csets" setup=[setupMakeAnalysisDataset] begin
+    # Check uniqueness across samples when using script multiprocessing + batching.
+    out_path, code, out = _run_dataset_script(
+        kind = "grid",
+        size = 16,
+        N = 8,
+        batchsize = 2,
+        seed = 11,
+        num_processes = 2,
+    )
+    @test code == 0
+    @test isfile(out_path)
+    @test !isempty(out)
+    (code == 0 && isfile(out_path)) || return
+
+    adjs = _load_all_adjs(out_path)
+    @test length(adjs) == 8
+    @test length(unique(adjs)) == length(adjs)
+end
+
+@testitem "make_analysis_dataset: multiprocessing seed reproducibility and divergence" setup=[setupMakeAnalysisDataset] begin
+    # Same seed should reproduce the exact sample sequence.
+    p1, c1, _ = _run_dataset_script(
+        kind = "grid",
+        size = 16,
+        N = 6,
+        batchsize = 2,
+        seed = 77,
+        num_processes = 2,
+    )
+    p2, c2, _ = _run_dataset_script(
+        kind = "grid",
+        size = 16,
+        N = 6,
+        batchsize = 2,
+        seed = 77,
+        num_processes = 2,
+    )
+    @test c1 == 0
+    @test c2 == 0
+    @test isfile(p1)
+    @test isfile(p2)
+    (c1 == 0 && c2 == 0 && isfile(p1) && isfile(p2)) || return
+
+    adjs1 = _load_all_adjs(p1)
+    adjs2 = _load_all_adjs(p2)
+    @test length(adjs1) == length(adjs2) == 6
+    @test all(adjs1[i] == adjs2[i] for i in eachindex(adjs1))
+
+    # Different seed should change at least one generated sample.
+    p3, c3, _ = _run_dataset_script(
+        kind = "grid",
+        size = 16,
+        N = 6,
+        batchsize = 2,
+        seed = 78,
+        num_processes = 2,
+    )
+    @test c3 == 0
+    @test isfile(p3)
+    (c3 == 0 && isfile(p3)) || return
+    adjs3 = _load_all_adjs(p3)
+    @test any(adjs1[i] != adjs3[i] for i in eachindex(adjs1))
 end

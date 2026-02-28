@@ -27,8 +27,9 @@ Create a symmetric adjacency matrix for an undirected simple graph.
 - `result::BitMatrix`: Output of `make_undirected_adjacency_from_subgraphs` with type annotation `BitMatrix`.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised when numeric parameters violate domain constraints.
+- `DimensionMismatch`: Raised when `inter_edges` shape does not match `n_subgraphs`.
+- `ArgumentError`: Raised when `inter_edges` is not symmetric or has nonzero diagonal."""
 function make_undirected_adjacency_from_subgraphs(
     n_nodes::Int,
     n_subgraphs::Int,
@@ -36,29 +37,29 @@ function make_undirected_adjacency_from_subgraphs(
     p_internal::Float64 = 0.5,
     rng = nothing,
 )::BitMatrix
-    if !(n_nodes ≥ 1)
-        throw(ArgumentError("assertion failed: n_nodes ≥ 1"))
+    if !(n_nodes >= 1)
+        throw(DomainError(n_nodes, "n_nodes must be >= 1"))
     end
-    if !(1 ≤ n_subgraphs ≤ n_nodes)
-        throw(ArgumentError("assertion failed: 1 ≤ n_subgraphs ≤ n_nodes"))
+    if !(1 <= n_subgraphs <= n_nodes)
+        throw(DomainError(n_subgraphs, "n_subgraphs must satisfy 1 <= n_subgraphs <= n_nodes (n_nodes=$n_nodes)"))
     end
     if !(size(inter_edges, 1) == n_subgraphs)
-        throw(ArgumentError("assertion failed: size(inter_edges, 1) == n_subgraphs"))
+        throw(DimensionMismatch("inter_edges has $(size(inter_edges, 1)) rows but n_subgraphs=$n_subgraphs"))
     end
     if !(size(inter_edges, 2) == n_subgraphs)
-        throw(ArgumentError("assertion failed: size(inter_edges, 2) == n_subgraphs"))
+        throw(DimensionMismatch("inter_edges has $(size(inter_edges, 2)) columns but n_subgraphs=$n_subgraphs"))
     end
     if !(LinearAlgebra.issymmetric(inter_edges))
-        throw(ArgumentError("assertion failed: LinearAlgebra.issymmetric(inter_edges)"))
+        throw(ArgumentError("inter_edges must be symmetric"))
     end
-    if !(all(inter_edges .≥ 0))
-        throw(ArgumentError("assertion failed: all(inter_edges .≥ 0)"))
+    if !(all(inter_edges .>= 0))
+        throw(DomainError(minimum(inter_edges), "inter_edges must contain only nonnegative counts"))
     end
     if !(all(inter_edges[i, i] == 0 for i in 1:n_subgraphs))
         throw(ArgumentError("inter_edges diagonal must be zero"))
     end
-    if !(0.0 ≤ p_internal ≤ 1.0)
-        throw(ArgumentError("assertion failed: 0.0 ≤ p_internal ≤ 1.0"))
+    if !(0.0 <= p_internal <= 1.0)
+        throw(DomainError(p_internal, "p_internal must satisfy 0.0 <= p_internal <= 1.0"))
     end
     # near-equal partition sizes: first `r` subgraphs get one extra node
     q, r = divrem(n_nodes, n_subgraphs)
@@ -103,7 +104,12 @@ function make_undirected_adjacency_from_subgraphs(
             requested = Int(inter_edges[a, b])
             max_possible = na * nb
             if !(requested ≤ max_possible)
-                throw(ArgumentError("requested inter-subgraph edges exceed possible unique pairs for ($a, $b)"))
+                throw(
+                    DomainError(
+                        requested,
+                        "requested inter-subgraph edges for pair ($a,$b) exceed maximum $max_possible",
+                    ),
+                )
             end
             used = Set{Tuple{Int,Int}}()
             while length(used) < requested
@@ -146,15 +152,16 @@ Eigenvalues with `abs(λ) < zero_tol` are returned as exact `0.0`.
 - `result::Vector{Float64}`: Output of `normalized_laplacian_eigenvalues` with type annotation `Vector{Float64}`.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `A` is not square.
+- `DomainError`: Raised when numeric parameters violate domain constraints.
+- `ArgumentError`: Raised when `A` is not symmetric or has a nonzero diagonal."""
 function normalized_laplacian_eigenvalues(
     A::BitMatrix;
     zero_tol::Float64 = 1e-12,
 )::Vector{Float64}
     n, m = size(A)
     if !(n == m)
-        throw(ArgumentError("adjacency matrix must be square"))
+        throw(DimensionMismatch("adjacency matrix must be square; got size ($n, $m)"))
     end
     if !(LinearAlgebra.issymmetric(A))
         throw(ArgumentError("adjacency matrix must be symmetric"))
@@ -163,7 +170,7 @@ function normalized_laplacian_eigenvalues(
         throw(ArgumentError("adjacency matrix diagonal must be zero"))
     end
     if !(zero_tol ≥ 0.0)
-        throw(ArgumentError("zero_tol must be nonnegative"))
+        throw(DomainError(zero_tol, "zero_tol must be >= 0"))
     end
     degrees = vec(sum(A, dims = 2))
     invsqrtdeg = zeros(Float64, n)
@@ -224,8 +231,9 @@ values for intra- vs inter-subgraph connections.
 - `inter_edge_alpha`: Keyword option `inter_edge_alpha` controlling this method's behavior.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DimensionMismatch`: Raised when `A` is not square.
+- `DomainError`: Raised when numeric layout/styling parameters violate domain constraints.
+- `ArgumentError`: Raised when `A` is not symmetric."""
 function _draw_subgraph_colored_node_link!(
     ax,
     A::BitMatrix,
@@ -239,22 +247,31 @@ function _draw_subgraph_colored_node_link!(
 )
     n, m = size(A)
     if !(n == m)
-        throw(ArgumentError("adjacency matrix must be square"))
+        throw(DimensionMismatch("adjacency matrix must be square; got size ($n, $m)"))
     end
     if !(LinearAlgebra.issymmetric(A))
         throw(ArgumentError("adjacency matrix must be symmetric"))
     end
-    if !(1 ≤ n_subgraphs ≤ n)
-        throw(ArgumentError("assertion failed: 1 ≤ n_subgraphs ≤ n"))
+    if !(1 <= n_subgraphs <= n)
+        throw(DomainError(n_subgraphs, "n_subgraphs must satisfy 1 <= n_subgraphs <= n (n=$n)"))
     end
     if !(cluster_radius > 0)
-        throw(ArgumentError("assertion failed: cluster_radius > 0"))
+        throw(DomainError(cluster_radius, "cluster_radius must be > 0"))
     end
     if !(local_base ≥ 0)
-        throw(ArgumentError("assertion failed: local_base ≥ 0"))
+        throw(DomainError(local_base, "local_base must be >= 0"))
     end
     if !(local_scale ≥ 0)
-        throw(ArgumentError("assertion failed: local_scale ≥ 0"))
+        throw(DomainError(local_scale, "local_scale must be >= 0"))
+    end
+    if !(node_size > 0)
+        throw(DomainError(node_size, "node_size must be > 0"))
+    end
+    if !(0 <= edge_alpha <= 1)
+        throw(DomainError(edge_alpha, "edge_alpha must satisfy 0 <= edge_alpha <= 1"))
+    end
+    if !(0 <= inter_edge_alpha <= 1)
+        throw(DomainError(inter_edge_alpha, "inter_edge_alpha must satisfy 0 <= inter_edge_alpha <= 1"))
     end
     # Same near-equal contiguous partition as in graph generation.
     q, r = divrem(n, n_subgraphs)
@@ -361,8 +378,9 @@ This is the primary plotting method for this function name.
 - `result::CairoMakie.Figure`: Output of `plot_subgraph_colored_node_link` with type annotation `CairoMakie.Figure`.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised when visual parameter domains are invalid.
+- `DimensionMismatch`: Propagated from `_draw_subgraph_colored_node_link!` when `A` is not square.
+- `ArgumentError`: Propagated from `_draw_subgraph_colored_node_link!` when `A` is not symmetric."""
 function plot_subgraph_colored_node_link(
     A::BitMatrix,
     n_subgraphs::Int;
@@ -379,6 +397,19 @@ function plot_subgraph_colored_node_link(
     inter_edge_alpha::Real = 0.08,
     fig_path::Union{Nothing,String} = nothing,
 )
+    if !(theme_magnification > 0)
+        throw(DomainError(theme_magnification, "theme_magnification must be > 0"))
+    end
+    if !(0 <= color_transparency <= 1)
+        throw(DomainError(color_transparency, "color_transparency must satisfy 0 <= color_transparency <= 1"))
+    end
+    if fig_size !== nothing
+        w, h = fig_size
+        if !(w > 0 && h > 0)
+            throw(DomainError(fig_size, "fig_size entries must be positive"))
+        end
+    end
+
     themed_size = if apply_theme
         apply_paper_theme!(
             double_column = theme_double_column,
@@ -461,8 +492,9 @@ layout controls.
 - `result`: Output of `plot_subgraph_colored_node_link` as described in the summary above.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `DomainError`: Raised when visual parameter domains are invalid.
+- `DimensionMismatch`: Propagated from `_draw_subgraph_colored_node_link!` when an input matrix is not square.
+- `ArgumentError`: Propagated from `_draw_subgraph_colored_node_link!` when an input matrix is not symmetric."""
 function plot_subgraph_colored_node_link(
     A1::BitMatrix,
     A2::BitMatrix,
@@ -480,6 +512,19 @@ function plot_subgraph_colored_node_link(
     inter_edge_alpha::Real = 0.08,
     fig_path::Union{Nothing,String} = nothing,
 )
+    if !(theme_magnification > 0)
+        throw(DomainError(theme_magnification, "theme_magnification must be > 0"))
+    end
+    if !(0 <= color_transparency <= 1)
+        throw(DomainError(color_transparency, "color_transparency must satisfy 0 <= color_transparency <= 1"))
+    end
+    if fig_size !== nothing
+        w, h = fig_size
+        if !(w > 0 && h > 0)
+            throw(DomainError(fig_size, "fig_size entries must be positive"))
+        end
+    end
+
     themed_size = if apply_theme
         apply_paper_theme!(
             double_column = true,

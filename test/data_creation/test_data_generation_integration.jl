@@ -77,6 +77,9 @@
 end
 
 @testitem "data_generation integration: dataset + statistics tiny runs by kind" setup=[setupDataGenerationIntegration] begin
+    dataset_base_keys = Set(["csets", "adjs", "links"])
+    stats_base_fields = Ref{Union{Nothing, Set{Symbol}}}(nothing)
+
     kinds = [
         (
             kind = "minkowski_sprinkling",
@@ -143,11 +146,14 @@ end
         ),
     ]
 
-    for spec in kinds
+    total_kinds = length(kinds)
+    for (idx, spec) in enumerate(kinds)
+        @info "integration progress: starting kind" index=idx total=total_kinds kind=spec.kind
         dataset_path, dataset_code, dataset_out = _make_dataset(spec.kind; size = spec.size, extra_args = spec.extra)
         @test dataset_code == 0
         dataset_code == 0 || continue
         @test isfile(dataset_path)
+        @info "integration progress: dataset created" kind=spec.kind path=dataset_path
 
         JLD2.jldopen(dataset_path, "r") do f
             @test f["meta/N"] == 2
@@ -162,6 +168,10 @@ end
             @test length(adjs) == 1
             @test length(links) == 1
 
+            batch1_keys = Set(String(name) for name in keys(f["batches/1"]))
+            expected_dataset_keys = union(dataset_base_keys, Set(spec.dataset_keys))
+            @test batch1_keys == expected_dataset_keys
+
             for k in spec.dataset_keys
                 @test haskey(f, "batches/1/$k")
                 @test length(f["batches/1/$k"]) == 1
@@ -172,6 +182,7 @@ end
         @test stats_code == 0
         stats_code == 0 || continue
         @test isfile(stats_path)
+        @info "integration progress: statistics created" kind=spec.kind path=stats_path
 
         JLD2.jldopen(stats_path, "r") do f
             @test f["meta/N"] == 2
@@ -181,12 +192,35 @@ end
             recs = f["batches/1"]
             @test length(recs) == 1
             rec = recs[1]
+            rec_fields = Set(fieldnames(typeof(rec)))
 
-            @test hasfield(typeof(rec), :n)
-            @test hasfield(typeof(rec), :connectivity)
-            @test hasfield(typeof(rec), :in_degree_hist)
-            @test hasfield(typeof(rec), :out_degree_hist)
-            @test hasfield(typeof(rec), :max_pathlen_hist)
+            # One representative per base observable family from make_analysis_statistics.compute.
+            base_representatives = (
+                :n,
+                :in_degree_hist,
+                :out_degree_hist,
+                :in_degree_hist_link,
+                :out_degree_hist_link,
+                :max_pathlen_hist,
+                :max_pathlen_hist_link,
+                :num_sources,
+                :num_sinks,
+                :num_sources_link,
+                :num_sinks_link,
+                :ev_sym_link,
+                :connectivity,
+                :cardinalities_hist,
+                :chain_cardinalities_2_hist,
+            )
+            for fld in base_representatives
+                @test hasfield(typeof(rec), fld)
+            end
+
+            extra_fields = Set(Symbol(k) for k in spec.stats_keys)
+            if stats_base_fields[] === nothing
+                stats_base_fields[] = setdiff(rec_fields, extra_fields)
+            end
+            @test rec_fields == union(stats_base_fields[], extra_fields)
 
             for k in spec.stats_keys
                 @test hasfield(typeof(rec), Symbol(k))
@@ -195,5 +229,6 @@ end
 
         @test !isempty(dataset_out)
         @test !isempty(stats_out)
+        @info "integration progress: completed kind" index=idx total=total_kinds kind=spec.kind
     end
 end

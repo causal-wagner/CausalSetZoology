@@ -33,75 +33,6 @@ function plot_grid_points(
 end
 
 """
-    plot_fourier_grid_deviation(spec; fig_path, magnification, linewidth, ylim, xtick_fracs)
-
-Plot Fourier-analysis data produced by `compute_fourier_grid_deviation`.
-
-# Arguments
-- `spec`: Named tuple produced by `compute_fourier_grid_deviation`.
-
-# Keyword Arguments
-- `fig_path`: Optional output path to save the figure.
-- `magnification`: Plot-theme magnification factor.
-- `linewidth`: Line width for plotted curves/guide lines.
-- `ylim`: Optional y-axis limits.
-- `xtick_fracs`: Optional custom x ticks/labels (supports rationals).
-
-# Returns
-- `fig`: The created `CairoMakie.Figure`.
-"""
-function plot_fourier_grid_deviation(
-    spec;
-    fig_path::Union{Nothing,String}=nothing,
-    magnification::Real=1.,
-    linewidth::Real=1,
-    ylim::Union{Tuple{Float64,Float64},Nothing}=nothing,
-    xtick_fracs::Union{Nothing,Vector{<:Any}}=nothing,
-)
-    figsize = apply_paper_theme!(; magnification = magnification)
-    fig = CairoMakie.Figure(size = figsize)
-    ax = CairoMakie.Axis(fig[1, 1])
-
-    if xtick_fracs !== nothing
-        xticks = collect(xtick_fracs)
-        if !isempty(xticks)
-            labels = map(xtick_fracs) do x
-                if x isa Rational
-                    n = numerator(x)
-                    d = denominator(x)
-                    if d == 1
-                        string(n)
-                    elseif n < 0
-                        LaTeXStrings.LaTeXString("-\\frac{$(abs(n))}{$d}")
-                    else
-                        LaTeXStrings.LaTeXString("\\frac{$n}{$d}")
-                    end
-                else
-                    Printf.@sprintf("%.2f", Float64(x))
-                end
-            end
-            ax.xticks = (xticks, labels)
-            CairoMakie.vlines!(ax, xticks; color = (:black, 1.), linestyle = :dash, linewidth = magnification * linewidth)
-        end
-    end
-
-    CairoMakie.lines!(ax, spec.freqs[spec.keep], spec.spectrum[spec.keep]; linewidth = magnification * linewidth)
-    ax.xlabel = "frequency (cycles per bin)"
-    ax.ylabel = LaTeXStrings.L"\mathcal{F}(\mathcal{S}_n^{\mathrm{grid}} / \mathcal{S}_n^{\mathrm{man}} -1)"
-    CairoMakie.xlims!(ax, (0., 0.51))
-    if !isnothing(ylim)
-        CairoMakie.ylims!(ax, ylim)
-    end
-    ax.xminorticksvisible = false
-    ax.xminorgridvisible = false
-
-    if !isnothing(fig_path)
-        CairoMakie.save(fig_path, fig)
-    end
-    return fig
-end
-
-"""
     create_grid_and_plot(
         size::Int,
         lattice::String,
@@ -170,6 +101,75 @@ function create_grid_and_plot(
         magnification = magnification,
         fig_path = fig_path,
     )
+end
+
+"""
+    plot_fourier_grid_deviation(spec; fig_path, magnification, linewidth, ylim, xtick_fracs)
+
+Plot Fourier-analysis data produced by `compute_fourier_grid_deviation`.
+
+# Arguments
+- `spec`: Named tuple produced by `compute_fourier_grid_deviation`.
+
+# Keyword Arguments
+- `fig_path`: Optional output path to save the figure.
+- `magnification`: Plot-theme magnification factor.
+- `linewidth`: Line width for plotted curves/guide lines.
+- `ylim`: Optional y-axis limits.
+- `xtick_fracs`: Optional custom x ticks/labels (supports rationals).
+
+# Returns
+- `fig`: The created `CairoMakie.Figure`.
+"""
+function plot_fourier_grid_deviation(
+    spec;
+    fig_path::Union{Nothing,String}=nothing,
+    magnification::Real=1.,
+    linewidth::Real=1,
+    ylim::Union{Tuple{Float64,Float64},Nothing}=nothing,
+    xtick_fracs::Union{Nothing,Vector{<:Any}}=nothing,
+)
+    figsize = apply_paper_theme!(; magnification = magnification)
+    fig = CairoMakie.Figure(size = figsize)
+    ax = CairoMakie.Axis(fig[1, 1])
+
+    if xtick_fracs !== nothing
+        xticks = collect(xtick_fracs)
+        if !isempty(xticks)
+            labels = map(xtick_fracs) do x
+                if x isa Rational
+                    n = numerator(x)
+                    d = denominator(x)
+                    if d == 1
+                        string(n)
+                    elseif n < 0
+                        LaTeXStrings.LaTeXString("-\\frac{$(abs(n))}{$d}")
+                    else
+                        LaTeXStrings.LaTeXString("\\frac{$n}{$d}")
+                    end
+                else
+                    Printf.@sprintf("%.2f", Float64(x))
+                end
+            end
+            ax.xticks = (xticks, labels)
+            CairoMakie.vlines!(ax, xticks; color = (:black, 1.), linestyle = :dash, linewidth = magnification * linewidth)
+        end
+    end
+
+    CairoMakie.lines!(ax, spec.freqs[spec.keep], spec.spectrum[spec.keep]; linewidth = magnification * linewidth)
+    ax.xlabel = "frequency (cycles per bin)"
+    ax.ylabel = LaTeXStrings.L"\mathcal{F}(\mathcal{S}_n^{\mathrm{grid}} / \mathcal{S}_n^{\mathrm{man}} -1)"
+    CairoMakie.xlims!(ax, (0., 0.51))
+    if !isnothing(ylim)
+        CairoMakie.ylims!(ax, ylim)
+    end
+    ax.xminorticksvisible = false
+    ax.xminorgridvisible = false
+
+    if !isnothing(fig_path)
+        CairoMakie.save(fig_path, fig)
+    end
+    return fig
 end
 
 """

@@ -1,11 +1,221 @@
 """
+    plot_hist_or_vec_panel!(
+        ax,
+        data,
+        comp_mean_std,
+        xlim_i,
+        ylim_i,
+        xlabel_i,
+        ylabel_i,
+        xticks_i,
+        yticks_i;
+        logscale_y,
+        invert_color_scaling,
+        plot_std,
+        vmin,
+        denom,
+        colormap,
+        comp_color,
+        comp_linewidth,
+    )
+
+Render one histogram/vector panel with optional comparison band and line.
+
+# Arguments
+- `ax`: Target `CairoMakie.Axis`.
+- `data`: Vector of `(scalar, mean, std)` tuples.
+- `comp_mean_std`: Optional `(mean, std)` reference tuple.
+- `xlim_i`: Optional x-axis limits.
+- `ylim_i`: Optional y-axis limits.
+- `xlabel_i`: Optional x-axis label.
+- `ylabel_i`: Optional y-axis label.
+- `xticks_i`: Optional x-tick specification.
+- `yticks_i`: Optional y-tick specification.
+
+# Keyword Arguments
+- `logscale_y`: Use log-safe clipping for y values.
+- `invert_color_scaling`: Reverse color traversal over scalar values.
+- `plot_std`: Draw mean±std bands.
+- `vmin`: Minimum scalar for color normalization.
+- `denom`: Color normalization denominator.
+- `colormap`: Colormap used for line/band colors.
+- `comp_color`: Color used for comparison curves.
+- `comp_linewidth`: Optional linewidth for comparison line.
+
+# Returns
+- `nothing`
+
+# Throws
+- `ArgumentError`: Raised when per-curve mean/std lengths mismatch.
+"""
+function plot_hist_or_vec_panel!(
+    ax,
+    data::AbstractVector{<:Tuple},
+    comp_mean_std,
+    xlim_i,
+    ylim_i,
+    xlabel_i,
+    ylabel_i,
+    xticks_i,
+    yticks_i;
+    logscale_y::Bool,
+    invert_color_scaling::Bool,
+    plot_std::Bool,
+    vmin::Real,
+    denom::Real,
+    colormap,
+    comp_color,
+    comp_linewidth::Union{Nothing,Real},
+)
+    xlabel_i !== nothing && (ax.xlabel = xlabel_i)
+    ylabel_i !== nothing && (ax.ylabel = ylabel_i)
+    xlim_i !== nothing && CairoMakie.xlims!(ax, xlim_i...)
+    ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
+    if xticks_i !== nothing
+        ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
+    end
+    if yticks_i !== nothing
+        ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
+    end
+
+    eps = if logscale_y
+        if ylim_i !== nothing
+            ylim_i[1] * 1e-3
+        else
+            minpos = minimum(v for (_, m, _) in data for v in m if v > 0)
+            minpos * 1e-3
+        end
+    else
+        -Inf
+    end
+
+    comp_x = nothing
+    comp_mean = nothing
+    if comp_mean_std !== nothing
+        mean_comp, std_comp = comp_mean_std
+        x = collect(1:length(mean_comp))
+        ylo = mean_comp .- std_comp
+        yhi = mean_comp .+ std_comp
+        if logscale_y
+            mask = mean_comp .> 0
+            x = x[mask]
+            mean_comp = mean_comp[mask]
+            ylo = ylo[mask]
+            yhi = yhi[mask]
+            ylo = max.(ylo, eps)
+            yhi = max.(yhi, eps)
+        end
+        CairoMakie.band!(ax, x, ylo, yhi; color = (comp_color, 0.2))
+        comp_x = x
+        comp_mean = mean_comp
+    end
+
+    iter = invert_color_scaling ? reverse(data) : data
+    for (val, mean, std) in iter
+        if !(length(mean) == length(std))
+            throw(ArgumentError("each curve requires mean and std vectors of equal length"))
+        end
+        t = (val - vmin) / denom
+        t = invert_color_scaling ? (1 - t) : t
+        color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
+
+        x = collect(1:length(mean))
+        ylo = mean .- std
+        yhi = mean .+ std
+        if logscale_y
+            mask = mean .> 0
+            x = x[mask]
+            mean = mean[mask]
+            ylo = ylo[mask]
+            yhi = yhi[mask]
+            ylo = max.(ylo, eps)
+            yhi = max.(yhi, eps)
+        end
+
+        if plot_std
+            CairoMakie.band!(ax, x, ylo, yhi; color = (color, 0.2))
+        end
+        CairoMakie.lines!(ax, x, mean; color = color)
+    end
+
+    if comp_x !== nothing
+        isnothing(comp_linewidth) ? CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color) :
+            CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color, linewidth = comp_linewidth)
+    end
+    return nothing
+end
+
+"""
+    avg_hist_or_vec(data_group; num_bins = nothing)
+
+Average one histogram/scalar or vector/scalar data group to `(scalar, mean, std)` tuples.
+
+# Arguments
+- `data_group`: A group of either histogram/scalar tuples or vector/scalar tuples.
+
+# Keyword Arguments
+- `num_bins`: Optional bin count used for vector averaging.
+
+# Returns
+- `Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}`: Averaged curves with uncertainty.
+"""
+function avg_hist_or_vec(data_group; num_bins::Union{Nothing,Int} = nothing)
+    if isempty(data_group)
+        return Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}()
+    end
+    if data_group[1][1] isa AbstractDict
+        return average_histogram_with_std(data_group)
+    end
+    return average_vectors_with_std(data_group; num_bins = num_bins)
+end
+
+"""
+    comp_avg_hist_or_vec(data_group; num_bins = nothing)
+
+Average a comparison group to `(mean, std)` or return `nothing` for empty input.
+
+# Arguments
+- `data_group`: Comparison group of histogram/scalar or vector/scalar tuples.
+
+# Keyword Arguments
+- `num_bins`: Optional bin count used for vector averaging.
+
+# Returns
+- `Tuple{Vector{Float64},Vector{Float64}}` or `nothing`: Averaged comparison curve.
+"""
+function comp_avg_hist_or_vec(data_group; num_bins::Union{Nothing,Int} = nothing)
+    if isempty(data_group)
+        return nothing
+    end
+    first_entry = data_group[1]
+    if first_entry isa Tuple
+        vals = getindex.(data_group, 1)
+        if vals[1] isa AbstractDict
+            return average_histogram_with_std(vals)
+        end
+        if vals[1] isa AbstractVector
+            return average_vectors_with_std(vals)
+        end
+        return nothing
+    end
+    if first_entry isa AbstractDict
+        return average_histogram_with_std(data_group)
+    end
+    if first_entry isa AbstractVector
+        return average_vectors_with_std(data_group)
+    end
+    return nothing
+end
+
+"""
     hist_hist_vec_hist_plot_matrix(
         data::Tuple{
             Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
             Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
             Vector{Vector{Tuple{Vector{Float64}, Float64}}},
             Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}}
-        };
+        },
+        fig_path::String;
         xlim, ylim, xlabel, ylabel,
         num_bins = nothing,
         colormap = :viridis,
@@ -29,33 +239,34 @@ the right, spanning both rows. The color scaling is shared across all panels.
 Returns `fig` or `(fig, axs)` when `return_axis=true`.
 
 # Arguments
-- `data`: Input dataset(s) consumed by this method.
+- `data`: Tuple `(h1, h2, v3, h4)` with three histogram+scalar groups and one vector+scalar group.
+- `fig_path`: Output path passed to `CairoMakie.save`.
 
 # Keyword Arguments
-- `xlim`: Axis limits for plotting.
-- `ylim`: Axis limits for plotting.
-- `xlabel`: Text label shown in the plot output.
-- `ylabel`: Text label shown in the plot output.
-- `num_bins`: Bin selection or binning control parameter.
-- `colormap`: Keyword option `colormap` controlling this method's behavior.
-- `invert_color_scaling`: Boolean flag controlling output formatting or algorithm behavior.
-- `colorbar_label`: Text label shown in the plot output.
-- `colorbar_ticks`: Keyword option `colorbar_ticks` controlling this method's behavior.
-- `colorbar_pos`: Keyword option `colorbar_pos` controlling this method's behavior.
-- `colorbar_size`: Keyword option `colorbar_size` controlling this method's behavior.
-- `logscale_x`: Toggle for logarithmic axis scaling.
-- `logscale_y`: Toggle for logarithmic axis scaling.
-- `double_column`: Boolean toggle controlling output or execution behavior.
-- `magnification`: Keyword option `magnification` controlling this method's behavior.
-- `plot_std`: Boolean toggle controlling output or execution behavior.
-- `return_axis`: Boolean toggle controlling output or execution behavior.
+- `xlim`, `ylim`, `xlabel`, `ylabel`: Per-panel vectors of length 4.
+- `num_bins`: Optional common bin count used when averaging vector/histogram data.
+- `colormap`: Colormap used for scalar-conditioned curve coloring.
+- `invert_color_scaling`: Reverse scalar-to-color mapping.
+- `colorbar_label`, `colorbar_ticks`: Optional colorbar label and tick mapping.
+- `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
+- `colorbar_side`: Side for automatic colorbar placement (`:left`, `:right`, `:top`, `:bottom`).
+- `colorbar_label_pos`: Colorbar label placement (`:side` or `:top`).
+- `comp`: Optional tuple of comparison datasets for panel overlays.
+- `comp_color`, `comp_linewidth`: Styling for comparison overlays.
+- `xticks`, `yticks`: Optional per-panel tick specifications (length 4 when provided).
+- `logscale_x`, `logscale_y`: Axis scaling toggles.
+- `double_column`, `magnification`: Theme/layout controls.
+- `plot_std`: Draw mean ± std bands.
+- `right_yaxis`, `top_xaxis`: Move right-column y-axes / top-row x-axes.
+- `rowgap`, `colgap`: Optional layout gap overrides.
+- `return_axis`: Return `(fig, axs)` instead of only `fig`.
 
 # Returns
-- `result`: Output of `hist_hist_vec_hist_plot_matrix` as described in the summary above.
+- `fig`: Rendered figure, or `(fig, axs)` when `return_axis=true`.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised when structural inputs are inconsistent.
+- `DomainError`: Raised when numeric parameters violate domain constraints."""
 function hist_hist_vec_hist_plot_matrix(
     data::Tuple{
         Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
@@ -63,7 +274,7 @@ function hist_hist_vec_hist_plot_matrix(
         Vector{Vector{Tuple{Vector{Float64}, Float64}}},
         Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
     },
-    fig_name::String;
+    fig_path::String;
     xlim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
     ylim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
     xlabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
@@ -94,23 +305,35 @@ function hist_hist_vec_hist_plot_matrix(
     return_axis::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Vector{CairoMakie.Axis}}}
     if !(length(xlim) == 4)
-        throw(ArgumentError("assertion failed: length(xlim) == 4"))
+        throw(ArgumentError("xlim must have length 4"))
     end
     if !(length(ylim) == 4)
-        throw(ArgumentError("assertion failed: length(ylim) == 4"))
+        throw(ArgumentError("ylim must have length 4"))
     end
     if !(length(xlabel) == 4)
-        throw(ArgumentError("assertion failed: length(xlabel) == 4"))
+        throw(ArgumentError("xlabel must have length 4"))
     end
     if !(length(ylabel) == 4)
-        throw(ArgumentError("assertion failed: length(ylabel) == 4"))
+        throw(ArgumentError("ylabel must have length 4"))
+    end
+    if !(magnification > 0)
+        throw(DomainError(magnification, "magnification must be > 0"))
+    end
+    if rowgap !== nothing && !(rowgap >= 0)
+        throw(DomainError(rowgap, "rowgap must be >= 0 when provided"))
+    end
+    if colgap !== nothing && !(colgap >= 0)
+        throw(DomainError(colgap, "colgap must be >= 0 when provided"))
+    end
+    if colorbar_size !== nothing && !(colorbar_size[1] > 0 && colorbar_size[2] > 0)
+        throw(DomainError(colorbar_size, "colorbar_size entries must be > 0"))
     end
     h1, h2, v3, h4 = data
 
-    avg1 = [average_histogram_with_std(h1[i]) for i in 1:length(h1)]
-    avg2 = [average_histogram_with_std(h2[i]) for i in 1:length(h2)]
-    avg3 = [average_vectors_with_std(v3[i]; num_bins = num_bins) for i in 1:length(v3)]
-    avg4 = [average_histogram_with_std(h4[i]) for i in 1:length(h4)]
+    avg1 = [avg_hist_or_vec(h1[i]; num_bins = num_bins) for i in 1:length(h1)]
+    avg2 = [avg_hist_or_vec(h2[i]; num_bins = num_bins) for i in 1:length(h2)]
+    avg3 = [avg_hist_or_vec(v3[i]; num_bins = num_bins) for i in 1:length(v3)]
+    avg4 = [avg_hist_or_vec(h4[i]; num_bins = num_bins) for i in 1:length(h4)]
 
     d1 = length(avg1) == 1 ? avg1[1] : vcat(avg1...)
     d2 = length(avg2) == 1 ? avg2[1] : vcat(avg2...)
@@ -149,7 +372,6 @@ function hist_hist_vec_hist_plot_matrix(
         for ax in (axs[1], axs[2])
             ax.xaxisposition = :top
             ax.xticklabelalign = (:center, :bottom)
-            ax.xaxisposition = :top
         end
     end
     if right_yaxis
@@ -175,99 +397,8 @@ function hist_hist_vec_hist_plot_matrix(
             )
             ax_left.yaxisposition = :left
             ax_left.rightspinevisible = false
-            linkxaxes!(ax, ax_left)
-            linkyaxes!(ax, ax_left)
-        end
-    end
-
-    function plot_on_axis!(
-        ax,
-        data::AbstractVector{<:Tuple},
-        comp_mean_std,
-        xlim_i,
-        ylim_i,
-        xlabel_i,
-        ylabel_i,
-        xticks_i,
-        yticks_i,
-    )
-        xlabel_i !== nothing && (ax.xlabel = xlabel_i)
-        ylabel_i !== nothing && (ax.ylabel = ylabel_i)
-        xlim_i !== nothing && CairoMakie.xlims!(ax, xlim_i...)
-        ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
-        if xticks_i !== nothing
-            ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
-        end
-        if yticks_i !== nothing
-            ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
-        end
-
-        eps = if logscale_y
-            if ylim_i !== nothing
-                ylim_i[1] * 1e-3
-            else
-                minpos = minimum(v for (_, m, _) in data for v in m if v > 0)
-                minpos * 1e-3
-            end
-        else
-            -Inf
-        end
-
-        # comparison band first
-        comp_x = nothing
-        comp_mean = nothing
-        if comp_mean_std !== nothing
-            mean_comp, std_comp = comp_mean_std
-            x = collect(1:length(mean_comp))
-            ylo = mean_comp .- std_comp
-            yhi = mean_comp .+ std_comp
-            if logscale_y
-                mask = mean_comp .> 0
-                x = x[mask]
-                mean_comp = mean_comp[mask]
-                ylo = ylo[mask]
-                yhi = yhi[mask]
-                ylo = max.(ylo, eps)
-                yhi = max.(yhi, eps)
-            end
-            CairoMakie.band!(ax, x, ylo, yhi; color = (comp_color, 0.2))
-            comp_x = x
-            comp_mean = mean_comp
-        end
-
-        iter = invert_color_scaling ? reverse(data) : data
-        for (val, mean, std) in iter
-            if !(length(mean) == length(std))
-                throw(ArgumentError("assertion failed: length(mean) == length(std)"))
-            end
-            t = (val - vmin) / denom
-            t = invert_color_scaling ? (1 - t) : t
-            color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
-
-            x = collect(1:length(mean))
-            ylo = mean .- std
-            yhi = mean .+ std
-
-            if logscale_y
-                mask = mean .> 0
-                x = x[mask]
-                mean = mean[mask]
-                ylo = ylo[mask]
-                yhi = yhi[mask]
-                ylo = max.(ylo, eps)
-                yhi = max.(yhi, eps)
-            end
-
-            if plot_std
-                CairoMakie.band!(ax, x, ylo, yhi; color = (color, 0.2))
-            end
-            CairoMakie.lines!(ax, x, mean; color = color)
-        end
-
-        # comparison mean line on top
-        if comp_x !== nothing
-            isnothing(comp_linewidth) ? CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color) :
-                CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color, linewidth = comp_linewidth)
+            CairoMakie.linkxaxes!(ax, ax_left)
+            CairoMakie.linkyaxes!(ax, ax_left)
         end
     end
 
@@ -280,52 +411,48 @@ function hist_hist_vec_hist_plot_matrix(
         comp2_flat = vcat(comp[2]...)
         comp3_flat = vcat(comp[3]...)
         comp4_flat = vcat(comp[4]...)
-
-        comp1 = !isempty(comp1_flat) && comp1_flat[1] isa Tuple ?
-            average_histogram_with_std(comp1_flat; num_bins = num_bins) :
-            average_histogram_with_std(comp1_flat)
-
-        comp2 = !isempty(comp2_flat) && comp2_flat[1] isa Tuple ?
-            average_histogram_with_std(comp2_flat; num_bins = num_bins) :
-            average_histogram_with_std(comp2_flat)
-
-        comp3 = !isempty(comp3_flat) && comp3_flat[1] isa Tuple ?
-            average_vectors_with_std(comp3_flat; num_bins = num_bins) :
-            average_vectors_with_std(comp3_flat)
-
-        comp4 = !isempty(comp4_flat) && comp4_flat[1] isa Tuple ?
-            average_histogram_with_std(comp4_flat; num_bins = num_bins) :
-            average_histogram_with_std(comp4_flat)
+        comp1 = comp_avg_hist_or_vec(comp1_flat; num_bins = num_bins)
+        comp2 = comp_avg_hist_or_vec(comp2_flat; num_bins = num_bins)
+        comp3 = comp_avg_hist_or_vec(comp3_flat; num_bins = num_bins)
+        comp4 = comp_avg_hist_or_vec(comp4_flat; num_bins = num_bins)
     end
 
     xt = xticks === nothing ? fill(nothing, 4) : xticks
     yt = yticks === nothing ? fill(nothing, 4) : yticks
     if !(length(xt) == 4)
-        throw(ArgumentError("assertion failed: length(xt) == 4"))
+        throw(ArgumentError("xticks must have length 4"))
     end
     if !(length(yt) == 4)
-        throw(ArgumentError("assertion failed: length(yt) == 4"))
+        throw(ArgumentError("yticks must have length 4"))
     end
-    plot_on_axis!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1])
-    plot_on_axis!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2])
-    plot_on_axis!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3])
-    plot_on_axis!(axs[4], d4, comp4, xlim[4], ylim[4], xlabel[4], ylabel[4], xt[4], yt[4])
+    plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
+    plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
+    plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
+    plot_hist_or_vec_panel!(axs[4], d4, comp4, xlim[4], ylim[4], xlabel[4], ylabel[4], xt[4], yt[4];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
     cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
     cb = if colorbar_pos === nothing
         if colorbar_side == :right
-            Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
+            CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
         elseif colorbar_side == :left
-            Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
+            CairoMakie.Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
         elseif colorbar_side == :top
-            Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
+            CairoMakie.Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
         elseif colorbar_side == :bottom
-            Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
+            CairoMakie.Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
         else
-            error("colorbar_side must be :left, :right, :top, or :bottom")
+            throw(ArgumentError("colorbar_side must be one of :left, :right, :top, :bottom"))
         end
     else
-        cb = Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
+        cb = CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
         cb.halign = colorbar_pos[1]
         cb.valign = colorbar_pos[2]
         cb.tellwidth = false
@@ -374,7 +501,7 @@ function hist_hist_vec_hist_plot_matrix(
         cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
     end
 
-    CairoMakie.save(fig_path(fig_name), fig)
+    CairoMakie.save(fig_path, fig)
     return return_axis ? (fig, axs) : fig
 end
 
@@ -383,7 +510,7 @@ end
         data_paths,
         comp_paths,
         scalar::Symbol,
-        fig_name::String;
+        fig_path::String;
         xlim, ylim, xlabel, ylabel,
         sqrt_scalars::Bool = false,
         # scalar_bin_mahalanobis_gap_distinguishability kwargs
@@ -441,60 +568,41 @@ Returns the saved `CairoMakie.Figure`.
 # Arguments
 - `data_paths`: Path or collection of paths used for loading/saving data.
 - `comp_paths`: Path or collection of paths used for loading/saving data.
-- `scalar`: Scalar value(s) or scalar field identifier.
-- `fig_name`: Output figure name/path used when saving plots.
+- `scalar`: Scalar field used for x/color conditioning.
+- `fig_path`: Output path passed to `CairoMakie.save`.
 
 # Keyword Arguments
-- `xlim`: Axis limits for plotting.
-- `ylim`: Axis limits for plotting.
-- `xlabel`: Text label shown in the plot output.
-- `ylabel`: Text label shown in the plot output.
-- `sqrt_scalars`: Scalar value(s) or scalar field identifier.
-- `regulator`: Keyword option `regulator` controlling this method's behavior.
-- `R`: Numeric control parameter for fitting/sampling resolution.
-- `q`: Numeric control parameter for fitting/sampling resolution.
-- `alpha`: Numeric control parameter for fitting/sampling resolution.
+- `xlim`, `ylim`, `xlabel`, `ylabel`: Per-panel vectors of length 4.
+- `sqrt_scalars`: Apply `sqrt` to dataset scalar values before plotting/distinguishability.
+- `num_bins`, `regulator`, `R`, `q`, `alpha`: Distinguishability estimator controls.
 - `rng`: Random number generator used for stochastic steps.
-- `symmetric`: Keyword option `symmetric` controlling this method's behavior.
-- `num_workers`: Keyword option `num_workers` controlling this method's behavior.
-- `verbose`: Boolean toggle controlling output or execution behavior.
-- `rank_tol`: Keyword option `rank_tol` controlling this method's behavior.
-- `stabilization_method`: Keyword option `stabilization_method` controlling this method's behavior.
-- `projection_tolerance`: Keyword option `projection_tolerance` controlling this method's behavior.
-- `progress`: Boolean toggle controlling output or execution behavior.
-- `progress_step`: Keyword option `progress_step` controlling this method's behavior.
-- `invert_color_scaling`: Boolean flag controlling output formatting or algorithm behavior.
-- `colorbar_label`: Text label shown in the plot output.
-- `colorbar_ticks`: Keyword option `colorbar_ticks` controlling this method's behavior.
-- `colorbar_pos`: Keyword option `colorbar_pos` controlling this method's behavior.
-- `colorbar_size`: Keyword option `colorbar_size` controlling this method's behavior.
-- `colorbar_side`: Keyword option `colorbar_side` controlling this method's behavior.
-- `colorbar_label_pos`: Text label shown in the plot output.
-- `comp_color`: Keyword option `comp_color` controlling this method's behavior.
-- `comp_linewidth`: Keyword option `comp_linewidth` controlling this method's behavior.
-- `xticks`: Keyword option `xticks` controlling this method's behavior.
-- `yticks`: Keyword option `yticks` controlling this method's behavior.
+- `symmetric`: Must remain `false` for this function.
+- `num_workers`, `verbose`, `rank_tol`, `stabilization_method`, `projection_tolerance`, `progress`, `progress_step`: Distinguishability runtime controls.
+- `invert_color_scaling`: Reverse scalar-to-color mapping.
+- `colorbar_label`, `colorbar_ticks`: Optional colorbar label and tick mapping.
+- `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
+- `colorbar_side`: Side for automatic colorbar placement (`:left`, `:right`, `:top`, `:bottom`).
+- `colorbar_label_pos`: Colorbar label placement (`:side` or `:top`).
+- `comp_color`, `comp_linewidth`: Styling for comparison overlays in panels 1-3.
+- `xticks`, `yticks`: Optional per-panel tick specifications (length 4 when provided).
 - `logscale_x`: Toggle for logarithmic axis scaling.
 - `logscale_y`: Toggle for logarithmic axis scaling.
-- `double_column`: Boolean toggle controlling output or execution behavior.
-- `magnification`: Keyword option `magnification` controlling this method's behavior.
-- `plot_std`: Boolean toggle controlling output or execution behavior.
-- `right_yaxis`: Boolean toggle controlling output or execution behavior.
-- `top_xaxis`: Boolean toggle controlling output or execution behavior.
-- `rowgap`: Keyword option `rowgap` controlling this method's behavior.
-- `colgap`: Keyword option `colgap` controlling this method's behavior.
+- `double_column`, `magnification`: Theme/layout controls.
+- `plot_std`: Draw mean ± std bands in panels 1-3.
+- `right_yaxis`, `top_xaxis`: Move right-column y-axes / top-row x-axes.
+- `rowgap`, `colgap`: Optional layout gap overrides.
 
 # Returns
-- `result::CairoMakie.Figure`: Output of `hist_hist_vec_distinguishability_plot_matrix` with type annotation `CairoMakie.Figure`.
+- `fig::CairoMakie.Figure`: Saved and returned plot figure.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: Raised when structural inputs are inconsistent.
+- `DomainError`: Raised when numeric parameters violate domain constraints."""
 function hist_hist_vec_distinguishability_plot_matrix(
     data_paths_in,
     comp_paths_in,
     scalar::Symbol,
-    fig_name::String;
+    fig_path::String;
     xlim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
     ylim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
     xlabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
@@ -539,19 +647,31 @@ function hist_hist_vec_distinguishability_plot_matrix(
     colgap::Union{Nothing,Real} = 0.0,
 )::CairoMakie.Figure
     if !(length(xlim) == 4)
-        throw(ArgumentError("assertion failed: length(xlim) == 4"))
+        throw(ArgumentError("xlim must have length 4"))
     end
     if !(length(ylim) == 4)
-        throw(ArgumentError("assertion failed: length(ylim) == 4"))
+        throw(ArgumentError("ylim must have length 4"))
     end
     if !(length(xlabel) == 4)
-        throw(ArgumentError("assertion failed: length(xlabel) == 4"))
+        throw(ArgumentError("xlabel must have length 4"))
     end
     if !(length(ylabel) == 4)
-        throw(ArgumentError("assertion failed: length(ylabel) == 4"))
+        throw(ArgumentError("ylabel must have length 4"))
     end
-    if !(!symmetric)
-        throw(ArgumentError("hist_hist_vec_distinguishability_plot_matrix enforces symmetric = false"))
+    if symmetric
+        throw(ArgumentError("symmetric must be false for hist_hist_vec_distinguishability_plot_matrix"))
+    end
+    if !(magnification > 0)
+        throw(DomainError(magnification, "magnification must be > 0"))
+    end
+    if rowgap !== nothing && !(rowgap >= 0)
+        throw(DomainError(rowgap, "rowgap must be >= 0 when provided"))
+    end
+    if colgap !== nothing && !(colgap >= 0)
+        throw(DomainError(colgap, "colgap must be >= 0 when provided"))
+    end
+    if colorbar_size !== nothing && !(colorbar_size[1] > 0 && colorbar_size[2] > 0)
+        throw(DomainError(colorbar_size, "colorbar_size entries must be > 0"))
     end
     to_paths(x) = x isa AbstractString ? [String(x)] : String.(collect(x))
     data_paths = to_paths(data_paths_in)
@@ -652,36 +772,12 @@ function hist_hist_vec_distinguishability_plot_matrix(
     )
 
     # prepare panel data (first 3 panels like hist_hist_vec_hist_plot_matrix)
-    avg_hist_or_vec(data_group) = begin
-        if isempty(data_group)
-            return Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}()
-        end
-        if data_group[1][1] isa AbstractDict
-            return average_histogram_with_std(data_group)
-        else
-            return average_vectors_with_std(data_group; num_bins = num_bins)
-        end
-    end
-    comp_avg_hist_or_vec(data_group) = begin
-        if isempty(data_group)
-            return nothing
-        end
-        if data_group[1] isa Tuple
-            if data_group[1][1] isa AbstractDict
-                return average_histogram_with_std(data_group; num_bins = num_bins)
-            else
-                return average_vectors_with_std(data_group; num_bins = num_bins)
-            end
-        end
-        return nothing
-    end
-
-    d1 = avg_hist_or_vec(connectivity_data_single[1])
-    d2 = avg_hist_or_vec(max_pathlen_data_single[1])
-    d3 = avg_hist_or_vec(ev_sym_link_data_single[1])
-    comp1 = comp_avg_hist_or_vec(connectivity_ref)
-    comp2 = comp_avg_hist_or_vec(max_pathlen_ref)
-    comp3 = comp_avg_hist_or_vec(ev_sym_link_ref)
+    d1 = avg_hist_or_vec(connectivity_data_single[1]; num_bins = num_bins)
+    d2 = avg_hist_or_vec(max_pathlen_data_single[1]; num_bins = num_bins)
+    d3 = avg_hist_or_vec(ev_sym_link_data_single[1]; num_bins = num_bins)
+    comp1 = comp_avg_hist_or_vec(connectivity_ref; num_bins = num_bins)
+    comp2 = comp_avg_hist_or_vec(max_pathlen_ref; num_bins = num_bins)
+    comp3 = comp_avg_hist_or_vec(ev_sym_link_ref; num_bins = num_bins)
 
     all_vals = [v for (v, _, _) in d1]
     append!(all_vals, (v for (v, _, _) in d2))
@@ -715,7 +811,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
         for ax in (axs[1], axs[2])
             ax.xaxisposition = :top
             ax.xticklabelalign = (:center, :bottom)
-            ax.xaxisposition = :top
         end
     end
     if right_yaxis
@@ -740,107 +835,28 @@ function hist_hist_vec_distinguishability_plot_matrix(
             )
             ax_left.yaxisposition = :left
             ax_left.rightspinevisible = false
-            linkxaxes!(ax, ax_left)
-            linkyaxes!(ax, ax_left)
+            CairoMakie.linkxaxes!(ax, ax_left)
+            CairoMakie.linkyaxes!(ax, ax_left)
         end
     end
 
     xt = xticks === nothing ? fill(nothing, 4) : xticks
     yt = yticks === nothing ? fill(nothing, 4) : yticks
     if !(length(xt) == 4)
-        throw(ArgumentError("assertion failed: length(xt) == 4"))
+        throw(ArgumentError("xticks must have length 4"))
     end
     if !(length(yt) == 4)
-        throw(ArgumentError("assertion failed: length(yt) == 4"))
+        throw(ArgumentError("yticks must have length 4"))
     end
-    function plot_hist_or_vec_panel!(
-        ax,
-        data::AbstractVector{<:Tuple},
-        comp_mean_std,
-        xlim_i,
-        ylim_i,
-        xlabel_i,
-        ylabel_i,
-        xticks_i,
-        yticks_i,
-    )
-        xlabel_i !== nothing && (ax.xlabel = xlabel_i)
-        ylabel_i !== nothing && (ax.ylabel = ylabel_i)
-        xlim_i !== nothing && CairoMakie.xlims!(ax, xlim_i...)
-        ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
-        if xticks_i !== nothing
-            ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
-        end
-        if yticks_i !== nothing
-            ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
-        end
-
-        eps = if logscale_y
-            if ylim_i !== nothing
-                ylim_i[1] * 1e-3
-            else
-                minpos = minimum(v for (_, m, _) in data for v in m if v > 0)
-                minpos * 1e-3
-            end
-        else
-            -Inf
-        end
-
-        comp_x = nothing
-        comp_mean = nothing
-        if comp_mean_std !== nothing
-            mean_comp, std_comp = comp_mean_std
-            x = collect(1:length(mean_comp))
-            ylo = mean_comp .- std_comp
-            yhi = mean_comp .+ std_comp
-            if logscale_y
-                mask = mean_comp .> 0
-                x = x[mask]
-                mean_comp = mean_comp[mask]
-                ylo = ylo[mask]
-                yhi = yhi[mask]
-                ylo = max.(ylo, eps)
-                yhi = max.(yhi, eps)
-            end
-            CairoMakie.band!(ax, x, ylo, yhi; color = (comp_color, 0.2))
-            comp_x = x
-            comp_mean = mean_comp
-        end
-
-        iter = invert_color_scaling ? reverse(data) : data
-        for (val, mean, std) in iter
-            t = (val - vmin) / denom
-            t = invert_color_scaling ? (1 - t) : t
-            color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
-
-            x = collect(1:length(mean))
-            ylo = mean .- std
-            yhi = mean .+ std
-            if logscale_y
-                mask = mean .> 0
-                x = x[mask]
-                mean = mean[mask]
-                ylo = ylo[mask]
-                yhi = yhi[mask]
-                ylo = max.(ylo, eps)
-                yhi = max.(yhi, eps)
-            end
-
-            if plot_std
-                CairoMakie.band!(ax, x, ylo, yhi; color = (color, 0.2))
-            end
-            CairoMakie.lines!(ax, x, mean; color = color)
-        end
-
-        if comp_x !== nothing
-            isnothing(comp_linewidth) ? CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color) :
-                CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color, linewidth = comp_linewidth)
-        end
-    end
-
-    plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1])
-    plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2])
-    plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3])
+    plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
+    plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
+    plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3];
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
     # panel 4: M_obs vs scalar for the three observables (default cycle colors)
     ax4 = axs[4]
@@ -870,18 +886,18 @@ function hist_hist_vec_distinguishability_plot_matrix(
     cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
     cb = if colorbar_pos === nothing
         if colorbar_side == :right
-            Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
+            CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
         elseif colorbar_side == :left
-            Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
+            CairoMakie.Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
         elseif colorbar_side == :top
-            Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
+            CairoMakie.Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
         elseif colorbar_side == :bottom
-            Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
+            CairoMakie.Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
         else
-            error("colorbar_side must be :left, :right, :top, or :bottom")
+            throw(ArgumentError("colorbar_side must be one of :left, :right, :top, :bottom"))
         end
     else
-        cb = Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
+        cb = CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
         cb.halign = colorbar_pos[1]
         cb.valign = colorbar_pos[2]
         cb.tellwidth = false
@@ -929,6 +945,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
         cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
     end
 
-    CairoMakie.save(fig_path(fig_name), fig)
+    CairoMakie.save(fig_path, fig)
     return fig
 end

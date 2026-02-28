@@ -7,18 +7,21 @@ If all values are (approximately) equal and nonzero, values are scaled by the
 common value. If all values are approximately zero, input is returned unchanged.
 
 # Arguments
-- `col`: Input parameter `col` used by this method.
-
-# Keyword Arguments
-- This method has no keyword arguments.
+- `col`: Numeric vector to normalize.
 
 # Returns
-- `result`: Output of `transform_to_scale!` as described in the summary above.
+- `scaled`: Normalized vector in `[0, 1]` (or unchanged for near-zero constant input).
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
-function transform_to_scale!(col)
+- `ArgumentError`: If `col` is empty.
+- `DomainError`: If `col` contains non-finite values."""
+function transform_to_scale!(col::AbstractVector{<:Real})
+    if isempty(col)
+        throw(ArgumentError("col must be non-empty"))
+    end
+    if any(!isfinite, col)
+        throw(DomainError(col, "col must contain only finite values"))
+    end
     min_val = minimum(col)
     max_val = maximum(col)
     if abs(max_val - min_val) < 1e-3
@@ -41,19 +44,19 @@ one dataset must have equal sample count. Rows are optionally thinned via
 `thinning` and annotated with `kind` and `id` columns.
 
 # Arguments
-- `data`: Input dataset(s) consumed by this method.
-- `observables`: Observable/field names to extract, plot, or process.
+- `data`: Collection of datasets; `data[i]` contains one vector per observable.
+- `observables`: Observable names, one per vector in each `data[i]`.
 
 # Keyword Arguments
-- `kinds`: Category labels used for grouping or legend entries.
-- `thinning`: Numeric control parameter for fitting/sampling resolution.
+- `kinds`: Optional labels for datasets; defaults to `"set1"`, `"set2"`, ...
+- `thinning`: Keep approximately every `round(Int, 1 / thinning)`-th sample (`0 < thinning <= 1`).
 
 # Returns
-- `result`: Output of `parallel_plot_df` as described in the summary above.
+- `df`: Long-format dataframe with observable columns plus `kind` and `id`.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: If dataset structure is inconsistent with `observables`/`kinds`.
+- `DomainError`: If numeric domain constraints are violated."""
 function parallel_plot_df(
     data,
     observables::AbstractVector{<:Union{Symbol,AbstractString}};
@@ -62,20 +65,41 @@ function parallel_plot_df(
 )
     npaths = length(data)
     nfields = length(observables)
+    if npaths == 0
+        throw(ArgumentError("data must be non-empty"))
+    end
+    if nfields == 0
+        throw(ArgumentError("observables must be non-empty"))
+    end
     kinds === nothing && (kinds = ["set$(i)" for i in 1:npaths])
+    if length(kinds) != npaths
+        throw(
+            ArgumentError(
+                "kinds length ($(length(kinds))) must match number of datasets ($npaths)",
+            ),
+        )
+    end
     dfs = Vector{DataFrames.DataFrame}(undef, npaths)
     if !(0.0 < thinning <= 1.0)
-        throw(ArgumentError("assertion failed: 0.0 < thinning <= 1.0"))
+        throw(DomainError(thinning, "thinning must satisfy 0.0 < thinning <= 1.0"))
     end
     for i in 1:npaths
         vals = data[i]
         if !(length(vals) == nfields)
-            throw(ArgumentError("assertion failed: length(vals) == nfields"))
+            throw(
+                ArgumentError(
+                    "dataset $i has $(length(vals)) fields, but $(nfields) observables were provided",
+                ),
+            )
         end
         nsamples = length(vals[1])
         for j in 2:nfields
             if !(length(vals[j]) == nsamples)
-                throw(ArgumentError("assertion failed: length(vals[j]) == nsamples"))
+                throw(
+                    ArgumentError(
+                        "dataset $i field $(j) has $(length(vals[j])) samples, expected $nsamples",
+                    ),
+                )
             end
         end
         step = max(1, round(Int, 1.0 / thinning))
@@ -106,19 +130,28 @@ Pipeline:
 If `fig_path` is provided, the figure is saved.
 
 # Arguments
-- `plot_data`: Input dataset(s) consumed by this method.
-- `observables`: Observable/field names to extract, plot, or process.
-- `kinds`: Category labels used for grouping or legend entries.
+- `plot_data`: Dataset collection in the same format expected by `parallel_plot_df`.
+- `observables`: Observable names to display on the parallel axes.
+- `kinds`: Category labels corresponding to `plot_data`.
 
 # Keyword Arguments
-- `kwargs`: Additional keyword arguments forwarded to inner methods.
+- `thinning`: Data thinning ratio forwarded to `parallel_plot_df`.
+- `color_transparency`: Theme transparency parameter in `[0, 1]`.
+- `legend`: Whether to draw a custom legend.
+- `legendpos`: Legend anchor (`:lt`, `:rt`, `:lb`, `:rb`, `:tl` default fallback).
+- `legend_offset`: Legend translation offset.
+- `fig_path`: Optional file path to save the figure.
+- `sample_n`: Optional number of rows to sample for plotting (`>= 1`).
+- `color_vec`: Optional palette index vector or explicit color vector.
+- `order_vec`: Optional permutation/subset indices into `kinds`.
+- `choose_kinds`: Optional index subset applied after `order_vec`.
 
 # Returns
 - `result::AlgebraOfGraphics.FigureGrid`: Output of `create_parallel_plot` with type annotation `AlgebraOfGraphics.FigureGrid`.
 
 # Throws
-- `ArgumentError`: Raised when explicit input preconditions fail.
-- `ErrorException`: Raised for invalid option combinations or unsupported inputs."""
+- `ArgumentError`: If index/vector configuration is inconsistent.
+- `DomainError`: If numeric domain constraints are violated."""
 function create_parallel_plot(
     plot_data::Vector{Vector{Vector{Float64}}},
     observables::AbstractVector{<:Union{Symbol,AbstractString}},
@@ -130,10 +163,27 @@ function create_parallel_plot(
     legend_offset::Tuple{<:Real,<:Real} = (0, 0),
     fig_path::Union{Nothing,String}=nothing,
     sample_n::Union{Nothing,Int} = nothing,
-    color_vec::Union{Nothing,Vector{Int64}} = nothing,
+    color_vec::Union{Nothing,AbstractVector} = nothing,
     order_vec::Union{Nothing,Vector{Int64}} = nothing,
     choose_kinds::Union{Nothing,Vector{Int64}} = nothing,
 )::AlgebraOfGraphics.FigureGrid
+
+    if !(0.0 <= color_transparency <= 1.0)
+        throw(DomainError(color_transparency, "color_transparency must satisfy 0.0 <= color_transparency <= 1.0"))
+    end
+    if sample_n !== nothing && sample_n < 1
+        throw(DomainError(sample_n, "sample_n must be >= 1 when provided"))
+    end
+    if isempty(observables)
+        throw(ArgumentError("observables must be non-empty"))
+    end
+    if length(kinds) != length(plot_data)
+        throw(
+            ArgumentError(
+                "kinds length ($(length(kinds))) must match number of datasets ($(length(plot_data)))",
+            ),
+        )
+    end
 
     parallel_df = parallel_plot_df(plot_data, observables; kinds=kinds, thinning = thinning)
 
@@ -148,7 +198,16 @@ function create_parallel_plot(
     if !(all(in.(ordered_indices, Ref(base_indices))))
         throw(ArgumentError("order_vec must be valid indices of kinds"))
     end
+    if length(unique(ordered_indices)) != length(ordered_indices)
+        throw(ArgumentError("order_vec must not contain duplicate indices"))
+    end
+    if choose_kinds !== nothing && !(all(in.(choose_kinds, Ref(base_indices))))
+        throw(ArgumentError("choose_kinds must contain only valid indices of kinds"))
+    end
     selected_indices = choose_kinds === nothing ? ordered_indices : [i for i in ordered_indices if i in choose_kinds]
+    if isempty(selected_indices)
+        throw(ArgumentError("selection produced no kinds; check order_vec/choose_kinds"))
+    end
     selected_kinds = kinds[selected_indices]
     if choose_kinds !== nothing
         normalized_parallel_df = filter(row -> row.kind in selected_kinds, normalized_parallel_df)
@@ -184,8 +243,25 @@ function create_parallel_plot(
         [colors[mod1(i, length(colors))] for i in base_indices]
     else
         if all(x -> x isa Integer, color_vec)
+            if !all(x -> x >= 1, color_vec)
+                throw(ArgumentError("color_vec integer entries must be >= 1"))
+            end
+            if length(color_vec) < length(base_indices)
+                throw(
+                    ArgumentError(
+                        "color_vec must provide at least $(length(base_indices)) entries when passed as indices",
+                    ),
+                )
+            end
             [colors[mod1(i, length(colors))] for i in color_vec]
         else
+            if length(color_vec) < length(base_indices)
+                throw(
+                    ArgumentError(
+                        "color_vec must provide at least $(length(base_indices)) entries when passed as colors",
+                    ),
+                )
+            end
             color_vec
         end
     end
