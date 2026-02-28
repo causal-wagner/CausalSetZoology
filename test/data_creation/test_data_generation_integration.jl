@@ -13,11 +13,21 @@
         return proc.exitcode, text
     end
 
+    function _merge_load_path(entries::Vector{String})
+        sep = Sys.iswindows() ? ";" : ":"
+        inherited = split(get(ENV, "JULIA_LOAD_PATH", "@"), sep; keepempty = false)
+        merged = String[]
+        for entry in vcat(entries, inherited, ["@stdlib"])
+            isempty(entry) && continue
+            entry in merged && continue
+            push!(merged, entry)
+        end
+        return join(merged, sep)
+    end
+
     root_dir = normpath(joinpath(@__DIR__, "..", ".."))
-    src_project = joinpath(root_dir, "src")
     test_project = joinpath(root_dir, "test")
-    sep = Sys.iswindows() ? ";" : ":"
-    scripts_load_path = test_project * sep * src_project * sep * "@stdlib"
+    scripts_load_path = _merge_load_path([root_dir, test_project])
 
     dataset_seq_script = joinpath(root_dir, "src", "data_generation", "make_analysis_dataset_sequential.jl")
     stats_script = joinpath(root_dir, "src", "data_generation", "make_analysis_statistics.jl")
@@ -151,6 +161,9 @@ end
     for (idx, spec) in enumerate(kinds)
         @info "integration progress: starting kind" index=idx total=total_kinds kind=spec.kind
         dataset_path, dataset_code, dataset_out = _make_dataset(spec.kind; size = spec.size, extra_args = spec.extra)
+        if dataset_code != 0
+            @info "integration dataset subprocess failed" kind=spec.kind exitcode=dataset_code output=dataset_out
+        end
         @test dataset_code == 0
         dataset_code == 0 || continue
         @test isfile(dataset_path)
@@ -180,6 +193,9 @@ end
         end
 
         stats_path, stats_code, stats_out = _make_statistics(dataset_path)
+        if stats_code != 0
+            @info "integration statistics subprocess failed" kind=spec.kind exitcode=stats_code output=stats_out
+        end
         @test stats_code == 0
         stats_code == 0 || continue
         @test isfile(stats_path)
