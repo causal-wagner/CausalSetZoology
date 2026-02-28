@@ -41,6 +41,7 @@ CausalSets = {url = "https://codeberg.org/cyclopentane/CausalSets.jl"}
 QuantumGrav = {rev = "spacetime_quasicrystals", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}
 
 [compat]
+julia = "1.12"
 Distributed = "1.11.0"
 Statistics = "1.11.1"
 
