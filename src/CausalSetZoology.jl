@@ -15,7 +15,7 @@ import CausalSets
 import FFTW
 import Distributions
 import LinearAlgebra
-import Distributed
+import ProgressMeter
 
 export average_histogram_with_std,
     average_vectors_with_std,

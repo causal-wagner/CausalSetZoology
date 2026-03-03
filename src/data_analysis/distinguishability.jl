@@ -1387,6 +1387,8 @@ function mahalanobis_gap_distinguishability(
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    progress::Bool = false,
+    progress_step::Union{Nothing,Int} = nothing,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1416,6 +1418,8 @@ function mahalanobis_gap_distinguishability(
         rank_tol = rank_tol,
         stabilization_method = stabilization_method,
         projection_tolerance = projection_tolerance,
+        progress = progress,
+        progress_step = progress_step,
     )
 end
 
@@ -1455,6 +1459,8 @@ function mahalanobis_gap_distinguishability(
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    progress::Bool = false,
+    progress_step::Union{Nothing,Int} = nothing,
 )
     if !(!isempty(vals_a) && !isempty(vals_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1475,6 +1481,8 @@ function mahalanobis_gap_distinguishability(
             rank_tol = rank_tol,
             stabilization_method = stabilization_method,
             projection_tolerance = projection_tolerance,
+            progress = progress,
+            progress_step = progress_step,
         )
     elseif all(v -> v isa AbstractVector, vals_a) && all(v -> v isa AbstractVector, vals_b)
         bad_a = findfirst(v -> any(x -> !(x isa Real), v), vals_a)
@@ -1502,6 +1510,8 @@ function mahalanobis_gap_distinguishability(
             rank_tol = rank_tol,
             stabilization_method = stabilization_method,
             projection_tolerance = projection_tolerance,
+            progress = progress,
+            progress_step = progress_step,
         )
     else
         throw(ArgumentError("mahalanobis_gap_distinguishability expects vectors of dicts or vectors of numeric vectors"))
@@ -1783,6 +1793,45 @@ function _mahal_resample_many(
 end
 
 """
+    _mahal_resample_many_progress(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol; desc="mahalanobis null", progress_step=nothing)
+
+Compute Mahalanobis null-resampling statistics in serial with progress updates.
+"""
+function _mahal_resample_many_progress(
+    seeds::Vector{UInt64},
+    X::Vector{Vector{Float64}},
+    regulator::Float64,
+    q::Float64,
+    stabilization_method::Symbol,
+    projection_tolerance::Float64,
+    verbose::Bool,
+    rank_tol::Float64;
+    desc::AbstractString = "mahalanobis null",
+    progress_step::Union{Nothing,Int} = nothing,
+)
+    total = length(seeds)
+    out = Vector{Float64}(undef, total)
+    pm = ProgressMeter.Progress(total; desc = desc)
+    step = progress_step === nothing ? 1 : max(1, progress_step)
+    @inbounds for r in eachindex(seeds)
+        out[r] = _mahal_resample_once(
+            seeds[r],
+            X,
+            regulator,
+            q,
+            stabilization_method,
+            projection_tolerance,
+            verbose,
+            rank_tol,
+        )
+        if r == total || r % step == 0
+            ProgressMeter.update!(pm, r)
+        end
+    end
+    return out
+end
+
+"""
     _mahal_resample_many_threaded(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol)
 
 Compute Mahalanobis null-resampling statistics in parallel across threads.
@@ -1908,6 +1957,8 @@ function mahalanobis_gap_distinguishability(
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    progress::Bool = false,
+    progress_step::Union{Nothing,Int} = nothing,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1958,7 +2009,7 @@ function mahalanobis_gap_distinguishability(
     seeds = rand(rng, UInt64, R)
 
     n_threads = Threads.maxthreadid()
-    use_threaded = n_threads > 1 && R > 1
+    use_threaded = !progress && n_threads > 1 && R > 1
 
     if use_threaded
         S_base .= _mahal_resample_many_threaded(
@@ -1971,6 +2022,19 @@ function mahalanobis_gap_distinguishability(
             verbose,
             rank_tol,
             n_threads,
+        )
+    elseif progress
+        S_base .= _mahal_resample_many_progress(
+            seeds,
+            B,
+            regulator,
+            q,
+            stabilization_method,
+            projection_tolerance,
+            verbose,
+            rank_tol;
+            desc = "mahalanobis null (B)",
+            progress_step = progress_step,
         )
     else
         S_base .= _mahal_resample_many(
@@ -2000,6 +2064,19 @@ function mahalanobis_gap_distinguishability(
                 verbose,
                 rank_tol,
                 n_threads,
+            )
+        elseif progress
+            S_base_sym .= _mahal_resample_many_progress(
+                seeds_sym,
+                A,
+                regulator,
+                q,
+                stabilization_method,
+                projection_tolerance,
+                verbose,
+                rank_tol;
+                desc = "mahalanobis null (A)",
+                progress_step = progress_step,
             )
         else
             S_base_sym .= _mahal_resample_many(
