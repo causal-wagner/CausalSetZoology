@@ -597,11 +597,43 @@ function hellinger_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real}
     if !(length(p) == length(q))
         throw(DimensionMismatch("Hellinger distance requires equal-length vectors"))
     end
-    s = 0.0
+    sp = Vector{Float64}(undef, length(p))
+    sq = Vector{Float64}(undef, length(q))
     @inbounds for i in eachindex(p, q)
-        s += (sqrt(p[i]) - sqrt(q[i]))^2
+        sp[i] = sqrt(Float64(p[i]))
+        sq[i] = sqrt(Float64(q[i]))
     end
-    return sqrt(s / 2)
+    spp = LinearAlgebra.dot(sp, sp)
+    sqq = LinearAlgebra.dot(sq, sq)
+    spq = LinearAlgebra.dot(sp, sq)
+    d2 = (spp + sqq - 2 * spq) / 2
+    return sqrt(max(d2, 0.0))
+end
+
+@inline function _hellinger_from_sqrt(
+    sp::AbstractVector{<:Real},
+    sq::AbstractVector{<:Real},
+    spp::Float64,
+    sqq::Float64,
+)::Float64
+    d2 = (spp + sqq - 2 * LinearAlgebra.dot(sp, sq)) / 2
+    return sqrt(max(d2, 0.0))
+end
+
+function _sqrt_vectors_and_norms(vecs::Vector{<:AbstractVector{<:Real}})
+    n = length(vecs)
+    sq = Vector{Vector{Float64}}(undef, n)
+    norms = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        v = vecs[i]
+        s = Vector{Float64}(undef, length(v))
+        for j in eachindex(v)
+            s[j] = sqrt(Float64(v[j]))
+        end
+        sq[i] = s
+        norms[i] = LinearAlgebra.dot(s, s)
+    end
+    return sq, norms
 end
 
 """
@@ -660,16 +692,80 @@ Build the exact pairwise Hellinger distance matrix for a vector dataset.
 """
 function _distance_matrix_exact(vecs::Vector{<:AbstractVector{<:Real}})
     n = length(vecs)
+    sq, norms = _sqrt_vectors_and_norms(vecs)
     D = Matrix{Float64}(undef, n, n)
     @inbounds for i in 1:n
         D[i, i] = 0.0
     end
     @inbounds for i in 1:(n - 1), j in (i + 1):n
-        d = hellinger_distance(vecs[i], vecs[j])
+        d = _hellinger_from_sqrt(sq[i], sq[j], norms[i], norms[j])
         D[i, j] = d
         D[j, i] = d
     end
     return D
+end
+
+function _pairwise_hellinger_sum_sqrt(
+    sqA::Vector{<:AbstractVector{<:Real}},
+    normA::Vector{Float64},
+    sqB::Vector{<:AbstractVector{<:Real}},
+    normB::Vector{Float64},
+)::Float64
+    n1 = length(sqA)
+    n2 = length(sqB)
+    partial = zeros(Float64, Threads.maxthreadid())
+    Threads.@threads for i in 1:n1
+        tid = Threads.threadid()
+        ai = sqA[i]
+        ai2 = normA[i]
+        s = 0.0
+        @inbounds for j in 1:n2
+            s += _hellinger_from_sqrt(ai, sqB[j], ai2, normB[j])
+        end
+        partial[tid] += s
+    end
+    return sum(partial)
+end
+
+@inline function _sample_var_from_sums(sumv::Float64, sumsq::Float64, n::Int)::Float64
+    if n <= 1
+        return NaN
+    end
+    meanv = sumv / n
+    return max((sumsq - n * meanv * meanv) / (n - 1), 0.0)
+end
+
+"""
+    _thread_seeds(rng, nt::Int)
+
+Generate `nt` unique `UInt64` seeds from `rng` for thread-local RNG streams.
+
+# Arguments
+- `rng`: Base random number generator.
+- `nt`: Number of seeds to generate.
+
+# Returns
+- `Vector{UInt64}`: Unique per-thread seeds.
+
+# Throws
+- `DomainError`: Raised when `nt < 1`.
+"""
+function _thread_seeds(rng, nt::Int)
+    if !(nt >= 1)
+        throw(DomainError(nt, "nt must be >= 1"))
+    end
+    seeds = Vector{UInt64}(undef, nt)
+    seen = Set{UInt64}()
+    i = 1
+    while i <= nt
+        s = rand(rng, UInt64)
+        if !(s in seen)
+            seeds[i] = s
+            push!(seen, s)
+            i += 1
+        end
+    end
+    return seeds
 end
 
 """
@@ -692,6 +788,7 @@ and then trimmed to the maximal nonzero bin of the union.
 - `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
 
 # Throws
+- `DomainError`: Propagated for invalid `num_draws`.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function histogram_distinguishability(
@@ -789,22 +886,16 @@ function histogram_distinguishability(
     n1 = length(vecs_a)
     n2 = length(vecs_b)
     A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
-    sum_xy = 0.0
-    for i in 1:n1, j in 1:n2
-        sum_xy += hellinger_distance(A[i], B[j])
-    end
+    sqA, normA = _sqrt_vectors_and_norms(A)
+    sqB, normB = _sqrt_vectors_and_norms(B)
+
+    sum_xy = _pairwise_hellinger_sum_sqrt(sqA, normA, sqB, normB)
     exy = sum_xy / (n1 * n2)
 
-    sum_xx = 0.0
-    for i in 1:n1, j in 1:n1
-        sum_xx += hellinger_distance(A[i], A[j])
-    end
+    sum_xx = _pairwise_hellinger_sum_sqrt(sqA, normA, sqA, normA)
     exx = sum_xx / (n1 * n1)
 
-    sum_yy = 0.0
-    for i in 1:n2, j in 1:n2
-        sum_yy += hellinger_distance(B[i], B[j])
-    end
+    sum_yy = _pairwise_hellinger_sum_sqrt(sqB, normB, sqB, normB)
     eyy = sum_yy / (n2 * n2)
 
     E = 2 * exy - exx - eyy
@@ -855,26 +946,48 @@ function histogram_distinguishability(
     end
     m = num_draws
 
-    dxy = Vector{Float64}(undef, m)
-    dxx = Vector{Float64}(undef, m)
-    dyy = Vector{Float64}(undef, m)
+    nt = Threads.maxthreadid()
+    sum_xy_t = zeros(Float64, nt)
+    sum_xx_t = zeros(Float64, nt)
+    sum_yy_t = zeros(Float64, nt)
+    sumsq_xy_t = zeros(Float64, nt)
+    sumsq_xx_t = zeros(Float64, nt)
+    sumsq_yy_t = zeros(Float64, nt)
+    seeds = _thread_seeds(rng, nt)
+    rngs = [Random.Xoshiro(seed) for seed in seeds]
 
-    for t in 1:m
-        i = rand(rng, 1:n1); j = rand(rng, 1:n2)
-        dxy[t] = Dmat[i, n1 + j]
-        i1 = rand(rng, 1:n1); i2 = rand(rng, 1:n1)
-        dxx[t] = Dmat[i1, i2]
-        j1 = rand(rng, 1:n2); j2 = rand(rng, 1:n2)
-        dyy[t] = Dmat[n1 + j1, n1 + j2]
+    Threads.@threads for t in 1:m
+        tid = Threads.threadid()
+        rng_t = rngs[tid]
+        i = rand(rng_t, 1:n1); j = rand(rng_t, 1:n2)
+        vxy = Dmat[i, n1 + j]
+        i1 = rand(rng_t, 1:n1); i2 = rand(rng_t, 1:n1)
+        vxx = Dmat[i1, i2]
+        j1 = rand(rng_t, 1:n2); j2 = rand(rng_t, 1:n2)
+        vyy = Dmat[n1 + j1, n1 + j2]
+
+        sum_xy_t[tid] += vxy
+        sum_xx_t[tid] += vxx
+        sum_yy_t[tid] += vyy
+        sumsq_xy_t[tid] += vxy * vxy
+        sumsq_xx_t[tid] += vxx * vxx
+        sumsq_yy_t[tid] += vyy * vyy
     end
 
-    exy = Statistics.mean(dxy)
-    exx = Statistics.mean(dxx)
-    eyy = Statistics.mean(dyy)
+    sum_xy = sum(sum_xy_t)
+    sum_xx = sum(sum_xx_t)
+    sum_yy = sum(sum_yy_t)
+    sumsq_xy = sum(sumsq_xy_t)
+    sumsq_xx = sum(sumsq_xx_t)
+    sumsq_yy = sum(sumsq_yy_t)
 
-    var_exy = Statistics.var(dxy) / m
-    var_exx = Statistics.var(dxx) / m
-    var_eyy = Statistics.var(dyy) / m
+    exy = sum_xy / m
+    exx = sum_xx / m
+    eyy = sum_yy / m
+
+    var_exy = _sample_var_from_sums(sum_xy, sumsq_xy, m) / m
+    var_exx = _sample_var_from_sums(sum_xx, sumsq_xx, m) / m
+    var_eyy = _sample_var_from_sums(sum_yy, sumsq_yy, m) / m
 
     E = 2 * exy - exx - eyy
     W = 0.5 * (exx + eyy)
@@ -910,6 +1023,7 @@ distinguishability and `z_coll` is the collider-style Z derived from `p_value`.
 - `result`: Named tuple containing `D_obs`, `p_value`, `z_emp`, `z_coll`, and `std_Ts`.
 
 # Throws
+- `DomainError`: Propagated for invalid `num_draws`.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
 function histogram_distinguishability_permutation(
@@ -1053,13 +1167,14 @@ function histogram_distinguishability_permutation(
     n_total = length(C)
     n_per = n
 
+    Dmat = _distance_matrix_exact(C)
     pairs_u = Vector{Int}()
     pairs_v = Vector{Int}()
     dists = Float64[]
     for i in 1:(n_total - 1), j in (i + 1):n_total
         push!(pairs_u, i)
         push!(pairs_v, j)
-        push!(dists, hellinger_distance(C[i], C[j]))
+        push!(dists, Dmat[i, j])
     end
 
     labels_obs = vcat(fill(true, n_per), fill(false, n_per))
@@ -1229,7 +1344,7 @@ function histogram_distinguishability_permutation(
 end
 
 """
-    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
+    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
 
 See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
 
@@ -1248,6 +1363,10 @@ delegates to the vector implementation.
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
 - `num_workers`: Number of distributed workers to use (>= 1).
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
 
 # Returns
 - `result`: Named tuple with Mahalanobis-gap statistic, threshold comparison, and optional symmetric outputs.
@@ -1999,7 +2118,7 @@ function mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
 
 Bin-pair version: compare every bin to every other bin. Returns a vector of
 `(s1, s2, rel_change, M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
@@ -2016,6 +2135,12 @@ Bin-pair version: compare every bin to every other bin. Returns a vector of
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
 - `num_workers`: Number of distributed workers to use (>= 1).
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `progress`: If true, display progress while processing bin tasks.
+- `progress_step`: Manual progress print/update interval when progress display is active.
 
 # Returns
 - `result`: Vector of named tuples with Mahalanobis-gap metrics per bin pair or per bin vs. reference.
@@ -2167,7 +2292,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
 
 See `scalar_bin_mahalanobis_gap_distinguishability(data; ...)`.
 
@@ -2187,6 +2312,12 @@ instead of comparing all bin pairs.
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
 - `num_workers`: Number of distributed workers to use (>= 1).
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `progress`: If true, display progress while processing bin tasks.
+- `progress_step`: Manual progress print/update interval when progress display is active.
 
 # Returns
 - `result`: Vector of named tuples with Mahalanobis-gap metrics per bin pair or per bin vs. reference.

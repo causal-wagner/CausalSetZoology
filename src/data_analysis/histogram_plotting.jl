@@ -129,13 +129,13 @@ function maybe_add_legend!(ax, hist_labels, legendpos, legendpadding, legendmarg
     return nothing
 end
 
-function save_plot_result(plot, fig_name::String, return_axis::Bool)
+function save_plot_result(plot, fig_path::String, return_axis::Bool)
     if return_axis
         fig, _ = plot
-        CairoMakie.save(fig_path(fig_name), fig)
+        CairoMakie.save(fig_path, fig)
         return plot
     end
-    CairoMakie.save(fig_path(fig_name), plot)
+    CairoMakie.save(fig_path, plot)
     return plot
 end
 
@@ -438,15 +438,15 @@ function plot_mean_histograms_with_std(
 end
 
 """
-    plot_and_save_hists(hists::Vector{Vector{Dict{Int,Float64}}}, fig_name; kwargs...)
+    plot_and_save_hists(hists::Vector{Vector{Dict{Int,Float64}}}, fig_path; kwargs...)
 
 Compute `(mean, std)` per histogram group via `average_histogram_with_std`,
-plot with `plot_mean_histograms_with_std`, save to `fig_path(fig_name)`, and
+plot with `plot_mean_histograms_with_std`, save to `fig_path`, and
 return the produced figure (or `(fig, ax)` when `return_axis=true`).
 
 # Arguments
 - `hists`: Histogram input data.
-- `fig_name`: Output figure name/path used when saving plots.
+- `fig_path`: Output figure path used when saving plots.
 
 # Keyword Arguments
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
@@ -459,7 +459,7 @@ return the produced figure (or `(fig, ax)` when `return_axis=true`).
 - `DomainError`: Propagated from inner plotting when log-scale constraints are violated."""
 function plot_and_save_hists(
     hists::Vector{Vector{Dict{Int,Float64}}},
-    fig_name::String;
+    fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = true,
@@ -502,13 +502,13 @@ function plot_and_save_hists(
         return_axis = return_axis,
         )
 
-    return save_plot_result(plot, fig_name, return_axis)
+    return save_plot_result(plot, fig_path, return_axis)
 end
 
 """
-    plot_and_save_hists(hists::Vector{Vector{Tuple{D,Real}}}, fig_name; kwargs...) where {D<:AbstractDict}
+    plot_and_save_hists(hists::Vector{Vector{Tuple{D,Real}}}, fig_path; kwargs...) where {D<:AbstractDict}
 
-See `plot_and_save_hists(hists::Vector{Vector{Dict{Int,Float64}}}, fig_name; ...)`.
+See `plot_and_save_hists(hists::Vector{Vector{Dict{Int,Float64}}}, fig_path; ...)`.
 
 This overload expects scalar-tagged histogram samples `(hist, scalar)`, computes
 scalar-aware averages, and forwards colorbar-related keyword options to
@@ -516,7 +516,7 @@ scalar-aware averages, and forwards colorbar-related keyword options to
 
 # Arguments
 - `hists`: Histogram input data.
-- `fig_name`: Output figure name/path used when saving plots.
+- `fig_path`: Output figure path used when saving plots.
 
 # Keyword Arguments
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
@@ -529,7 +529,7 @@ scalar-aware averages, and forwards colorbar-related keyword options to
 - `DomainError`: Propagated from inner plotting when log-scale constraints are violated."""
 function plot_and_save_hists(
     hists::Vector{Vector{Tuple{D,Real}}},
-    fig_name::String;
+    fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = true,
@@ -599,19 +599,19 @@ function plot_and_save_hists(
         return_axis = return_axis,
     )
 
-    return save_plot_result(plot, fig_name, return_axis)
+    return save_plot_result(plot, fig_path, return_axis)
 end
 
 """
-    plot_and_save_vectors(vectors, fig_name; kwargs...)
+    plot_and_save_vectors(vectors, fig_path; kwargs...)
 
 Vector analogue of `plot_and_save_hists`: compute per-group `(mean, std)` using
 `average_vectors_with_std`, plot with `plot_mean_histograms_with_std`, save to
-`fig_path(fig_name)`, and return the plot object.
+`fig_path`, and return the plot object.
 
 # Arguments
 - `vectors`: Vector-valued input data.
-- `fig_name`: Output figure name/path used when saving plots.
+- `fig_path`: Output figure path used when saving plots.
 
 # Keyword Arguments
 - `kwargs`: Additional keyword arguments forwarded to inner methods.
@@ -624,7 +624,7 @@ Vector analogue of `plot_and_save_hists`: compute per-group `(mean, std)` using
 - `DomainError`: Propagated from inner plotting when log-scale constraints are violated."""
 function plot_and_save_vectors(
     vectors::AbstractVector,
-    fig_name::String;
+    fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = true,
@@ -659,7 +659,7 @@ function plot_and_save_vectors(
     if scalar_groups !== nothing
         return plot_and_save_vectors_scalar(
             scalar_groups,
-            fig_name;
+            fig_path;
             xlim = xlim,
             ylim = ylim,
             logscale_x = logscale_x,
@@ -698,7 +698,7 @@ function plot_and_save_vectors(
         plain_legendmargin = isnothing(legendmargin) ? (5, 5, 5, 5) : legendmargin
         return plot_and_save_vectors_plain(
             plain_groups,
-            fig_name;
+            fig_path;
             xlim = xlim,
             ylim = ylim,
             logscale_x = logscale_x,
@@ -725,7 +725,7 @@ end
 
 function plot_and_save_vectors_plain(
     vectors::Vector{Vector{AbstractVector}},
-    fig_name::String;
+    fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = true,
@@ -768,12 +768,12 @@ function plot_and_save_vectors_plain(
         return_axis = return_axis,
     )
 
-    return save_plot_result(plot, fig_name, return_axis)
+    return save_plot_result(plot, fig_path, return_axis)
 end
 
 function plot_and_save_vectors_scalar(
     vectors::Vector{Vector{Tuple{AbstractVector,Real}}},
-    fig_name::String;
+    fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     logscale_x::Bool = true,
@@ -843,5 +843,5 @@ function plot_and_save_vectors_scalar(
         return_axis = return_axis,
     )
 
-    return save_plot_result(plot, fig_name, return_axis)
+    return save_plot_result(plot, fig_path, return_axis)
 end

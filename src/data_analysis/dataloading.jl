@@ -169,13 +169,24 @@ function _scan_records(visit!::F, path::AbstractString, filter, cfg::_ScanConfig
     seen = 0
     JLD2.jldopen(path, "r") do f
         nbatches = f["meta/nbatches"]
-        for b in 1:nbatches
-            batch = f["batches/$b"]
-            for x in batch
-                filter !== nothing && !filter(x) && continue
-                seen += 1
-                _keep_sample(seen, cfg) || continue
-                visit!(x)
+        if filter === nothing
+            for b in 1:nbatches
+                batch = f["batches/$b"]
+                for x in batch
+                    seen += 1
+                    _keep_sample(seen, cfg) || continue
+                    visit!(x)
+                end
+            end
+        else
+            for b in 1:nbatches
+                batch = f["batches/$b"]
+                for x in batch
+                    !filter(x) && continue
+                    seen += 1
+                    _keep_sample(seen, cfg) || continue
+                    visit!(x)
+                end
             end
         end
     end
@@ -674,11 +685,15 @@ function _load_histograms_one(
     cfg::_ScanConfig,
     extractor::_HistogramExtractor{Nothing},
 )
-    hists = Dict[]
+    hists = nothing
     _scan_records(path, filter, cfg) do x
-        push!(hists, getfield(x, extractor.histname))
+        h = getfield(x, extractor.histname)
+        if hists === nothing
+            hists = Vector{typeof(h)}()
+        end
+        push!(hists, h)
     end
-    return hists
+    return hists === nothing ? Dict[] : hists
 end
 
 """
@@ -704,16 +719,21 @@ function _load_histograms_one(
     cfg::_ScanConfig,
     extractor::_HistogramExtractor{Symbol},
 )
-    pairs = Tuple{Dict,Float64}[]
+    pairs = nothing
     scalar = extractor.scalar
     _scan_records(path, filter, cfg) do x
+        h = getfield(x, extractor.histname)
         v = getfield(x, scalar)
         if !(v isa Real)
             throw(TypeError(:load_histograms_from_paths, "scalar field", Real, v))
         end
-        push!(pairs, (getfield(x, extractor.histname), Float64(v)))
+        pair = (h, Float64(v))
+        if pairs === nothing
+            pairs = Vector{typeof(pair)}()
+        end
+        push!(pairs, pair)
     end
-    return pairs
+    return pairs === nothing ? Tuple{Dict,Float64}[] : pairs
 end
 
 """

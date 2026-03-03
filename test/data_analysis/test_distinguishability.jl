@@ -242,6 +242,15 @@ end
     @test D[1, 3] ≈ CausalSetZoology.hellinger_distance(vecs[1], vecs[3]) atol = 1e-12
 end
 
+@testitem "distinguishability helpers: thread seeds" setup=[setupDistinguishability] begin
+    s1 = CausalSetZoology._thread_seeds(Random.Xoshiro(1234), 8)
+    s2 = CausalSetZoology._thread_seeds(Random.Xoshiro(1234), 8)
+    @test length(s1) == 8
+    @test length(unique(s1)) == 8
+    @test s1 == s2
+    @test_throws DomainError CausalSetZoology._thread_seeds(Random.Xoshiro(1), 0)
+end
+
 
 @testitem "distinguishability: basic helper validation" setup=[setupDistinguishability] begin
     # Test intent: validate distinguishability: basic helper validation behavior and output contract.
@@ -281,6 +290,17 @@ end
     d_mc = CausalSetZoology.histogram_distinguishability(h_a, h_b, 100; rng = Random.Xoshiro(42))
     @test d_mc.D > 0.9
     @test d_mc.std >= 0.0
+end
+
+@testitem "distinguishability: histogram_distinguishability threaded RNG reproducibility" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05], [0.85, 0.15], [0.92, 0.08]]
+    b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95], [0.15, 0.85], [0.08, 0.92]]
+
+    r1 = CausalSetZoology.histogram_distinguishability(a, b, 100000; rng = Random.Xoshiro(2026))
+    r2 = CausalSetZoology.histogram_distinguishability(a, b, 100000; rng = Random.Xoshiro(2026))
+    @test isapprox(r1.D, r2.D; rtol=1e-2)
+    @test isapprox(r1.std, r2.std; rtol=1e-2)
+
 end
 
 
