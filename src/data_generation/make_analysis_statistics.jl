@@ -61,9 +61,7 @@ end
 @info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
 
 @everywhere import CausalSets as CS
-@everywhere import DataFrames
 @everywhere import LinearAlgebra
-@everywhere using StatsBase
 
 @everywhere import QuantumGrav as QG
 
@@ -74,6 +72,15 @@ LinearAlgebra.BLAS.set_num_threads(1)
 
 ################################################################################
 @everywhere connectivity(adj, size) = count(x -> x > 0.0, adj) / (size * (size - 1) / 2)
+
+################################################################################
+@everywhere function countmap(values)
+    counts = Dict{eltype(values),Int}()
+    for v in values
+        counts[v] = get(counts, v, 0) + 1
+    end
+    return counts
+end
 
 ################################################################################
 @info "loading metadata..."
