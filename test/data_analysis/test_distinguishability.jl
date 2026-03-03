@@ -4,7 +4,6 @@
     using Statistics
     using LinearAlgebra
     using Distributions
-    using Distributed
     using ProgressMeter
 end
 
@@ -460,61 +459,20 @@ end
 end
 
 
-@testitem "distinguishability helpers: mahalanobis resampling serial and chunk" setup=[setupDistinguishability] begin
-    # Test intent: validate distinguishability helpers: mahalanobis resampling serial and chunk behavior and output contract.
+@testitem "distinguishability helpers: mahalanobis resampling serial and threaded" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability helpers: mahalanobis resampling serial and threaded behavior and output contract.
     X = [[0.0], [0.1], [0.2], [0.3], [0.4], [0.5]]
     seeds = UInt64[11, 22, 33, 44]
-    args = (seeds, X, 1e-8, 0.0, :regularization, 1e-10, false, 1e-12)
-
-    out_many = CausalSetZoology._mahal_resample_many(args...)
-    out_chunk = CausalSetZoology._mahal_resample_chunk(args)
+    out_many = CausalSetZoology._mahal_resample_many(seeds, X, 1e-8, 0.0, :regularization, 1e-10, false, 1e-12)
+    out_threaded = CausalSetZoology._mahal_resample_many_threaded(seeds, X, 1e-8, 0.0, :regularization, 1e-10, false, 1e-12, max(2, Threads.nthreads()))
     out_once = [
         CausalSetZoology._mahal_resample_once(s, X, 1e-8, 0.0, :regularization, 1e-10, false, 1e-12)
         for s in seeds
     ]
-    @test out_many == out_chunk
+    @test out_many == out_threaded
     @test out_many ≈ out_once atol = 1e-12
     @test length(out_many) == length(seeds)
     @test all(isfinite, out_many)
-end
-
-
-@testitem "distinguishability helpers: mahalanobis resampling distributed" setup=[setupDistinguishability] begin
-    # Test intent: validate distinguishability helpers: mahalanobis resampling distributed behavior and output contract.
-    n_before = Distributed.nworkers()
-    let added = Int[]
-        try
-            needed = max(2, n_before) - n_before
-            if needed > 0
-                added = Distributed.addprocs(needed)
-            end
-            @everywhere begin
-                using Random, Statistics, LinearAlgebra, Distributions, Distributed, ProgressMeter
-                import Random: randperm
-                import CausalSetZoology
-            end
-
-            X = [[0.0], [0.1], [0.2], [0.3], [0.4], [0.5]]
-            seeds = UInt64[11, 22, 33, 44, 55, 66]
-            serial = CausalSetZoology._mahal_resample_many(seeds, X, 1e-8, 0.0, :regularization, 1e-10, false, 1e-12)
-            dist = CausalSetZoology._mahal_resample_many_distributed(
-                seeds,
-                X,
-                1e-8,
-                0.0,
-                :regularization,
-                1e-10,
-                false,
-                1e-12,
-                Distributed.workers()[1:min(2, Distributed.nworkers())],
-            )
-            @test dist ≈ serial atol = 1e-12
-        finally
-            if !isempty(added)
-                Distributed.rmprocs(added...)
-            end
-        end
-    end
 end
 
 
@@ -718,54 +676,33 @@ end
 end
 
 
-@testitem "distinguishability: distributed mahalanobis path" setup=[setupDistinguishability] begin
-    # Test intent: validate distinguishability: distributed mahalanobis path behavior and output contract.
-    n_before = Distributed.nworkers()
-    let added = Int[]
-        try
-            needed = max(2, n_before) - n_before
-            if needed > 0
-                added = Distributed.addprocs(needed)
-            end
-            @everywhere begin
-                using Random, Statistics, LinearAlgebra, Distributions, Distributed, ProgressMeter
-                import Random: randperm
-                import CausalSetZoology
-            end
+@testitem "distinguishability: mahalanobis threaded path" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: mahalanobis threaded path behavior and output contract.
+    a = [[1.0], [1.1], [1.2], [1.3], [1.4], [1.5], [1.6], [1.7]]
+    b = [[0.0], [0.1], [0.2], [0.3], [0.4], [0.5], [0.6], [0.7]]
+    seeds = rand(Random.Xoshiro(4242), UInt64, 64)
+    @test length(unique(seeds)) == length(seeds)
 
-            a = [[1.0], [1.1], [1.2], [1.3], [1.4], [1.5], [1.6], [1.7]]
-            b = [[0.0], [0.1], [0.2], [0.3], [0.4], [0.5], [0.6], [0.7]]
-            seeds = rand(Random.Xoshiro(4242), UInt64, 64)
-            @test length(unique(seeds)) == length(seeds)
-
-            rs = CausalSetZoology.mahalanobis_gap_distinguishability(
-                a,
-                b;
-                R = 25,
-                rng = Random.Xoshiro(6060),
-                num_workers = 1,
-                regulator = 1e-8,
-            )
-            rd = CausalSetZoology.mahalanobis_gap_distinguishability(
-                a,
-                b;
-                R = 25,
-                rng = Random.Xoshiro(6060),
-                num_workers = max(2, Distributed.nworkers()),
-                regulator = 1e-8,
-            )
-            @test keys(rd) == keys(rs)
-            @test rd.M_obs ≈ rs.M_obs atol = 1e-12
-            @test rd.threshold ≈ rs.threshold atol = 1e-12
-            @test rd.z_emp ≈ rs.z_emp atol = 1e-12
-            @test rd.distinguishable == rs.distinguishable
-            @test isfinite(rd.M_obs)
-        finally
-            if !isempty(added)
-                Distributed.rmprocs(added...)
-            end
-        end
-    end
+    r1 = CausalSetZoology.mahalanobis_gap_distinguishability(
+        a,
+        b;
+        R = 25,
+        rng = Random.Xoshiro(6060),
+        regulator = 1e-8,
+    )
+    r2 = CausalSetZoology.mahalanobis_gap_distinguishability(
+        a,
+        b;
+        R = 25,
+        rng = Random.Xoshiro(6060),
+        regulator = 1e-8,
+    )
+    @test keys(r2) == keys(r1)
+    @test r2.M_obs ≈ r1.M_obs atol = 1e-12
+    @test r2.threshold ≈ r1.threshold atol = 1e-12
+    @test r2.z_emp ≈ r1.z_emp atol = 1e-12
+    @test r2.distinguishable == r1.distinguishable
+    @test isfinite(r2.M_obs)
 end
 
 @testitem "distinguishability: scalar_bin_mahalanobis wrappers" setup=[setupDistinguishability] begin

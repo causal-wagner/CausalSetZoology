@@ -1344,7 +1344,7 @@ function histogram_distinguishability_permutation(
 end
 
 """
-    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
+    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
 
 See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
 
@@ -1362,7 +1362,6 @@ delegates to the vector implementation.
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `num_workers`: Number of distributed workers to use (>= 1).
 - `verbose`: If true, print stabilization diagnostics.
 - `rank_tol`: Tolerance for near-zero eigenvalue reporting.
 - `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
@@ -1384,7 +1383,6 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    num_workers::Int = 1,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
@@ -1414,7 +1412,6 @@ function mahalanobis_gap_distinguishability(
         alpha = alpha,
         rng = rng,
         symmetric = symmetric,
-        num_workers = num_workers,
         verbose = verbose,
         rank_tol = rank_tol,
         stabilization_method = stabilization_method,
@@ -1454,7 +1451,6 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    num_workers::Int = 1,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
@@ -1475,7 +1471,6 @@ function mahalanobis_gap_distinguishability(
             alpha = alpha,
             rng = rng,
             symmetric = symmetric,
-            num_workers = num_workers,
             verbose = verbose,
             rank_tol = rank_tol,
             stabilization_method = stabilization_method,
@@ -1503,7 +1498,6 @@ function mahalanobis_gap_distinguishability(
             alpha = alpha,
             rng = rng,
             symmetric = symmetric,
-            num_workers = num_workers,
             verbose = verbose,
             rank_tol = rank_tol,
             stabilization_method = stabilization_method,
@@ -1789,38 +1783,9 @@ function _mahal_resample_many(
 end
 
 """
-    _mahal_resample_chunk(args)
+    _mahal_resample_many_threaded(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol)
 
-Distributed helper that unpacks one resampling chunk payload and delegates to
-`_mahal_resample_many`.
-
-# Arguments
-- `args`: Tuple payload `(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol)`.
-
-# Returns
-- `result`: Vector of summary statistics for the provided seed chunk.
-"""
-function _mahal_resample_chunk(args)
-    seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol = args
-    return _mahal_resample_many(
-        seeds,
-        X,
-        regulator,
-        q,
-        stabilization_method,
-        projection_tolerance,
-        verbose,
-        rank_tol,
-    )
-end
-
-"""
-    _mahal_resample_many_distributed(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol, workers_to_use)
-
-Compute Mahalanobis null-resampling statistics in parallel across distributed workers.
-
-The seed vector is split into chunks, each chunk is processed by
-`_mahal_resample_chunk`, and results are stitched back in original seed order.
+Compute Mahalanobis null-resampling statistics in parallel across threads.
 
 # Arguments
 - `seeds`: Seed values for independent resampling draws.
@@ -1831,12 +1796,11 @@ The seed vector is split into chunks, each chunk is processed by
 - `projection_tolerance`: Eigenvalue cutoff for projection stabilization.
 - `verbose`: If true, print stabilization diagnostics.
 - `rank_tol`: Tolerance for near-zero eigenvalue reporting.
-- `workers_to_use`: Worker IDs used for distributed computation.
 
 # Returns
 - `result`: Vector of summary statistics, one value per input seed.
 """
-function _mahal_resample_many_distributed(
+function _mahal_resample_many_threaded(
     seeds::Vector{UInt64},
     X::Vector{Vector{Float64}},
     regulator::Float64,
@@ -1845,21 +1809,23 @@ function _mahal_resample_many_distributed(
     projection_tolerance::Float64,
     verbose::Bool,
     rank_tol::Float64,
-    workers_to_use::Vector{Int},
+    n_threads::Int,
 )
-    pool = Distributed.CachingPool(workers_to_use)
-    chunk_count = max(1, min(length(workers_to_use), length(seeds)))
-    chunks = [seeds[r] for r in Iterators.partition(eachindex(seeds), cld(length(seeds), chunk_count))]
-    chunk_args = [
-        (chunk, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol) for
-        chunk in chunks
-    ]
-    pieces = Distributed.pmap(_mahal_resample_chunk, pool, chunk_args)
     out = Vector{Float64}(undef, length(seeds))
-    t = 1
-    @inbounds for p in pieces
-        out[t:(t + length(p) - 1)] = p
-        t += length(p)
+    n_threads = min(n_threads, Threads.maxthreadid())
+    Threads.@threads for t in 1:n_threads
+        for r in t:n_threads:length(seeds)
+            @inbounds out[r] = _mahal_resample_once(
+                seeds[r],
+                X,
+                regulator,
+                q,
+                stabilization_method,
+                projection_tolerance,
+                verbose,
+                rank_tol,
+            )
+        end
     end
     return out
 end
@@ -1893,7 +1859,7 @@ function _random_split_equal(B::Vector{Vector{Float64}}, rng)
 end
 
 """
-    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
+    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
 
 Compute Mahalanobis-gap distinguishability for two vector-valued datasets.
 
@@ -1920,7 +1886,6 @@ Named tuple
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `num_workers`: Number of distributed workers to use (>= 1).
 - `verbose`: If true, print stabilization diagnostics.
 - `rank_tol`: Tolerance for near-zero eigenvalue reporting.
 - `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
@@ -1939,7 +1904,6 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    num_workers::Int = 1,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
@@ -1950,9 +1914,6 @@ function mahalanobis_gap_distinguishability(
     end
     if !(R > 0)
         throw(DomainError(R, "R must be positive"))
-    end
-    if !(num_workers >= 1)
-        throw(DomainError(num_workers, "num_workers must be >= 1"))
     end
     if !(0.0 <= q <= 1.0)
         throw(DomainError(q, "q must be in [0,1]"))
@@ -1996,129 +1957,88 @@ function mahalanobis_gap_distinguishability(
     S_base = Vector{Float64}(undef, R)
     seeds = rand(rng, UInt64, R)
 
-    workers_to_use = Int[]
-    added_workers = Int[]
-    use_distributed = false
-    if num_workers > 1 && R > 1
-        try
-            n_have = Distributed.nworkers()
-            if n_have < num_workers
-                n_add = num_workers - n_have
-                @info "Starting Distributed workers for mahalanobis_gap_distinguishability" requested = num_workers existing = n_have adding = n_add
-                added_workers = Distributed.addprocs(n_add)
-                @info "Distributed workers started" added = length(added_workers) total = Distributed.nworkers()
-            else
-                @info "Using existing Distributed workers for mahalanobis_gap_distinguishability" requested = num_workers existing = n_have
-            end
-            workers_to_use = Distributed.workers()[1:min(num_workers, Distributed.nworkers())]
-            if !isempty(workers_to_use)
-                @info "Using Distributed workers for mahalanobis resampling" workers = length(workers_to_use)
-                for w in workers_to_use
-                    Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
-                    Distributed.remotecall_wait(
-                        Core.eval,
-                        w,
-                        Main,
-                        :(
-                            if !isdefined(CausalSetZoology, :_mahal_resample_chunk)
-                                Base.include(CausalSetZoology, $(joinpath(dirname(pathof(CausalSetZoology)), "data_analysis", "distinguishability.jl")))
-                            end
-                        ),
-                    )
-                end
-                use_distributed = true
-            end
-        catch err
-            @info "Falling back to serial resampling (Distributed setup failed)" error = string(err)
-            use_distributed = false
-        end
-    end
+    n_threads = Threads.maxthreadid()
+    use_threaded = n_threads > 1 && R > 1
 
-    try
-        if use_distributed
-            S_base .= _mahal_resample_many_distributed(
-                seeds,
-                B,
-                regulator,
-                q,
-                stabilization_method,
-                projection_tolerance,
-                verbose,
-                rank_tol,
-                workers_to_use,
-            )
-        else
-            S_base .= _mahal_resample_many(
-                seeds,
-                B,
-                regulator,
-                q,
-                stabilization_method,
-                projection_tolerance,
-                verbose,
-                rank_tol,
-            )
-        end
-
-        threshold = _summary_stat(S_base, 1 - alpha)
-        if symmetric
-            S_base_sym = Vector{Float64}(undef, R)
-            seeds_sym = rand(rng, UInt64, R)
-            if use_distributed
-                S_base_sym .= _mahal_resample_many_distributed(
-                    seeds_sym,
-                    A,
-                    regulator,
-                    q,
-                    stabilization_method,
-                    projection_tolerance,
-                    verbose,
-                    rank_tol,
-                    workers_to_use,
-                )
-            else
-                S_base_sym .= _mahal_resample_many(
-                    seeds_sym,
-                    A,
-                    regulator,
-                    q,
-                    stabilization_method,
-                    projection_tolerance,
-                    verbose,
-                    rank_tol,
-                )
-            end
-            threshold_sym = _summary_stat(S_base_sym, 1 - alpha)
-        end
-
-        if symmetric
-            M_obs_min = min(M_obs, M_obs_sym)
-            threshold_max = max(threshold, threshold_sym)
-            distinguishable = (M_obs > threshold) && (M_obs_sym > threshold_sym)
-        else
-            distinguishable = M_obs > threshold
-        end
-        z_emp = (M_obs - Statistics.mean(S_base)) / (Statistics.std(S_base) + eps())
-
-        return (
-            M_obs = M_obs,
-            distinguishable = distinguishable,
-            threshold = threshold,
-            z_emp = z_emp,
-            M_obs_sym = M_obs_sym,
-            M_obs_min = M_obs_min,
-            threshold_sym = threshold_sym,
-            threshold_max = threshold_max,
+    if use_threaded
+        S_base .= _mahal_resample_many_threaded(
+            seeds,
+            B,
+            regulator,
+            q,
+            stabilization_method,
+            projection_tolerance,
+            verbose,
+            rank_tol,
+            n_threads,
         )
-    finally
-        if !isempty(added_workers)
-            @info "Keeping Distributed workers alive for reuse after mahalanobis resampling" kept = length(added_workers) total = Distributed.nworkers()
-        end
+    else
+        S_base .= _mahal_resample_many(
+            seeds,
+            B,
+            regulator,
+            q,
+            stabilization_method,
+            projection_tolerance,
+            verbose,
+            rank_tol,
+        )
     end
+
+    threshold = _summary_stat(S_base, 1 - alpha)
+    if symmetric
+        S_base_sym = Vector{Float64}(undef, R)
+        seeds_sym = rand(rng, UInt64, R)
+        if use_threaded
+            S_base_sym .= _mahal_resample_many_threaded(
+                seeds_sym,
+                A,
+                regulator,
+                q,
+                stabilization_method,
+                projection_tolerance,
+                verbose,
+                rank_tol,
+                n_threads,
+            )
+        else
+            S_base_sym .= _mahal_resample_many(
+                seeds_sym,
+                A,
+                regulator,
+                q,
+                stabilization_method,
+                projection_tolerance,
+                verbose,
+                rank_tol,
+            )
+        end
+        threshold_sym = _summary_stat(S_base_sym, 1 - alpha)
+    end
+
+    if symmetric
+        M_obs_min = min(M_obs, M_obs_sym)
+        threshold_max = max(threshold, threshold_sym)
+        distinguishable = (M_obs > threshold) && (M_obs_sym > threshold_sym)
+    else
+        distinguishable = M_obs > threshold
+    end
+    z_emp = (M_obs - Statistics.mean(S_base)) / (Statistics.std(S_base) + eps())
+
+    return (
+        M_obs = M_obs,
+        distinguishable = distinguishable,
+        threshold = threshold,
+        z_emp = z_emp,
+        M_obs_sym = M_obs_sym,
+        M_obs_min = M_obs_min,
+        threshold_sym = threshold_sym,
+        threshold_max = threshold_max,
+    )
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
 
 Bin-pair version: compare every bin to every other bin. Returns a vector of
 `(s1, s2, rel_change, M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
@@ -2134,7 +2054,6 @@ Bin-pair version: compare every bin to every other bin. Returns a vector of
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `num_workers`: Number of distributed workers to use (>= 1).
 - `verbose`: If true, print stabilization diagnostics.
 - `rank_tol`: Tolerance for near-zero eigenvalue reporting.
 - `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
@@ -2160,7 +2079,6 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    num_workers::Int = 1,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
@@ -2194,105 +2112,59 @@ function scalar_bin_mahalanobis_gap_distinguishability(
         use_pm = true
     end
     step = progress_step === nothing ? max(1, round(Int, total * 0.05)) : max(1, progress_step)
-    workers_to_use = Int[]
-    added_workers = Int[]
-    use_distributed = false
-    if num_workers > 1 && total > 1
-        try
-            n_have = Distributed.nworkers()
-            if n_have < num_workers
-                n_add = num_workers - n_have
-                @info "Starting Distributed workers for scalar_bin_mahalanobis_gap_distinguishability" requested = num_workers existing = n_have adding = n_add
-                added_workers = Distributed.addprocs(n_add)
-                @info "Distributed workers started" added = length(added_workers) total = Distributed.nworkers()
-            else
-                @info "Using existing Distributed workers for scalar_bin_mahalanobis_gap_distinguishability" requested = num_workers existing = n_have
-            end
-            workers_to_use = Distributed.workers()[1:min(num_workers, Distributed.nworkers())]
-            if !isempty(workers_to_use)
-                @info "Using Distributed workers for scalar-bin pair resampling" workers = length(workers_to_use)
-                for w in workers_to_use
-                    Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
-                    Distributed.remotecall_wait(
-                        Core.eval,
-                        w,
-                        Main,
-                        :(
-                            if !isdefined(CausalSetZoology, :_mahal_resample_chunk)
-                                Base.include(CausalSetZoology, $(joinpath(dirname(pathof(CausalSetZoology)), "data_analysis", "distinguishability.jl")))
-                            end
-                        ),
-                    )
-                end
-                use_distributed = true
-            end
-        catch err
-            @info "Falling back to serial scalar-bin pair processing (Distributed setup failed)" error = string(err)
-            use_distributed = false
-        end
+    compute_task = function (k::Int)
+        i, j = tasks[k]
+        s1, vals1 = bins[i]
+        s2, vals2 = bins[j]
+        rng_k = Random.Xoshiro(seeds[k])
+        res = mahalanobis_gap_distinguishability(
+            vals1,
+            vals2;
+            regulator = regulator,
+            R = R,
+            q = q,
+            alpha = alpha,
+            rng = rng_k,
+            symmetric = symmetric,
+            verbose = verbose,
+            rank_tol = rank_tol,
+            stabilization_method = stabilization_method,
+            projection_tolerance = projection_tolerance,
+        )
+        return (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
     end
 
-    try
-        compute_task = function (k::Int)
-            i, j = tasks[k]
-            s1, vals1 = bins[i]
-            s2, vals2 = bins[j]
-            rng_k = Random.Xoshiro(seeds[k])
-            res = mahalanobis_gap_distinguishability(
-                vals1,
-                vals2;
-                regulator = regulator,
-                R = R,
-                q = q,
-                alpha = alpha,
-                rng = rng_k,
-                symmetric = symmetric,
-                num_workers = 1,
-                verbose = verbose,
-                rank_tol = rank_tol,
-                stabilization_method = stabilization_method,
-                projection_tolerance = projection_tolerance,
-            )
-            return (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
-        end
-
-        if use_distributed
-            pool = Distributed.CachingPool(workers_to_use)
-            if progress && use_pm
-                out .= ProgressMeter.progress_pmap(compute_task, pool, 1:total; progress = pm)
-            else
-                out .= Distributed.pmap(compute_task, pool, 1:total)
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for t in 1:n_threads
+            for k in t:n_threads:total
+                @inbounds out[k] = compute_task(k)
             end
-        else
-            done = 0
-            for k in 1:total
-                out[k] = compute_task(k)
-                done += 1
-                if progress
-                    if use_pm
-                        ProgressMeter.next!(pm)
-                    elseif done % step == 0 || done == total
-                        println("Progress: $done/$total")
-                    end
+        end
+        if progress
+            for _ in 1:total
+                use_pm ? ProgressMeter.next!(pm) : nothing
+            end
+        end
+    else
+        done = 0
+        for k in 1:total
+            out[k] = compute_task(k)
+            done += 1
+            if progress
+                if use_pm
+                    ProgressMeter.next!(pm)
+                elseif done % step == 0 || done == total
+                    println("Progress: $done/$total")
                 end
             end
         end
-        return out
-    finally
-        if !isempty(added_workers)
-            try
-                @info "Removing Distributed workers after scalar-bin pair resampling" removing = length(added_workers)
-                Distributed.rmprocs(added_workers...)
-                @info "Distributed workers removed" removed = length(added_workers) remaining = Distributed.nworkers()
-            catch err
-                @info "Failed to remove some Distributed workers" removing = length(added_workers) error = string(err)
-            end
-        end
     end
+    return out
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, num_workers=1, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
 
 See `scalar_bin_mahalanobis_gap_distinguishability(data; ...)`.
 
@@ -2311,7 +2183,6 @@ instead of comparing all bin pairs.
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `num_workers`: Number of distributed workers to use (>= 1).
 - `verbose`: If true, print stabilization diagnostics.
 - `rank_tol`: Tolerance for near-zero eigenvalue reporting.
 - `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
@@ -2338,7 +2209,6 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    num_workers::Int = 1,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
@@ -2364,97 +2234,51 @@ function scalar_bin_mahalanobis_gap_distinguishability(
         use_pm = true
     end
     step = progress_step === nothing ? max(1, round(Int, total * 0.05)) : max(1, progress_step)
-    workers_to_use = Int[]
-    added_workers = Int[]
-    use_distributed = false
-    if num_workers > 1 && total > 1
-        try
-            n_have = Distributed.nworkers()
-            if n_have < num_workers
-                n_add = num_workers - n_have
-                @info "Starting Distributed workers for scalar_bin_mahalanobis_gap_distinguishability" requested = num_workers existing = n_have adding = n_add
-                added_workers = Distributed.addprocs(n_add)
-                @info "Distributed workers started" added = length(added_workers) total = Distributed.nworkers()
-            else
-                @info "Using existing Distributed workers for scalar_bin_mahalanobis_gap_distinguishability" requested = num_workers existing = n_have
-            end
-            workers_to_use = Distributed.workers()[1:min(num_workers, Distributed.nworkers())]
-            if !isempty(workers_to_use)
-                @info "Using Distributed workers for scalar-bin reference resampling" workers = length(workers_to_use)
-                for w in workers_to_use
-                    Distributed.remotecall_wait(Core.eval, w, Main, :(import CausalSetZoology))
-                    Distributed.remotecall_wait(
-                        Core.eval,
-                        w,
-                        Main,
-                        :(
-                            if !isdefined(CausalSetZoology, :_mahal_resample_chunk)
-                                Base.include(CausalSetZoology, $(joinpath(dirname(pathof(CausalSetZoology)), "data_analysis", "distinguishability.jl")))
-                            end
-                        ),
-                    )
-                end
-                use_distributed = true
-            end
-        catch err
-            @info "Falling back to serial scalar-bin reference processing (Distributed setup failed)" error = string(err)
-            use_distributed = false
-        end
+    compute_idx = function (k::Int)
+        s, vals = bins[k]
+        rng_k = Random.Xoshiro(seeds[k])
+        res = mahalanobis_gap_distinguishability(
+            vals,
+            ref;
+            regulator = regulator,
+            R = R,
+            q = q,
+            alpha = alpha,
+            rng = rng_k,
+            symmetric = symmetric,
+            verbose = verbose,
+            rank_tol = rank_tol,
+            stabilization_method = stabilization_method,
+            projection_tolerance = projection_tolerance,
+        )
+        return (scalar = s, M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
     end
 
-    try
-        compute_idx = function (k::Int)
-            s, vals = bins[k]
-            rng_k = Random.Xoshiro(seeds[k])
-            res = mahalanobis_gap_distinguishability(
-                vals,
-                ref;
-                regulator = regulator,
-                R = R,
-                q = q,
-                alpha = alpha,
-                rng = rng_k,
-                symmetric = symmetric,
-                num_workers = 1,
-                verbose = verbose,
-                rank_tol = rank_tol,
-                stabilization_method = stabilization_method,
-                projection_tolerance = projection_tolerance,
-            )
-            return (scalar = s, M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
-        end
-
-        if use_distributed
-            pool = Distributed.CachingPool(workers_to_use)
-            if progress && use_pm
-                out .= ProgressMeter.progress_pmap(compute_idx, pool, 1:total; progress = pm)
-            else
-                out .= Distributed.pmap(compute_idx, pool, 1:total)
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for t in 1:n_threads
+            for k in t:n_threads:total
+                @inbounds out[k] = compute_idx(k)
             end
-        else
-            done = 0
-            for k in 1:total
-                out[k] = compute_idx(k)
-                done += 1
-                if progress
-                    if use_pm
-                        ProgressMeter.next!(pm)
-                    elseif done % step == 0 || done == total
-                        println("Progress: $done/$total")
-                    end
+        end
+        if progress
+            for _ in 1:total
+                use_pm ? ProgressMeter.next!(pm) : nothing
+            end
+        end
+    else
+        done = 0
+        for k in 1:total
+            out[k] = compute_idx(k)
+            done += 1
+            if progress
+                if use_pm
+                    ProgressMeter.next!(pm)
+                elseif done % step == 0 || done == total
+                    println("Progress: $done/$total")
                 end
             end
         end
-        return out
-    finally
-        if !isempty(added_workers)
-            try
-                @info "Removing Distributed workers after scalar-bin reference resampling" removing = length(added_workers)
-                Distributed.rmprocs(added_workers...)
-                @info "Distributed workers removed" removed = length(added_workers) remaining = Distributed.nworkers()
-            catch err
-                @info "Failed to remove some Distributed workers" removing = length(added_workers) error = string(err)
-            end
-        end
     end
+    return out
 end

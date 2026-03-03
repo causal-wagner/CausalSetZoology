@@ -521,7 +521,6 @@ end
         alpha = 0.05,
         rng = Random.default_rng(),
         symmetric = false,
-        num_workers = 1,
         verbose = false,
         rank_tol = 1e-12,
         stabilization_method = :regularization,
@@ -577,7 +576,7 @@ Returns the saved `CairoMakie.Figure`.
 - `num_bins`, `regulator`, `R`, `q`, `alpha`: Distinguishability estimator controls.
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: Must remain `false` for this function.
-- `num_workers`, `verbose`, `rank_tol`, `stabilization_method`, `projection_tolerance`, `progress`, `progress_step`: Distinguishability runtime controls.
+- `verbose`, `rank_tol`, `stabilization_method`, `projection_tolerance`, `progress`, `progress_step`: Distinguishability runtime controls.
 - `invert_color_scaling`: Reverse scalar-to-color mapping.
 - `colorbar_label`, `colorbar_ticks`: Optional colorbar label and tick mapping.
 - `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
@@ -616,7 +615,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    num_workers::Int = 1,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
     stabilization_method::Symbol = :regularization,
@@ -726,7 +724,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
         alpha = alpha,
         rng = rng,
         symmetric = false,
-        num_workers = num_workers,
         verbose = verbose,
         rank_tol = rank_tol,
         stabilization_method = stabilization_method,
@@ -744,7 +741,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
         alpha = alpha,
         rng = rng,
         symmetric = false,
-        num_workers = num_workers,
         verbose = verbose,
         rank_tol = rank_tol,
         stabilization_method = stabilization_method,
@@ -762,7 +758,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
         alpha = alpha,
         rng = rng,
         symmetric = false,
-        num_workers = num_workers,
         verbose = verbose,
         rank_tol = rank_tol,
         stabilization_method = stabilization_method,
