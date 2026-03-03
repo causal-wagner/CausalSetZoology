@@ -244,9 +244,9 @@ all dictionaries along `i` have been added bin-wise.
 - `DimensionMismatch`: Raised when nested histogram container dimensions are inconsistent.
 """
 function join_histograms(
-    hists::Vector{Vector{Vector{Dict}}},
-)::Vector{Vector{Dict}}
-    isempty(hists) && return Vector{Vector{Dict}}()
+    hists::AbstractVector{<:AbstractVector{<:AbstractVector{<:AbstractDict}}},
+)::Vector{Vector{Dict{Int,Int}}}
+    isempty(hists) && return Vector{Vector{Dict{Int,Int}}}()
 
     n_outer = length(hists)
     n_groups = length(hists[1])
@@ -303,9 +303,9 @@ the aggregation logic.
 - `DomainError`: Raised when scalar labels for the same `(j, k)` index do not match across inputs.
 """
 function join_histograms(
-    hists::Vector{Vector{Vector{Tuple{Dict,S}}}},
-)::Vector{Vector{Tuple{Dict,Float64}}} where {S<:Real}
-    isempty(hists) && return Vector{Vector{Tuple{Dict,Float64}}}()
+    hists::AbstractVector{<:AbstractVector{<:AbstractVector{<:Tuple{<:AbstractDict,S}}}},
+)::Vector{Vector{Tuple{Dict{Int,Float64},Float64}}} where {S<:Real}
+    isempty(hists) && return Vector{Vector{Tuple{Dict{Int,Float64},Float64}}}()
 
     n_outer = length(hists)
     n_mid = length(hists[1])
@@ -322,9 +322,9 @@ function join_histograms(
         end
     end
 
-    out = Vector{Vector{Tuple{Dict,Float64}}}(undef, n_mid)
+    out = Vector{Vector{Tuple{Dict{Int,Float64},Float64}}}(undef, n_mid)
     for j in 1:n_mid
-        out[j] = Vector{Tuple{Dict,Float64}}(undef, n_hists)
+        out[j] = Vector{Tuple{Dict{Int,Float64},Float64}}(undef, n_hists)
         for k in 1:n_hists
             d_sum = Dict{Int,Float64}()
             s_ref = Float64(hists[1][j][k][2])

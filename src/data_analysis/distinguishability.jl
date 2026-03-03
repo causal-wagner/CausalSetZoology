@@ -600,14 +600,21 @@ function hellinger_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real}
     sp = Vector{Float64}(undef, length(p))
     sq = Vector{Float64}(undef, length(q))
     @inbounds for i in eachindex(p, q)
-        sp[i] = sqrt(Float64(p[i]))
-        sq[i] = sqrt(Float64(q[i]))
+        sp[i] = _sqrt_with_tolerance(Float64(p[i]); name = "probability")
+        sq[i] = _sqrt_with_tolerance(Float64(q[i]); name = "probability")
     end
     spp = LinearAlgebra.dot(sp, sp)
     sqq = LinearAlgebra.dot(sq, sq)
     spq = LinearAlgebra.dot(sp, sq)
     d2 = (spp + sqq - 2 * spq) / 2
     return sqrt(max(d2, 0.0))
+end
+
+@inline function _sqrt_with_tolerance(x::Float64; tol::Float64 = 1e-12, name::AbstractString = "value")::Float64
+    if x < -tol
+        throw(DomainError(x, "sqrt received significantly negative $name (tol=$tol)"))
+    end
+    return sqrt(max(x, 0.0))
 end
 
 @inline function _hellinger_from_sqrt(
@@ -628,7 +635,7 @@ function _sqrt_vectors_and_norms(vecs::Vector{<:AbstractVector{<:Real}})
         v = vecs[i]
         s = Vector{Float64}(undef, length(v))
         for j in eachindex(v)
-            s[j] = sqrt(Float64(v[j]))
+            s[j] = _sqrt_with_tolerance(Float64(v[j]); name = "probability")
         end
         sq[i] = s
         norms[i] = LinearAlgebra.dot(s, s)
@@ -1672,7 +1679,8 @@ function _mahal_sigmas(
     @inbounds for i in eachindex(X)
         d = X[i] .- mu
         y = inv_mul(d)
-        s[i] = sqrt(LinearAlgebra.dot(d, y))
+        qf = LinearAlgebra.dot(d, y)
+        s[i] = _sqrt_with_tolerance(qf; name = "Mahalanobis quadratic form")
     end
     return s
 end

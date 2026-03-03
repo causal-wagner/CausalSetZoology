@@ -12,34 +12,93 @@ function data_paths(file_names::Vector{String})::Vector{String}
     return [joinpath(root_path, file_name) for file_name in file_names]
 end
 
+function write_distinguishability_csv(path::AbstractString, rows::Vector{NamedTuple}; mahalanobis::Bool = false)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        if mahalanobis
+            println(io, "observable,D,M_obs,distinguishable,threshold,z_emp,M_obs_sym,M_obs_min,threshold_sym,threshold_max")
+        else
+            println(io, "observable,D")
+        end
+        for row in rows
+            println(
+                io,
+                if mahalanobis
+                    string(
+                        row.observable, ",",
+                        row.D, ",",
+                        row.M_obs, ",",
+                        row.distinguishable, ",",
+                        row.threshold, ",",
+                        row.z_emp, ",",
+                        row.M_obs_sym, ",",
+                        row.M_obs_min, ",",
+                        row.threshold_sym, ",",
+                        row.threshold_max,
+                    )
+                else
+                    string(
+                        row.observable, ",",
+                        row.D,
+                    )
+                end
+            )
+        end
+    end
+    return path
+end
+
 function compute_all_observables(
     kind::String;
+    size::Int = 2048,
+
     xlim_in_degree = (1.0, 150.0),
     ylim_in_degree = (1e-3, 0.2),
     legendpos_in_degree = :rt,
+
     xlim_out_degree = (1.0, 250.0),
     ylim_out_degree = (1e-4, 0.1),
     legendpos_out_degree = :rt,
+
     xlim_connectivity = (1.0, 150.0),
     ylim_connectivity = (1e-3, 0.1),
     legendpos_connectivity = :rt,
+
     xlim_in_degree_link = (1.0, 18.0),
     ylim_in_degree_link = (1e-3, 0.5),
     legendpos_in_degree_link = :lb,
+
     xlim_out_degree_link = (1.0, 18.0),
     ylim_out_degree_link = (1e-3, 0.5),
     legendpos_out_degree_link = :lb,
+
     xlim_connectivity_link = (1.0, 18.0),
     ylim_connectivity_link = (1e-3, 0.5),
     legendpos_connectivity_link = :lb,
+
     xlim_ev_sym_link = (2.0, 500.0),
     ylim_ev_sym_link = (7e-2, 1.0),
     legendpos_ev_sym_link = :rb,
+
     xlim_max_pathlen = nothing,
     ylim_max_pathlen = (1e-3, 12.0),
     legendpos_max_pathlen = :lt,
-)
-    data_paths = data_paths(["$(kind)_2048_10000/statistics.jld2","manifoldlike_simply_connected_2048_10000/statistics.jld2"])
+
+    mahalanobis::Bool = false,
+    mahalanobis_stabilization_method::Symbol = :projection,
+    mahalanobis_alpha = 0.05,
+    mahalanobis_q = 0.05,
+    mahalanobis_symmetric = true,
+    mahalanobis_R = 1000,
+    mahalanobis_progress = false,
+)   
+
+    if kind == "minkowski_quasicrystal"
+        comp_name = "minkowski_sprinkling"
+    else
+        comp_name = "manifoldlike_simply_connected"
+    end
+    paths = data_paths(["$(kind)_$(size)_10000/statistics.jld2", "$(comp_name)_$(size)_10000/statistics.jld2"])
     fields = [
         :in_degree_hist,
         :out_degree_hist,
@@ -48,16 +107,18 @@ function compute_all_observables(
         :ev_sym_link,
         :max_pathlen_hist,
     ]
-    loaded = load_fields_from_paths(data_paths, fields)
+    loaded = load_fields_from_paths(paths, fields)
 
-    in_degree_hists      = [loaded[i][1] for i in eachindex(data_paths)]
-    out_degree_hists     = [loaded[i][2] for i in eachindex(data_paths)]
+    @info "Loaded data for $(kind) and manifoldlike datasets of size $(size)."
+
+    in_degree_hists      = [loaded[i][1] for i in eachindex(paths)]
+    out_degree_hists     = [loaded[i][2] for i in eachindex(paths)]
     connectivity_hists      = join_histograms([in_degree_hists,out_degree_hists])
-    in_degree_link_hists    = [loaded[i][3] for i in eachindex(data_paths)]
-    out_degree_link_hists   = [loaded[i][4] for i in eachindex(data_paths)]
+    in_degree_link_hists    = [loaded[i][3] for i in eachindex(paths)]
+    out_degree_link_hists   = [loaded[i][4] for i in eachindex(paths)]
     connectivity_link_hists = join_histograms([in_degree_link_hists,out_degree_link_hists])
-    ev_sym_link             = [loaded[i][5] for i in eachindex(data_paths)]
-    max_pathlen_hists       = [loaded[i][6] for i in eachindex(data_paths)]
+    ev_sym_link             = [loaded[i][5] for i in eachindex(paths)]
+    max_pathlen_hists       = [loaded[i][6] for i in eachindex(paths)]
 
     normalized_in_degree_hists         = normalize_hists(in_degree_hists)
     normalized_out_degree_hists        = normalize_hists(out_degree_hists)
@@ -166,6 +227,65 @@ function compute_all_observables(
         ]
     )
 
-    D = histogram_distinguishability(normalized_in_degree_hists[1], normalized_in_degree_link_hists[2])
-    m_res = mahalanobis_gap_distinguishability(normalized_in_degree_hists[1], normalized_in_degree_link_hists[2]; stabilization_method=:projection, alpha = 0.05, q = 0.05, symmetric = true)
+    observables = [
+        ("in_degree", normalized_in_degree_hists),
+        ("out_degree", normalized_out_degree_hists),
+        ("connectivity", normalized_connectivity_hists),
+        ("in_degree_link", normalized_in_degree_link_hists),
+        ("out_degree_link", normalized_out_degree_link_hists),
+        ("connectivity_link", normalized_connectivity_link_hists),
+        ("ev_sym_link", ev_sym_link),
+        ("max_pathlen", normalized_max_pathlen_hists),
+    ]
+
+    rows = NamedTuple[]
+    for (name, data) in observables
+        D_res = histogram_distinguishability(data[1], data[2])
+
+        println("For observable $(name), D = $(D_res.D).")
+
+        if mahalanobis
+            m_res = mahalanobis_gap_distinguishability(
+                data[1],
+                data[2];
+                stabilization_method = mahalanobis_stabilization_method,
+                alpha = mahalanobis_alpha,
+                q = mahalanobis_q,
+                symmetric = mahalanobis_symmetric,
+                R = mahalanobis_R,
+                progress = mahalanobis_progress,
+            )
+            println("For observable $(name), M_obs = $(m_res.M_obs), threshold = $(m_res.threshold).")
+        end
+        if mahalanobis
+            push!(
+                rows,
+                (
+                    observable = name,
+                    D = D_res.D,
+                    M_obs = m_res.M_obs,
+                    distinguishable = m_res.distinguishable,
+                    threshold = m_res.threshold,
+                    z_emp = m_res.z_emp,
+                    M_obs_sym = m_res.M_obs_sym,
+                    M_obs_min = m_res.M_obs_min,
+                    threshold_sym = m_res.threshold_sym,
+                    threshold_max = m_res.threshold_max,
+                ),
+            )
+        else
+            push!(
+                rows,
+                (
+                    observable = name,
+                    D = D_res.D,
+                ),
+            )
+        end
+    end
+
+    csv_path = fig_path("graph_observables/$(kind)/distinguishability.csv")
+    
+    write_distinguishability_csv(csv_path, rows; mahalanobis = mahalanobis)
+    return rows
 end
