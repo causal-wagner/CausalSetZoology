@@ -1,3 +1,8 @@
+using CairoMakie
+using Colors
+using LaTeXStrings
+using Printf
+
 """
     _logticks_internal(lo::Real, hi::Real; base::Real = 10.0)
 

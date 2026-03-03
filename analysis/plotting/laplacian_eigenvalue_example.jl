@@ -1,3 +1,8 @@
+using CairoMakie
+using LinearAlgebra
+using Observables
+using Random
+
 """
     make_undirected_adjacency_from_subgraphs(
         n_nodes::Int,

@@ -1,3 +1,8 @@
+using CairoMakie
+using LaTeXStrings
+using PlotUtils
+using Random
+
 """
     plot_hist_or_vec_panel!(
         ax,

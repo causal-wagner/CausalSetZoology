@@ -1,3 +1,10 @@
+using CairoMakie
+using Colors
+using ColorSchemes
+using LaTeXStrings
+using Observables
+using Statistics
+
 """
    convergence_plots_std_change(
         hists::Vector{<:AbstractDict};

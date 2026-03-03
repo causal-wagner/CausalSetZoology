@@ -1,3 +1,8 @@
+using CairoMakie
+using LaTeXStrings
+using Observables
+using PlotUtils
+
 function validate_series_meta_lengths(n::Int, hist_labels, plot_types)
     if hist_labels !== nothing && length(hist_labels) != n
         throw(ArgumentError("hist_labels and data must have same length"))

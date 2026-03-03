@@ -1,3 +1,9 @@
+using CairoMakie
+using FFTW
+using LaTeXStrings
+using Printf
+using Random
+
 """
     plot_grid_points(quad_grid; markersize, magnification, fig_path)
 

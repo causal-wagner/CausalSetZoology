@@ -1,3 +1,9 @@
+using AlgebraOfGraphics
+using CairoMakie
+using CategoricalArrays
+using DataFrames
+using Observables
+
 """
     transform_to_scale!(col)
 
