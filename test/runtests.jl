@@ -12,6 +12,7 @@ include("./data_analysis/test_grid_fourier_analysis.jl")
 include("./data_analysis/test_minkowski_abundance_analytical.jl")
 
 # data_creation
+include("./data_creation/test_utils.jl")
 include("./data_creation/test_make_analysis_dataset.jl")
 include("./data_creation/test_make_analysis_statistics.jl")
 include("./data_creation/test_make_analysis_dataset_and_statistics.jl")

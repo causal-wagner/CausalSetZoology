@@ -821,6 +821,31 @@ function histogram_distinguishability(
 end
 
 """
+    total_histogram_distinguishability(hists...)
+
+Compute total distinguishability after sample-wise concatenation of multiple
+observables shaped as `[class_a_samples, class_b_samples]`.
+
+Each observable may contain histogram dictionaries or vectors; alignment and
+concatenation are handled by `concatenate_hists`.
+
+# Arguments
+- `hists`: One or more observables, each shaped as `[class_a_samples, class_b_samples]`.
+
+# Returns
+- `result`: Named tuple `(D = value)`.
+
+# Throws
+- `ArgumentError`: Propagated for empty input or invalid observable/sample types.
+- `DimensionMismatch`: Propagated when class sample counts do not align across observables.
+- `DomainError`: Propagated for downstream numeric-domain violations.
+"""
+function total_histogram_distinguishability(hists...)
+    vecs_a, vecs_b = concatenate_hists(hists...)
+    return histogram_distinguishability(vecs_a, vecs_b)
+end
+
+"""
     histogram_distinguishability(hists_a, hists_b, num_draws; rng=...)
 
 See `histogram_distinguishability(hists_a, hists_b)`.
@@ -1009,6 +1034,486 @@ function histogram_distinguishability(
     var_D = (W^2 * var_E + E^2 * var_W - 2 * E * W * cov_EW) / denom^4
     std_D = sqrt(max(var_D, 0.0))
     return (D = E / denom, std = std_D)
+end
+
+@inline function _normalize_probability_vector(v::AbstractVector{<:Real}, out::Vector{Float64})::Nothing
+    s = 0.0
+    @inbounds for i in eachindex(v)
+        x = Float64(v[i])
+        if x < -1e-12
+            throw(DomainError(x, "histogram/bin value must be nonnegative"))
+        end
+        xi = max(x, 0.0)
+        out[i] = xi
+        s += xi
+    end
+    if !(s > 0.0)
+        throw(DomainError(s, "histogram/vector sum must be positive for probability normalization"))
+    end
+    invs = inv(s)
+    @inbounds for i in eachindex(v)
+        out[i] *= invs
+    end
+    return nothing
+end
+
+function _subsample_class_indices(n::Int, max_per_class::Union{Nothing,Int}, rng)
+    if max_per_class === nothing || n <= max_per_class
+        return collect(1:n)
+    end
+    return sort!(Random.randperm(rng, n)[1:max_per_class])
+end
+
+function _prepare_mi_embedding(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}};
+    rng = Random.default_rng(),
+    max_per_class::Union{Nothing,Int} = 2_000,
+)
+    idx_a = _subsample_class_indices(length(vecs_a), max_per_class, rng)
+    idx_b = _subsample_class_indices(length(vecs_b), max_per_class, rng)
+    sel_a = vecs_a[idx_a]
+    sel_b = vecs_b[idx_b]
+
+    norm_a = Vector{Vector{Float64}}(undef, length(sel_a))
+    norm_b = Vector{Vector{Float64}}(undef, length(sel_b))
+    @inbounds for i in eachindex(sel_a)
+        v = sel_a[i]
+        u = Vector{Float64}(undef, length(v))
+        _normalize_probability_vector(v, u)
+        norm_a[i] = u
+    end
+    @inbounds for i in eachindex(sel_b)
+        v = sel_b[i]
+        u = Vector{Float64}(undef, length(v))
+        _normalize_probability_vector(v, u)
+        norm_b[i] = u
+    end
+
+    A, B = _prepare_vectors_for_distance(norm_a, norm_b)
+    d = length(A[1])
+    Xa = Matrix{Float64}(undef, length(A), d)
+    Xb = Matrix{Float64}(undef, length(B), d)
+    @inbounds for i in 1:size(Xa, 1), j in 1:d
+        Xa[i, j] = sqrt(A[i][j])
+    end
+    @inbounds for i in 1:size(Xb, 1), j in 1:d
+        Xb[i, j] = sqrt(B[i][j])
+    end
+    return Xa, Xb
+end
+
+function _pca_project(
+    X::Matrix{Float64};
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+)
+    if !(pca_mode in (:dim, :variance, :cutoff))
+        throw(DomainError(pca_mode, "pca_mode must be one of :dim, :variance, :cutoff"))
+    end
+    if !(pca_dim >= 1)
+        throw(DomainError(pca_dim, "pca_dim must be >= 1"))
+    end
+    if !(0 < explained_variance <= 1)
+        throw(DomainError(explained_variance, "explained_variance must satisfy 0 < explained_variance <= 1"))
+    end
+    if !(0 <= eigenvalue_rtol < 1)
+        throw(DomainError(eigenvalue_rtol, "eigenvalue_rtol must satisfy 0 <= eigenvalue_rtol < 1"))
+    end
+    μ = vec(Statistics.mean(X; dims = 1))
+    Xc = X .- transpose(μ)
+    n, d = size(Xc)
+    if n <= 2 || d == 0
+        return Xc
+    end
+    F = LinearAlgebra.svd(Xc; full = false)
+    s2 = F.S .^ 2
+    if isempty(s2)
+        return Xc
+    end
+    λmax = maximum(s2)
+    keep = findall(λ -> λ > λmax * Float64(eigenvalue_rtol), s2)
+    r_cut = isempty(keep) ? 1 : last(keep)
+    if pca_mode == :cutoff
+        r = r_cut
+    elseif pca_mode == :dim
+        r = min(pca_dim, r_cut)
+    else
+        total = sum(@view s2[1:r_cut])
+        if total <= 0.0
+            r = 1
+        else
+            cfrac = cumsum(@view s2[1:r_cut]) ./ total
+            r = searchsortedfirst(cfrac, Float64(explained_variance))
+            r = clamp(r, 1, r_cut)
+        end
+    end
+    return F.U[:, 1:r] * LinearAlgebra.Diagonal(F.S[1:r])
+end
+
+@inline function _sqeuclidean_row(X::Matrix{Float64}, i::Int, j::Int)::Float64
+    s = 0.0
+    @inbounds @simd for k in axes(X, 2)
+        d = X[i, k] - X[j, k]
+        s += d * d
+    end
+    return s
+end
+
+function _mi_knn_binary_projected(X::Matrix{Float64}, labels::Vector{Bool}, k::Int)
+    n = size(X, 1)
+    n_a = count(labels)
+    n_b = n - n_a
+    k_eff = min(k, n_a - 1, n_b - 1)
+    if !(k_eff >= 1)
+        throw(DomainError(k, "k must be <= min(n_a-1, n_b-1) and both classes must have at least 2 samples"))
+    end
+
+    m_counts = Vector{Int}(undef, n)
+    nt = Threads.maxthreadid()
+    dist_bufs = [Vector{Float64}(undef, n) for _ in 1:nt]
+    same_bufs = [Vector{Float64}(undef, max(n_a, n_b)) for _ in 1:nt]
+    tol = 1e-14
+    tie_eps = 1e-12
+
+    Threads.@threads for i in 1:n
+        tid = Threads.threadid()
+        d_all = dist_bufs[tid]
+        d_same = same_bufs[tid]
+        yi = labels[i]
+        nsame = 0
+        @inbounds for j in 1:n
+            if i == j
+                d_all[j] = Inf
+                continue
+            end
+            dij = _sqeuclidean_row(X, i, j)
+            # Deterministically break exact ties (common with repeated histograms).
+            if dij == 0.0
+                dij = tie_eps * j
+            end
+            d_all[j] = dij
+            if labels[j] == yi
+                nsame += 1
+                d_same[nsame] = dij
+            end
+        end
+
+        eps2 = partialsort!(view(d_same, 1:nsame), k_eff) + tol
+        m = 0
+        @inbounds for j in 1:n
+            if d_all[j] <= eps2
+                m += 1
+            end
+        end
+        m_counts[i] = m
+    end
+
+    p_a = n_a / n
+    p_b = n_b / n
+    H_y = -(p_a * log(p_a) + p_b * log(p_b))
+    if H_y <= 0.0
+        return 0.0
+    end
+
+    mean_dig_ny = (n_a * SpecialFunctions.digamma(n_a) + n_b * SpecialFunctions.digamma(n_b)) / n
+    mean_dig_m = Statistics.mean(SpecialFunctions.digamma.(m_counts))
+    I = SpecialFunctions.digamma(n) - mean_dig_ny + SpecialFunctions.digamma(k_eff) - mean_dig_m
+    return clamp(I / H_y, 0.0, 1.0)
+end
+
+function _mi_knn_binary(
+    Xa::Matrix{Float64},
+    Xb::Matrix{Float64};
+    k::Int = 5,
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+)
+    X = vcat(Xa, Xb)
+    Xp = _pca_project(
+        X;
+        pca_mode = pca_mode,
+        pca_dim = pca_dim,
+        explained_variance = explained_variance,
+        eigenvalue_rtol = eigenvalue_rtol,
+    )
+    labels = vcat(fill(true, size(Xa, 1)), fill(false, size(Xb, 1)))
+    return _mi_knn_binary_projected(Xp, labels, k)
+end
+
+"""
+    distinguishability_mutual_information(hists_a, hists_b)
+
+Compute normalized mutual-information distinguishability `D_mi ∈ [0,1]` between
+two histogram/vector sample sets.
+
+For vector inputs, each sample vector is interpreted as a histogram and normalized
+to a probability vector internally. For dictionary inputs, histograms are normalized
+with `normalize_hists(...; normalization=:probability)` first.
+
+The estimator uses:
+1. Hellinger embedding `u = sqrt(p)` of normalized histogram vectors.
+2. Optional unsupervised PCA dimensionality reduction.
+3. Binary-label kNN MI estimation with normalization by class entropy `H(Y)`.
+
+# Arguments
+- `hists_a`: Histogram/vector samples for class A.
+- `hists_b`: Histogram/vector samples for class B.
+
+# Keyword Arguments
+- `k`: Neighbor count for kNN MI estimator.
+- `pca_mode`: PCA selection mode: `:dim`, `:variance`, or `:cutoff`.
+- `pca_dim`: PCA embedding dimension upper bound (used when `pca_mode = :dim`).
+- `explained_variance`: Target retained variance fraction (used when `pca_mode = :variance`).
+- `eigenvalue_rtol`: Relative eigenvalue cutoff for near-null components.
+- `max_per_class`: Optional random class subsampling cap before estimation.
+- `rng`: Random number generator used for stochastic subsampling.
+
+# Returns
+- `result`: Named tuple `(D_mi = value)`.
+
+# Throws
+- `ArgumentError`: Raised for empty inputs.
+- `DomainError`: Raised for invalid histogram/vector normalization.
+"""
+function distinguishability_mutual_information(
+    hists_a::Vector{<:AbstractDict},
+    hists_b::Vector{<:AbstractDict},
+    ;
+    k::Int = 5,
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+    max_per_class::Union{Nothing,Int} = 2_000,
+    rng = Random.default_rng(),
+)
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
+    norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
+    norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
+
+    all_dense = densify_hists(vcat(norm_a, norm_b))
+    n1 = length(norm_a)
+    n2 = length(norm_b)
+    A = all_dense[1:n1, :]
+    B = all_dense[n1+1:n1+n2, :]
+
+    vecs_a = [Vector{Float64}(A[i, :]) for i in 1:size(A, 1)]
+    vecs_b = [Vector{Float64}(B[i, :]) for i in 1:size(B, 1)]
+    return distinguishability_mutual_information(
+        vecs_a,
+        vecs_b;
+        k = k,
+        pca_mode = pca_mode,
+        pca_dim = pca_dim,
+        explained_variance = explained_variance,
+        eigenvalue_rtol = eigenvalue_rtol,
+        max_per_class = max_per_class,
+        rng = rng,
+    )
+end
+
+"""
+    distinguishability_mutual_information(vecs_a, vecs_b)
+
+Vector-input implementation of `distinguishability_mutual_information(hists_a, hists_b)`.
+
+# Arguments
+- `vecs_a`: Vector-valued histogram samples for class A.
+- `vecs_b`: Vector-valued histogram samples for class B.
+
+# Returns
+- `result`: Named tuple `(D_mi = value)`.
+"""
+function distinguishability_mutual_information(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}},
+    ;
+    k::Int = 5,
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+    max_per_class::Union{Nothing,Int} = 2_000,
+    rng = Random.default_rng(),
+)
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
+    if max_per_class !== nothing && !(max_per_class >= 2)
+        throw(DomainError(max_per_class, "max_per_class must be nothing or >= 2"))
+    end
+    Xa, Xb = _prepare_mi_embedding(vecs_a, vecs_b; rng = rng, max_per_class = max_per_class)
+    return (D_mi = _mi_knn_binary(
+        Xa,
+        Xb;
+        k = k,
+        pca_mode = pca_mode,
+        pca_dim = pca_dim,
+        explained_variance = explained_variance,
+        eigenvalue_rtol = eigenvalue_rtol,
+    ),)
+end
+
+"""
+    distinguishability_mutual_information(hists_a, hists_b, num_draws; rng=...)
+
+Bootstrap-resampled variant of `distinguishability_mutual_information(hists_a, hists_b)`.
+Returns `(D_mi, std)` where `D_mi` is mean bootstrap normalized MI and `std`
+its sample standard deviation across draws.
+"""
+function distinguishability_mutual_information(
+    hists_a::Vector{<:AbstractDict},
+    hists_b::Vector{<:AbstractDict},
+    num_draws::Int;
+    rng = Random.default_rng(),
+    k::Int = 5,
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+    max_per_class::Union{Nothing,Int} = 2_000,
+)
+    if !(!isempty(hists_a) && !isempty(hists_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
+    norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
+    norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
+
+    all_dense = densify_hists(vcat(norm_a, norm_b))
+    n1 = length(norm_a)
+    n2 = length(norm_b)
+    A = all_dense[1:n1, :]
+    B = all_dense[n1+1:n1+n2, :]
+
+    vecs_a = [Vector{Float64}(A[i, :]) for i in 1:size(A, 1)]
+    vecs_b = [Vector{Float64}(B[i, :]) for i in 1:size(B, 1)]
+    return distinguishability_mutual_information(
+        vecs_a,
+        vecs_b,
+        num_draws;
+        rng = rng,
+        k = k,
+        pca_mode = pca_mode,
+        pca_dim = pca_dim,
+        explained_variance = explained_variance,
+        eigenvalue_rtol = eigenvalue_rtol,
+        max_per_class = max_per_class,
+    )
+end
+
+"""
+    distinguishability_mutual_information(vecs_a, vecs_b, num_draws; rng=...)
+
+Bootstrap-resampled vector-input variant of `distinguishability_mutual_information`.
+"""
+function distinguishability_mutual_information(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}},
+    num_draws::Int;
+    rng = Random.default_rng(),
+    k::Int = 5,
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+    max_per_class::Union{Nothing,Int} = 2_000,
+)
+    if !(!isempty(vecs_a) && !isempty(vecs_b))
+        throw(ArgumentError("inputs must be non-empty"))
+    end
+    if !(num_draws > 0)
+        throw(DomainError(num_draws, "num_draws must be positive"))
+    end
+    if max_per_class !== nothing && !(max_per_class >= 2)
+        throw(DomainError(max_per_class, "max_per_class must be nothing or >= 2"))
+    end
+
+    Xa, Xb = _prepare_mi_embedding(vecs_a, vecs_b; rng = rng, max_per_class = max_per_class)
+    na = size(Xa, 1)
+    nb = size(Xb, 1)
+    if na < 2 || nb < 2
+        throw(DomainError((na, nb), "each class must contain at least 2 samples after preprocessing"))
+    end
+
+    X = vcat(Xa, Xb)
+    Xp = _pca_project(
+        X;
+        pca_mode = pca_mode,
+        pca_dim = pca_dim,
+        explained_variance = explained_variance,
+        eigenvalue_rtol = eigenvalue_rtol,
+    )
+    Xpa = @view Xp[1:na, :]
+    Xpb = @view Xp[(na + 1):(na + nb), :]
+
+    Ds = Vector{Float64}(undef, num_draws)
+    draw_seeds = rand(rng, UInt64, num_draws)
+
+    Threads.@threads for t in 1:num_draws
+        rng_t = Random.Xoshiro(draw_seeds[t])
+        idx_a = rand(rng_t, 1:na, na)
+        idx_b = rand(rng_t, 1:nb, nb)
+        Xd = vcat(Xpa[idx_a, :], Xpb[idx_b, :])
+        labels = vcat(fill(true, na), fill(false, nb))
+        Ds[t] = _mi_knn_binary_projected(Xd, labels, k)
+    end
+
+    return (D_mi = Statistics.mean(Ds), std = Statistics.std(Ds))
+end
+
+"""
+    total_histogram_mutual_information_distinguishability(hists...; num_draws=nothing, rng=...)
+
+Compute normalized mutual-information distinguishability after sample-wise
+concatenation of one or more observables shaped as `[class_a_samples, class_b_samples]`.
+
+If `num_draws === nothing`, returns exact empirical `D_mi`. If `num_draws` is
+provided, returns bootstrap mean/std as `(D_mi, std)`.
+"""
+function total_histogram_mutual_information_distinguishability(
+    hists...;
+    num_draws::Union{Nothing,Int} = nothing,
+    rng = Random.default_rng(),
+    k::Int = 5,
+    pca_mode::Symbol = :dim,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-10,
+    max_per_class::Union{Nothing,Int} = 2_000,
+)
+    vecs_a, vecs_b = concatenate_hists(hists...)
+    if num_draws === nothing
+        return distinguishability_mutual_information(
+            vecs_a,
+            vecs_b;
+            k = k,
+            pca_mode = pca_mode,
+            pca_dim = pca_dim,
+            explained_variance = explained_variance,
+            eigenvalue_rtol = eigenvalue_rtol,
+            max_per_class = max_per_class,
+            rng = rng,
+        )
+    end
+    return distinguishability_mutual_information(
+        vecs_a,
+        vecs_b,
+        num_draws;
+        rng = rng,
+        k = k,
+        pca_mode = pca_mode,
+        pca_dim = pca_dim,
+        explained_variance = explained_variance,
+        eigenvalue_rtol = eigenvalue_rtol,
+        max_per_class = max_per_class,
+    )
 end
 
 """

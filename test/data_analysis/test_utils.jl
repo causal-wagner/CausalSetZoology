@@ -113,6 +113,86 @@ end
     @test_throws ArgumentError CausalSetZoology.densify_hists([Dict{Int,Float64}()])
 end
 
+# histogram_to_dense_pair
+@testitem "utils: histogram_to_dense_pair dict mode" setup=[setupUtils] begin
+    obs = [
+        [Dict(1 => 0.5, 3 => 0.5), Dict(2 => 1.0)],
+        [Dict(1 => 1.0), Dict(3 => 1.0)],
+    ]
+    A, B = CausalSetZoology.histogram_to_dense_pair(obs, 1)
+    @test size(A, 1) == 2
+    @test size(B, 1) == 2
+    @test size(A, 2) == size(B, 2)
+    @test A[1, :] == [0.5, 0.0, 0.5]
+    @test A[2, :] == [0.0, 1.0, 0.0]
+    @test B[1, :] == [1.0, 0.0, 0.0]
+    @test B[2, :] == [0.0, 0.0, 1.0]
+end
+
+@testitem "utils: histogram_to_dense_pair vector mode" setup=[setupUtils] begin
+    obs = [
+        [[1.0, 2.0], [3.0]],
+        [[4.0], [5.0, 6.0, 7.0]],
+    ]
+    A, B = CausalSetZoology.histogram_to_dense_pair(obs, 2)
+    @test size(A) == (2, 3)
+    @test size(B) == (2, 3)
+    @test A[1, :] == [1.0, 2.0, 0.0]
+    @test A[2, :] == [3.0, 0.0, 0.0]
+    @test B[1, :] == [4.0, 0.0, 0.0]
+    @test B[2, :] == [5.0, 6.0, 7.0]
+end
+
+@testitem "utils: histogram_to_dense_pair validation" setup=[setupUtils] begin
+    # Verifies shape/type guards for two-class observable inputs.
+    @test_throws ArgumentError CausalSetZoology.histogram_to_dense_pair([[Dict(1 => 1.0)]], 1)
+    @test_throws ArgumentError CausalSetZoology.histogram_to_dense_pair([Dict{Int,Float64}[], [Dict(1 => 1.0)]], 1)
+    @test_throws ArgumentError CausalSetZoology.histogram_to_dense_pair([[[1.0]], Vector{Vector{Float64}}()], 1)
+    @test_throws ArgumentError CausalSetZoology.histogram_to_dense_pair([[Dict(1 => 1.0)], [[1.0]]], 1)
+end
+
+@testitem "utils: histogram_to_dense_pair validation non-real vector values" setup=[setupUtils] begin
+    # Verifies explicit non-real rejection for vector-mode samples in class A/B.
+    bad_a = [[[1.0, "x"]], [[1.0]]]
+    bad_b = [[[1.0]], [[1.0, "x"]]]
+    @test_throws ArgumentError CausalSetZoology.histogram_to_dense_pair(bad_a, 3)
+    @test_throws ArgumentError CausalSetZoology.histogram_to_dense_pair(bad_b, 3)
+end
+
+# concatenate_hists
+@testitem "utils: concatenate_hists mixed observables" setup=[setupUtils] begin
+    obs_dict = [
+        [Dict(1 => 0.5, 2 => 0.5), Dict(2 => 1.0)],
+        [Dict(1 => 1.0), Dict(2 => 1.0)],
+    ]
+    obs_vec = [
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[5.0], [6.0, 7.0]],
+    ]
+    A, B = CausalSetZoology.concatenate_hists(obs_dict, obs_vec)
+    @test length(A) == 2
+    @test length(B) == 2
+    @test length(A[1]) == length(B[1]) == 4
+    @test A[1] == [0.5, 0.5, 1.0, 2.0]
+    @test A[2] == [0.0, 1.0, 3.0, 4.0]
+    @test B[1] == [1.0, 0.0, 5.0, 0.0]
+    @test B[2] == [0.0, 1.0, 6.0, 7.0]
+end
+
+@testitem "utils: concatenate_hists validation" setup=[setupUtils] begin
+    # Verifies top-level validation for empty input and cross-observable sample-count mismatch.
+    obs = [[Dict(1 => 1.0)], [Dict(1 => 1.0)]]
+    @test_throws ArgumentError CausalSetZoology.concatenate_hists()
+    @test_throws DimensionMismatch CausalSetZoology.concatenate_hists(obs, [[Dict(1 => 1.0), Dict(2 => 1.0)], [Dict(1 => 1.0)]])
+end
+
+@testitem "utils: concatenate_hists validation propagates per-observable errors" setup=[setupUtils] begin
+    # Verifies invalid observable content is rejected through histogram_to_dense_pair.
+    obs_ok = [[Dict(1 => 1.0)], [Dict(1 => 1.0)]]
+    obs_bad = [[Dict(1 => 1.0)], [[1.0]]]
+    @test_throws ArgumentError CausalSetZoology.concatenate_hists(obs_ok, obs_bad)
+end
+
 # join_histograms (plain overload)
 @testitem "utils: join_histograms plain" setup=[setupUtils] begin
     h1 = [

@@ -227,6 +227,119 @@ function densify_hists(hists::Vector{<:AbstractDict})
 end
 
 """
+    histogram_to_dense_pair(hist, k::Int)
+
+Convert one observable shaped as `[class_a_samples, class_b_samples]` into two
+dense matrices `(A, B)`, one row per sample.
+
+Supported sample representations in both classes:
+- histogram dictionaries (`AbstractDict`), aligned via a shared bin basis,
+- vectors (`AbstractVector`), aligned by padding to a shared length.
+
+# Arguments
+- `hist`: Two-class observable data.
+- `k`: Observable index used only in error messages.
+
+# Returns
+- `A::Matrix{Float64}`: Dense class-A matrix.
+- `B::Matrix{Float64}`: Dense class-B matrix.
+
+# Throws
+- `ArgumentError`: If shape/types are invalid or a class is empty.
+"""
+function histogram_to_dense_pair(hist, k::Int)
+    if !(length(hist) == 2)
+        throw(ArgumentError("histogram $k must have exactly two classes [A, B]"))
+    end
+    a = hist[1]
+    b = hist[2]
+    isempty(a) && throw(ArgumentError("histogram $k class A is empty"))
+    isempty(b) && throw(ArgumentError("histogram $k class B is empty"))
+
+    if all(x -> x isa AbstractDict, a) && all(x -> x isa AbstractDict, b)
+        n_a = length(a)
+        n_b = length(b)
+        # Materialize as a concrete Vector{AbstractDict} without attempting to
+        # construct the abstract type (which would error for Dict inputs).
+        dicts = AbstractDict[x for x in a]
+        append!(dicts, AbstractDict[x for x in b])
+        dense = densify_hists(dicts)
+        return dense[1:n_a, :], dense[n_a+1:n_a+n_b, :]
+    end
+
+    if all(x -> x isa AbstractVector, a) && all(x -> x isa AbstractVector, b)
+        bad_a = findfirst(v -> any(x -> !(x isa Real), v), a)
+        if bad_a !== nothing
+            throw(ArgumentError("histogram $k class A sample $bad_a contains non-real values"))
+        end
+        bad_b = findfirst(v -> any(x -> !(x isa Real), v), b)
+        if bad_b !== nothing
+            throw(ArgumentError("histogram $k class B sample $bad_b contains non-real values"))
+        end
+        n_a = length(a)
+        n_b = length(b)
+        maxlen = maximum(length.(vcat(a, b)))
+        pad_to(v, n) = length(v) == n ? Float64.(v) : vcat(Float64.(v), zeros(Float64, n - length(v)))
+        A = reduce(vcat, [reshape(pad_to(v, maxlen), 1, :) for v in a])
+        B = reduce(vcat, [reshape(pad_to(v, maxlen), 1, :) for v in b])
+        return A, B
+    end
+
+    throw(ArgumentError("histogram $k must contain either dictionaries or vectors in both classes"))
+end
+
+"""
+    concatenate_hists(hists...)
+
+Given multiple observables, each shaped as `[class_a_samples, class_b_samples]`,
+align each observable across both classes and concatenate all observables
+sample-wise.
+
+Returns `(vecs_a, vecs_b)` suitable for `histogram_distinguishability`.
+
+# Arguments
+- `hists`: One or more observables, each shaped as `[class_a_samples, class_b_samples]`.
+
+# Returns
+- `vecs_a::Vector{Vector{Float64}}`: Concatenated class-A samples.
+- `vecs_b::Vector{Vector{Float64}}`: Concatenated class-B samples.
+
+# Throws
+- `ArgumentError`: If no observables are provided.
+- `DimensionMismatch`: If sample counts differ across observables.
+"""
+function concatenate_hists(hists...)
+    if isempty(hists)
+        throw(ArgumentError("need at least one histogram"))
+    end
+
+    n_a_ref = nothing
+    n_b_ref = nothing
+    A_blocks = Matrix{Float64}[]
+    B_blocks = Matrix{Float64}[]
+
+    for (k, hist) in enumerate(hists)
+        A, B = histogram_to_dense_pair(hist, k)
+        n_a = size(A, 1)
+        n_b = size(B, 1)
+        if n_a_ref === nothing
+            n_a_ref = n_a
+            n_b_ref = n_b
+        elseif n_a != n_a_ref || n_b != n_b_ref
+            throw(DimensionMismatch("sample counts must match across histograms; histogram $k has (A=$n_a, B=$n_b), expected (A=$n_a_ref, B=$n_b_ref)"))
+        end
+        push!(A_blocks, A)
+        push!(B_blocks, B)
+    end
+
+    A_concat = hcat(A_blocks...)
+    B_concat = hcat(B_blocks...)
+    vecs_a = [Vector{Float64}(A_concat[i, :]) for i in 1:size(A_concat, 1)]
+    vecs_b = [Vector{Float64}(B_concat[i, :]) for i in 1:size(B_concat, 1)]
+    return vecs_a, vecs_b
+end
+
+"""
     join_histograms(hists::Vector{Vector{Vector{Dict}}})::Vector{Vector{Dict}}
 
 Join histograms across the first dimension by summing counts per bin.

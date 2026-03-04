@@ -291,6 +291,266 @@ end
     @test d_mc.std >= 0.0
 end
 
+@testitem "distinguishability: total_histogram_distinguishability" setup=[setupDistinguishability] begin
+    # Verifies multi-observable wrapper behavior and agreement with direct core calls.
+    obs1 = [
+        [Dict(1 => 10, 2 => 0), Dict(1 => 9, 2 => 1)],
+        [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9)],
+    ]
+    obs2 = [
+        [[1.0, 0.0], [0.9, 0.1]],
+        [[0.0, 1.0], [0.1, 0.9]],
+    ]
+
+    dt = CausalSetZoology.total_histogram_distinguishability(obs1, obs2)
+    @test 0.0 <= dt.D <= 1.0
+    @test dt.D > 0.8
+
+    # single-observable path should agree with direct distinguishability
+    d1 = CausalSetZoology.total_histogram_distinguishability(obs1)
+    d2 = CausalSetZoology.histogram_distinguishability(obs1[1], obs1[2])
+    @test d1.D ≈ d2.D
+
+    # multi-observable path should agree with explicit concatenate + core distinguishability
+    vecs_a, vecs_b = CausalSetZoology.concatenate_hists(obs1, obs2)
+    d_explicit = CausalSetZoology.histogram_distinguishability(vecs_a, vecs_b)
+    @test dt.D ≈ d_explicit.D
+end
+
+@testitem "distinguishability: total_histogram_distinguishability validation" setup=[setupDistinguishability] begin
+    # Verifies top-level validation and propagation of invalid observable content.
+    obs = [[Dict(1 => 1.0)], [Dict(1 => 1.0)]]
+    @test_throws ArgumentError CausalSetZoology.total_histogram_distinguishability()
+    @test_throws DimensionMismatch CausalSetZoology.total_histogram_distinguishability(
+        obs,
+        [[Dict(1 => 1.0), Dict(2 => 1.0)], [Dict(1 => 1.0)]],
+    )
+    @test_throws ArgumentError CausalSetZoology.total_histogram_distinguishability(
+        obs,
+        [[Dict(1 => 1.0)], [[1.0]]],
+    )
+end
+
+@testitem "distinguishability: mutual_information vectors and normalization" setup=[setupDistinguishability] begin
+    a = [[2.0, 0.0], [2.0, 0.0], [0.0, 2.0]]
+    b = [[8.0, 0.0], [0.0, 4.0], [0.0, 2.0]]
+
+    mi = CausalSetZoology.distinguishability_mutual_information(a, b)
+    @test 0.0 <= mi.D_mi <= 1.0
+    @test mi.D_mi < 1.0
+
+    a_prob = [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    b_prob = [[1.0, 0.0], [0.0, 1.0], [0.0, 1.0]]
+    mi_prob = CausalSetZoology.distinguishability_mutual_information(a_prob, b_prob)
+    @test mi_prob.D_mi ≈ mi.D_mi atol = 1e-12
+
+    mi_same = CausalSetZoology.distinguishability_mutual_information(a, a)
+    @test mi_same.D_mi ≈ 0.0 atol = 1e-12
+
+    c = [[1.0, 0.0] for _ in 1:32]
+    d = [[0.0, 1.0] for _ in 1:32]
+    mi_perfect = CausalSetZoology.distinguishability_mutual_information(c, d; k = 1, pca_dim = 2)
+    @test mi_perfect.D_mi > 0.9
+end
+
+@testitem "distinguishability: mutual_information histogram dictionaries" setup=[setupDistinguishability] begin
+    h_a = [Dict(1 => 2, 2 => 0), Dict(1 => 4, 2 => 0), Dict(1 => 0, 2 => 6)]
+    h_b = [Dict(1 => 8, 2 => 0), Dict(1 => 0, 2 => 2), Dict(1 => 0, 2 => 4)]
+    mi = CausalSetZoology.distinguishability_mutual_information(h_a, h_b)
+    @test 0.0 <= mi.D_mi <= 1.0
+
+    h_a_scaled = [Dict(1 => 20, 2 => 0), Dict(1 => 40, 2 => 0), Dict(1 => 0, 2 => 60)]
+    h_b_scaled = [Dict(1 => 80, 2 => 0), Dict(1 => 0, 2 => 20), Dict(1 => 0, 2 => 40)]
+    mi_scaled = CausalSetZoology.distinguishability_mutual_information(h_a_scaled, h_b_scaled)
+    @test mi_scaled.D_mi ≈ mi.D_mi atol = 1e-12
+end
+
+@testitem "distinguishability: total histogram mutual_information wrapper" setup=[setupDistinguishability] begin
+    obs1 = [
+        [Dict(1 => 2, 2 => 0), Dict(1 => 4, 2 => 0), Dict(1 => 0, 2 => 6)],
+        [Dict(1 => 8, 2 => 0), Dict(1 => 0, 2 => 2), Dict(1 => 0, 2 => 4)],
+    ]
+    obs2 = [
+        [[2.0, 0.0], [2.0, 0.0], [0.0, 2.0]],
+        [[8.0, 0.0], [0.0, 4.0], [0.0, 2.0]],
+    ]
+
+    dt = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs1, obs2)
+    @test 0.0 <= dt.D_mi <= 1.0
+
+    vecs_a, vecs_b = CausalSetZoology.concatenate_hists(obs1, obs2)
+    d_explicit = CausalSetZoology.distinguishability_mutual_information(vecs_a, vecs_b)
+    @test dt.D_mi ≈ d_explicit.D_mi atol = 1e-12
+
+    d_single = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs1)
+    d_direct = CausalSetZoology.distinguishability_mutual_information(obs1[1], obs1[2])
+    @test d_single.D_mi ≈ d_direct.D_mi atol = 1e-12
+end
+
+@testitem "distinguishability: mutual_information is sensitive to correlations" setup=[setupDistinguishability] begin
+    x0 = [10.0, 0.0]
+    x1 = [0.0, 10.0]
+    y0 = [10.0, 0.0]
+    y1 = [0.0, 10.0]
+
+    # Observable marginals are identical across classes.
+    obs_x = [
+        [x0, x1, x0, x1], # class A
+        [x0, x1, x0, x1], # class B
+    ]
+    # Same marginal for Y, but different A/B pairing with X.
+    obs_y = [
+        [y0, y1, y0, y1], # class A: positively correlated with X
+        [y1, y0, y1, y0], # class B: anti-correlated with X
+    ]
+
+    dx = CausalSetZoology.distinguishability_mutual_information(obs_x[1], obs_x[2]; k = 1, pca_dim = 2)
+    dy = CausalSetZoology.distinguishability_mutual_information(obs_y[1], obs_y[2]; k = 1, pca_dim = 2)
+    dxy = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs_x, obs_y; k = 1, pca_dim = 4)
+
+    @test dx.D_mi < 0.2
+    @test dy.D_mi < 0.2
+    @test dxy.D_mi > 0.7
+end
+
+@testitem "distinguishability: mutual_information monotone under added information" setup=[setupDistinguishability] begin
+    rng = Random.Xoshiro(1234)
+    n = 200
+    x0, x1 = [5.0, 0.0], [0.0, 5.0]
+    y0, y1 = [5.0, 0.0], [0.0, 5.0]
+
+    x_a = Vector{Vector{Float64}}(undef, n)
+    x_b = Vector{Vector{Float64}}(undef, n)
+    y_a = Vector{Vector{Float64}}(undef, n)
+    y_b = Vector{Vector{Float64}}(undef, n)
+    for i in 1:n
+        z = rand(rng, Bool)
+        x_a[i] = z ? x1 : x0
+        x_b[i] = z ? x1 : x0
+        y_a[i] = z ? y1 : y0
+        y_b[i] = z ? y0 : y1
+    end
+
+    obs_x = [x_a, x_b]
+    obs_y = [y_a, y_b]
+    obs_x_copy = deepcopy(obs_x)
+
+    d_x = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs_x; k = 3, pca_dim = 2)
+    d_xy = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs_x, obs_y; k = 3, pca_dim = 4)
+    d_xyx = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs_x, obs_y, obs_x_copy; k = 3, pca_dim = 4)
+
+    @test d_xy.D_mi >= d_x.D_mi - 0.05
+    @test d_xyx.D_mi >= d_xy.D_mi - 0.1
+    @test d_xyx.D_mi <= 1.0 + 1e-12
+end
+
+@testitem "distinguishability: mutual_information bootstrap and reproducibility" setup=[setupDistinguishability] begin
+    a = [[2.0, 0.0], [2.0, 0.0], [0.0, 2.0], [2.0, 0.0], [0.0, 2.0]]
+    b = [[8.0, 0.0], [0.0, 4.0], [0.0, 2.0], [0.0, 4.0], [8.0, 0.0]]
+
+    r1 = CausalSetZoology.distinguishability_mutual_information(a, b, 200; rng = Random.Xoshiro(2026))
+    r2 = CausalSetZoology.distinguishability_mutual_information(a, b, 200; rng = Random.Xoshiro(2026))
+    @test r1.D_mi ≈ r2.D_mi atol = 1e-12
+    @test r1.std ≈ r2.std atol = 1e-12
+    @test 0.0 <= r1.D_mi <= 1.0
+    @test r1.std >= 0.0
+
+    obs = [
+        [Dict(1 => 2, 2 => 0), Dict(1 => 4, 2 => 0), Dict(1 => 0, 2 => 6)],
+        [Dict(1 => 8, 2 => 0), Dict(1 => 0, 2 => 2), Dict(1 => 0, 2 => 4)],
+    ]
+    rt = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs; num_draws = 120, rng = Random.Xoshiro(7))
+    @test 0.0 <= rt.D_mi <= 1.0
+    @test rt.std >= 0.0
+end
+
+@testitem "distinguishability: mutual_information validation" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.0], [0.0, 1.0]]
+    b = [[1.0, 0.0], [0.0, 1.0]]
+    @test_throws ArgumentError CausalSetZoology.distinguishability_mutual_information(Vector{Vector{Float64}}(), b)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information([[0.0, 0.0]], b)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information([[-1.0, 2.0]], b)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b, 0)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; k = 0)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; pca_mode = :bad_mode)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; pca_dim = 0)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; explained_variance = 0.0)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; explained_variance = 1.1)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; eigenvalue_rtol = -1e-3)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; eigenvalue_rtol = 1.0)
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(a, b; max_per_class = 1)
+
+    h_good = [Dict(1 => 1, 2 => 0), Dict(1 => 0, 2 => 1)]
+    h_bad = [Dict(1 => 0, 2 => 0), Dict(1 => 0, 2 => 1)]
+    @test_throws DomainError CausalSetZoology.distinguishability_mutual_information(h_bad, h_good)
+    @test_throws DomainError CausalSetZoology.total_histogram_mutual_information_distinguishability([h_good, h_good]; k = 0)
+
+    obs = [[Dict(1 => 1.0)], [Dict(1 => 1.0)]]
+    @test_throws ArgumentError CausalSetZoology.total_histogram_mutual_information_distinguishability()
+    @test_throws DimensionMismatch CausalSetZoology.total_histogram_mutual_information_distinguishability(
+        obs,
+        [[Dict(1 => 1.0), Dict(2 => 1.0)], [Dict(1 => 1.0)]],
+    )
+end
+
+@testitem "distinguishability: mutual_information PCA modes" setup=[setupDistinguishability] begin
+    rng = Random.Xoshiro(19)
+    n = 120
+    d = 24
+
+    # Build two classes with signal concentrated in first 3 coordinates.
+    a = Vector{Vector{Float64}}(undef, n)
+    b = Vector{Vector{Float64}}(undef, n)
+    for i in 1:n
+        va = rand(rng, d)
+        vb = rand(rng, d)
+        va[1] += 2.0
+        va[2] += 1.0
+        va[3] += 0.5
+        vb[1] += 0.2
+        vb[2] += 0.1
+        vb[3] += 0.05
+        a[i] = va
+        b[i] = vb
+    end
+
+    d_dim = CausalSetZoology.distinguishability_mutual_information(
+        a,
+        b;
+        k = 3,
+        pca_mode = :dim,
+        pca_dim = 8,
+        max_per_class = nothing,
+    )
+    d_var = CausalSetZoology.distinguishability_mutual_information(
+        a,
+        b;
+        k = 3,
+        pca_mode = :variance,
+        explained_variance = 0.9,
+        max_per_class = nothing,
+    )
+    d_cut = CausalSetZoology.distinguishability_mutual_information(
+        a,
+        b;
+        k = 3,
+        pca_mode = :cutoff,
+        eigenvalue_rtol = 1e-8,
+        max_per_class = nothing,
+    )
+
+    @test 0.0 <= d_dim.D_mi <= 1.0
+    @test 0.0 <= d_var.D_mi <= 1.0
+    @test 0.0 <= d_cut.D_mi <= 1.0
+    @test d_dim.D_mi > 0.1
+    @test d_var.D_mi > 0.1
+    @test d_cut.D_mi > 0.1
+
+    # Consistency across modes for same data should be reasonably close.
+    @test isapprox(d_dim.D_mi, d_var.D_mi; atol = 0.25)
+    @test isapprox(d_dim.D_mi, d_cut.D_mi; atol = 0.25)
+end
+
 @testitem "distinguishability: histogram_distinguishability threaded RNG reproducibility" setup=[setupDistinguishability] begin
     a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05], [0.85, 0.15], [0.92, 0.08]]
     b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95], [0.15, 0.85], [0.08, 0.92]]

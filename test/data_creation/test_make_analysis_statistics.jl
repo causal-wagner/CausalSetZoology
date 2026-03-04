@@ -36,6 +36,8 @@
 
     stats_script = joinpath(@__DIR__, "..", "..", "src", "data_generation", "make_analysis_statistics.jl")
     stats_src = read(stats_script, String)
+    utils_script = joinpath(@__DIR__, "..", "..", "src", "data_generation", "utils.jl")
+    utils_src = read(utils_script, String)
 end
 
 @testitem "make_analysis_statistics: pure helper functions" setup=[setupMakeAnalysisStatistics] begin
@@ -47,15 +49,11 @@ end
     ev_summary_block = _extract_block(
         stats_src,
         "@everywhere function ev_summary(ev)",
-        "@everywhere function sym_norm_lap_eigs!(W)",
-    )
-    lap_block = _extract_block(
-        stats_src,
-        "@everywhere function sym_norm_lap_eigs!(W)",
         "@everywhere function compute(",
     )
+    lap_block = utils_src
 
-    block = replace(sparse_hist_block * ev_summary_block * lap_block, "@everywhere " => "")
+    block = replace(sparse_hist_block * ev_summary_block, "@everywhere " => "") * lap_block
     m = _eval_block_in_module(block)
 
     @test m.sparse_hist([0, 2, 0, 3]) == Dict(2 => 2, 4 => 3)
@@ -73,6 +71,25 @@ end
     @test all(isfinite, vals)
     @test vals[1] ≈ 0.0 atol = 1e-10
     @test vals[2] ≈ 2.0 atol = 1e-10
+
+    M = [1.0 2.0; 3.0 4.0]
+    m.symmetrize!(M)
+    @test M == [2.0 5.0; 5.0 8.0]
+
+    U = [9.0 2.0 3.0; 7.0 8.0 4.0; 6.0 5.0 1.0]
+    m.symmetrize_strictly_upper_triangular!(U)
+    @test U == [0.0 2.0 3.0; 2.0 0.0 4.0; 3.0 4.0 0.0]
+
+    # Causet-like overload: must agree with matrix path built from future_relations.
+    Core.eval(m, :(struct MockBitArrayCauset; future_relations; end))
+    cset = m.MockBitArrayCauset([BitVector([0, 1]), BitVector([0, 0])])
+    vals_from_cset = m.sym_norm_lap_eigs!(cset)
+
+    adj = transpose(reduce(hcat, cset.future_relations))
+    W_sym = Float64.(adj)
+    W_sym .+= transpose(W_sym)
+    vals_from_matrix = m.sym_norm_lap_eigs!(W_sym)
+    @test vals_from_cset ≈ vals_from_matrix atol = 1e-12
 end
 
 @testitem "make_analysis_statistics: CLI help and required flag paths" setup=[setupMakeAnalysisStatistics] begin
@@ -103,7 +120,9 @@ end
         @test occursin(key, stats_src)
     end
 
-    for helper in ["connectivity(adj, size)", "function sparse_hist(v)", "function ev_summary(ev)", "function sym_norm_lap_eigs!(W)", "function compute("]
+    for helper in ["connectivity(adj, size)", "function sparse_hist(v)", "function ev_summary(ev)", "function compute("]
         @test occursin(helper, stats_src)
     end
+    @test occursin("include(joinpath(@__DIR__, \"utils.jl\"))", stats_src)
+    @test occursin("function sym_norm_lap_eigs!(W::AbstractMatrix", utils_src)
 end

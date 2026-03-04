@@ -68,6 +68,8 @@ end
 @everywhere using ProgressMeter
 @everywhere using Statistics
 
+@everywhere include(joinpath(@__DIR__, "utils.jl"))
+
 LinearAlgebra.BLAS.set_num_threads(1)
 
 ################################################################################
@@ -124,25 +126,6 @@ end
         quantile(ev, 0.75),
         quantile(ev, 0.5),
     )
-end
-
-@everywhere function sym_norm_lap_eigs!(W)
-    n = size(W, 1)
-    deg = vec(sum(W, dims = 2))
-    dinvsqrt = Vector{Float64}(undef, n)
-    @inbounds for i in 1:n
-        di = deg[i]
-        dinvsqrt[i] = di > 0.0 ? inv(sqrt(di)) : 0.0
-    end
-
-    LinearAlgebra.lmul!(LinearAlgebra.Diagonal(dinvsqrt), W)
-    LinearAlgebra.rmul!(W, LinearAlgebra.Diagonal(dinvsqrt))
-    W .*= -1.0
-    @inbounds for i in 1:n
-        W[i, i] += 1.0
-    end
-
-    return LinearAlgebra.eigen(LinearAlgebra.Hermitian(W)).values
 end
 
 @everywhere function compute(
@@ -240,7 +223,8 @@ end
 
         # W_sym = A + A^T
         W_sym = copy(link_f)
-        W_sym .+= transpose(link_f)
+        symmetrize_strictly_upper_triangular!(W_sym)
+        # W_sym .+= transpose(link_f)
 
         # W_aat = A A^T and W_ata = A^T A
         #W_aat = Matrix{Float64}(undef, n, n)
