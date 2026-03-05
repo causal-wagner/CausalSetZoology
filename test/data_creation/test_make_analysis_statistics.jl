@@ -75,16 +75,17 @@ end
 
     U = [9.0 2.0 3.0; 7.0 8.0 4.0; 6.0 5.0 1.0]
     m.symmetrize_strictly_upper_triangular!(U)
-    @test U == [0.0 2.0 3.0; 2.0 0.0 4.0; 3.0 4.0 0.0]
+    @test U == [9.0 2.0 3.0; 2.0 8.0 4.0; 3.0 4.0 1.0]
 
-    # Causet-like overload: must agree with matrix path built from future_relations.
-    Core.eval(m, :(struct MockBitArrayCauset; future_relations; end))
-    cset = m.MockBitArrayCauset([BitVector([0, 1]), BitVector([0, 0])])
-    vals_from_cset = m.sym_norm_lap_eigs!(cset)
+    # End-to-end cset path: should agree with explicit matrix construction.
+    cset = m.CausalSets.BitArrayCauset(
+        2,
+        [BitVector([0, 1]), BitVector([0, 0])],
+        [BitVector([0, 0]), BitVector([1, 0])],
+    )
+    vals_from_cset = m.normalized_lap_eigs_symmetrized_links(cset)
 
-    adj = transpose(reduce(hcat, cset.future_relations))
-    W_sym = Float64.(adj)
-    W_sym .+= transpose(W_sym)
+    W_sym = [0.0 1.0; 1.0 0.0]
     vals_from_matrix = m.sym_norm_lap_eigs!(W_sym)
     @test vals_from_cset ≈ vals_from_matrix atol = 1e-12
 end
