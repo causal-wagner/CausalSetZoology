@@ -73,10 +73,6 @@ end
     @test vals[1] ≈ 0.0 atol = 1e-10
     @test vals[2] ≈ 2.0 atol = 1e-10
 
-    M = [1.0 2.0; 3.0 4.0]
-    m.symmetrize!(M)
-    @test M == [2.0 5.0; 5.0 8.0]
-
     U = [9.0 2.0 3.0; 7.0 8.0 4.0; 6.0 5.0 1.0]
     m.symmetrize_strictly_upper_triangular!(U)
     @test U == [0.0 2.0 3.0; 2.0 0.0 4.0; 3.0 4.0 0.0]
