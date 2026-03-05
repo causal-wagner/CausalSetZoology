@@ -152,11 +152,8 @@ end
 )
     n = cset.atom_count
 
-    in_deg = sum(adj, dims = 1)[1, :]
-    out_deg = sum(adj, dims = 2)[:, 1]
-
-    in_deg_link = sum(link, dims = 1)[1, :]
-    out_deg_link = sum(link, dims = 2)[:, 1]
+    in_deg, out_deg  = CausalSetZoology.degrees(cset)
+    in_deg_link, out_deg_link = CausalSetZoology.degrees(links)
 
     tdeg = begin
         countmap(in_deg), # Dict{Int,Int}: value → count
@@ -174,31 +171,6 @@ end
         quantile(out_deg, 0.75),
         quantile(out_deg, 0.5)
     end
-
-    #t_lap = begin
-        # Densify once; eigensolvers are dense anyway.
-        #adj_f = Float64.(adj)
-
-        # W_sym = A + A^T
-        #W_sym = copy(adj_f)
-        #W_sym .+= transpose(adj_f)
-
-        # W_aat = A A^T and W_ata = A^T A
-        #W_aat = Matrix{Float64}(undef, n, n)
-        #W_ata = Matrix{Float64}(undef, n, n)
-        #LinearAlgebra.mul!(W_aat, adj_f, transpose(adj_f))
-        #LinearAlgebra.mul!(W_ata, transpose(adj_f), adj_f)
-
-        #ev_sym = sym_norm_lap_eigs!(W_sym)
-        #ev_aat = sym_norm_lap_eigs!(W_aat)
-        #ev_ata = sym_norm_lap_eigs!(W_ata)
-
-        #(
-            #ev_summary(ev_sym)...,
-            #ev_summary(ev_aat)...,
-            #ev_summary(ev_ata)...,
-        #)
-    #end
 
     tdeg_link = begin
         countmap(in_deg_link),
@@ -219,27 +191,16 @@ end
 
     t_lap_link = begin
         # Densify once; eigensolvers are dense anyway.
-        link_f = Float64.(link)
+        link_f = Float64.(CausalSetZoology.dense_future_links(link))
 
         # W_sym = A + A^T
         W_sym = copy(link_f)
         symmetrize_strictly_upper_triangular!(W_sym)
-        # W_sym .+= transpose(link_f)
-
-        # W_aat = A A^T and W_ata = A^T A
-        #W_aat = Matrix{Float64}(undef, n, n)
-        #W_ata = Matrix{Float64}(undef, n, n)
-        #LinearAlgebra.mul!(W_aat, link_f, transpose(link_f))
-        #LinearAlgebra.mul!(W_ata, transpose(link_f), link_f)
 
         ev_sym = sym_norm_lap_eigs!(W_sym)
-        #ev_aat = sym_norm_lap_eigs!(W_aat)
-        #ev_ata = sym_norm_lap_eigs!(W_ata)
 
         (
             ev_summary(ev_sym)...,
-            #ev_summary(ev_aat)...,
-            #ev_summary(ev_ata)...,
         )
     end
 

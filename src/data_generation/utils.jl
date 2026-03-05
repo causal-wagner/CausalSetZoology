@@ -1,47 +1,4 @@
 """
-    CausalSets.transitive_reduction!(tcg, trg)
-
-Populate `trg` with the transitive reduction (link graph) of causal set `tcg`.
-
-# Arguments
-- `tcg`: Input transitive-closure causal set.
-- `trg`: Output DAG storage to be overwritten.
-
-# Returns
-- `trg`: Mutated `trg`.
-
-# Throws
-- `DimensionMismatch`: If `trg` size does not match `tcg.atom_count`.
-"""
-function CausalSets.transitive_reduction!(tcg::CausalSets.BitArrayCauset, trg::CausalSets.ToposortedDAG)
-    if length(trg.edges) != tcg.atom_count
-        throw(
-            DimensionMismatch(
-                "trg has $(length(trg.edges)) rows, but tcg.atom_count=$(tcg.atom_count)",
-            ),
-        )
-    end
-    for i in 1:tcg.atom_count
-        trg.edges[i] .= false
-    end
-    for i in 1:tcg.atom_count
-        for k in i+1:tcg.atom_count
-            if tcg.future_relations[i][k]
-                is_link = true
-                for j in i+1:k-1
-                    if tcg.future_relations[i][j] && tcg.future_relations[j][k]
-                        is_link = false
-                        break
-                    end
-                end
-                trg.edges[i][k] = is_link
-            end
-        end
-    end
-    return trg
-end
-
-"""
     symmetrize_strictly_upper_triangular!(M)
 
 Copy the strict upper triangle of `M` into the strict lower triangle in-place.
@@ -132,4 +89,37 @@ function normalized_lap_eigs_symmetrized_links(cset::CausalSets.BitArrayCauset):
     W_sym = Float64.(transpose(reduce(hcat, links.edges)))
     symmetrize_strictly_upper_triangular!(W_sym)
     return sym_norm_lap_eigs!(W_sym)
+end
+
+function degrees(cset::CausalSets.BitArrayCauset)::Tuple{Vector{Int32}, Vector{Int32}}
+    n = cset.atom_count
+    in_deg  = Vector{Int}(undef, n)
+    out_deg = Vector{Int}(undef, n)
+    @inbounds for i in 1:n
+        in_deg[i]  = CausalSets.bitvector_count_ones(cset.past_relations[i])
+        out_deg[i] = CausalSets.bitvector_count_ones(cset.future_relations[i])
+    end
+    return in_deg, out_deg
+end
+
+function degrees(links::SparseLinksCauset)::Tuple{Vector{Int32}, Vector{Int32}}
+    n = links.atom_count
+    in_deg  = Vector{Int}(undef, n)
+    out_deg = Vector{Int}(undef, n)
+    @inbounds for i in 1:n
+        in_deg[i]  = length(links.past_links[i])
+        out_deg[i] = length(links.future_links[i])
+    end
+    return in_deg, out_deg
+end
+
+function dense_future_links(cset::SparseLinksCauset)::BitMatrix
+    n = Int(cset.atom_count)
+    A = falses(n, n)
+    @inbounds for i in 1:n
+        for j in cset.future_links[i]
+            A[i, Int(j)] = true
+        end
+    end
+    return A
 end
