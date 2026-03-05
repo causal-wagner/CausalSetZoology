@@ -60,7 +60,7 @@ end
 
 @info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
 
-@everywhere import CausalSets as CS
+@everywhere import CausalSets
 @everywhere import LinearAlgebra
 
 @everywhere import QuantumGrav as QG
@@ -245,7 +245,7 @@ end
 
 
     t_c = begin
-        cardinalities = CS.cardinality_abundances(cset)
+        cardinalities = CausalSets.cardinality_abundances(cset)
 
         sparse_hist(cardinalities),
         minimum(cardinalities),
@@ -258,7 +258,7 @@ end
 
 
     t_c2 = begin
-        chain_cardinalities_2 = CS.chain_cardinality_abundances(cset, Val(2))
+        chain_cardinalities_2 = CausalSets.chain_cardinality_abundances(cset, Val(2))
         c2 = reshape(chain_cardinalities_2, :)
 
         sparse_hist(chain_cardinalities_2),
@@ -272,7 +272,7 @@ end
 
 
 #    t_c3 = begin
-#        chain_cardinalities_3 = CS.chain_cardinality_abundances(cset, Val(3))
+#        chain_cardinalities_3 = CausalSets.chain_cardinality_abundances(cset, Val(3))
 #        c3 = reshape(chain_cardinalities_3, :)
 
 #        minimum(c3),
@@ -322,12 +322,12 @@ end
 
     @debug "compute connectivity"
     t_rn = begin
-        connectivity = CS.count_relations(cset) / (n * (n - 1) / 2)
+        connectivity = CausalSets.count_relations(cset) / (n * (n - 1) / 2)
     end
 
     # @debug "compute dimension"
     # t_d = begin
-    #     relation_dimension = CS.estimate_relation_dimension(d)
+    #     relation_dimension = CausalSets.estimate_relation_dimension(d)
     # end
 
 

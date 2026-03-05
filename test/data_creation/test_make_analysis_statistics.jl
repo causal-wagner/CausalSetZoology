@@ -12,6 +12,7 @@
 
     function _eval_block_in_module(src::AbstractString; module_name::Symbol = gensym(:ScriptBlock))
         m = Module(module_name)
+        Core.eval(m, :(import CausalSets))
         Core.eval(m, :(using LinearAlgebra))
         Core.eval(m, :(using Statistics))
         Core.eval(m, Meta.parseall(src))
