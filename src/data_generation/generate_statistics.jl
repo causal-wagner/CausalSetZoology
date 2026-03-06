@@ -155,7 +155,7 @@ function compute_statistics(
 
     @debug "compute connectivity"
     t_rn = begin
-        connectivity = connectivity(cset)
+        CausalSetZoology.connectivity(cset)
     end
 
 
