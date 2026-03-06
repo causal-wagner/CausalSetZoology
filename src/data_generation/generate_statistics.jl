@@ -155,7 +155,7 @@ function compute_statistics(
 
     @debug "compute connectivity"
     t_rn = begin
-        connectivity = CausalSets.count_relations(cset) / (n * (n - 1) / 2)
+        connectivity = connectivity(cset)
     end
 
 

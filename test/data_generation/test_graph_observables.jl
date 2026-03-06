@@ -86,6 +86,24 @@ end
     @test out_deg == Int32[1, 1, 0]
 end
 
+# Verifies relation-density scalar on fully related and empty-relation cases.
+@testitem "graph_observables: connectivity" setup=[setupDataGenerationGraphObservables] begin
+    cset_chain = _chain3_bitarray()
+    @test CausalSetZoology.connectivity(cset_chain) ≈ 1.0 atol = 1e-12
+
+    n = 4
+    future = [BitVector(fill(false, n)) for _ in 1:n]
+    past = [BitVector(fill(false, n)) for _ in 1:n]
+    cset_antichain = CausalSets.BitArrayCauset(n, future, past)
+    @test CausalSetZoology.connectivity(cset_antichain) ≈ 0.0 atol = 1e-12
+end
+
+# Verifies domain guard for undersized causal sets.
+@testitem "graph_observables: connectivity validation" setup=[setupDataGenerationGraphObservables] begin
+    cset_singleton = CausalSets.BitArrayCauset(1, [BitVector([0])], [BitVector([0])])
+    @test_throws DomainError CausalSetZoology.connectivity(cset_singleton)
+end
+
 # Verifies maximum path-length logic on closure edges.
 @testitem "graph_observables: height bitarray" setup=[setupDataGenerationGraphObservables] begin
     cset = _chain3_bitarray()

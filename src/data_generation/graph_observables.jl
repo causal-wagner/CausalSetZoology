@@ -155,6 +155,27 @@ function degrees(links::SparseLinksCauset)::Tuple{Vector{Int}, Vector{Int}}
     return in_deg, out_deg
 end
 
+"""
+    connectivity(cset::CausalSets.BitArrayCauset)
+
+Compute the directed-edge density (connectivity) of a causal set.
+
+# Arguments
+- `cset`: Causal set in transitive-closure representation.
+
+# Returns
+- `ρ::Float64`: Fraction of realized relations among all possible directed
+  relations for `n` labeled events, i.e.
+  `count_relations(cset) / (n * (n - 1) / 2)`.
+
+# Throws
+- `DomainError`: If `cset.atom_count < 2`.
+"""
+function connectivity(cset::CausalSets.BitArrayCauset)::Float64
+    n = cset.atom_count
+    n >= 2 || throw(DomainError(n, "connectivity is undefined for atom_count < 2"))
+    return CausalSets.count_relations(cset) / (n * (n - 1) / 2)
+end
 
 """
     height(cset, source)

@@ -52,11 +52,11 @@ for (i, arg) in enumerate(args)
         end
     end
 
-    if arg == "--num_workers"
+    if arg == "--num_processes"
         if i + 1 <= length(args)
-            global num_workers = parse(Int, args[i+1])
+            global num_processes = parse(Int, args[i+1])
         else
-            println("Error: --num_workers requires a integer argument.")
+            println("Error: --num_processes requires a integer argument.")
             exit(1)
         end
     end
@@ -101,7 +101,7 @@ for (i, arg) in enumerate(args)
         println("  --batchsize <number>             Number of causal sets per batch (default: 100).")
         println("  --size <number>                  Causal set size.")
         println("  --seed <number>                  Global RNG seed (default: 123456).")
-        println("  --num_workers <number>           Number of workers (default: 1).")
+        println("  --num_processes <number>           Number of workers (default: 1).")
         println("  --D <number>                     Dimensionality of the spacetime (default: 2) -- only supported for Minkowski sprinklings and manifoldlike_simply_connected kinds.")
         println("  --cut_restriction <restriction>  Restricts allowed topological cuts (for kind manifoldlike_non_simply_connected). Can be \"boundary_cuts\" or \"free_cuts\".")
         println("  --link_probability <number>      Fix link probability for merged creation (0.0 to 1.0).")
@@ -154,10 +154,10 @@ info_parts = String[
 @isdefined(batchsize) && push!(info_parts, "batchsize=$(batchsize)")
 @isdefined(seed) && push!(info_parts, "seed=$(seed)")
 @isdefined(out_path) && push!(info_parts, "output path=$(out_path)")
-if !@isdefined(num_workers)
-    num_workers = 1    
+if !@isdefined(num_processes)
+    num_processes = 1    
 end
-push!(info_parts, "num_workers=$num_workers")
+push!(info_parts, "num_processes=$num_processes")
 
 @info "Running dataset creation with $(join(info_parts, ", "))"
 
@@ -179,14 +179,13 @@ import JLD2
 using Distributed
 import CausalSetZoology
 
-if nprocs() - 1 < num_workers
-    @info "Starting workers" requested=num_workers existing=(nprocs() - 1)
-    addprocs(num_workers - (nprocs() - 1); exeflags="--threads=1")
+if nprocs() - 1 < num_processes
+    @info "Starting workers" requested=num_processes existing=(nprocs() - 1)
+    addprocs(num_processes - (nprocs() - 1); exeflags="--threads=1")
     @info "Workers started"
 end
 
 @everywhere begin
-    import CausalSets
     import Random
     import Distributions
     import LinearAlgebra
@@ -285,7 +284,7 @@ nbatches = cld(N, batchsize)
 CausalSetZoology.create_dataset_and_save(
     out_path,
     kind,
-    num_workers,
+    num_processes,
     batchsize,
     nbatches,
     N,

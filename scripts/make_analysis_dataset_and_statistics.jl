@@ -140,6 +140,10 @@ else
     @warn "Manifest.toml not found in analysis directory"
 end
 
+# Ensure copied outdir environment can resolve local CausalSetZoology source.
+repo_root = normpath(joinpath(@__DIR__, ".."))
+run(`julia --project=$outdir -e "using Pkg; Pkg.develop(path=\"$(repo_root)\"); Pkg.instantiate()"`)
+
 using YAML
 
 config = Dict(
