@@ -1,21 +1,18 @@
 module CausalSetZoology
 
 import JLD2
-import Printf
 import Statistics
 import Optim
 import Random
 import SpecialFunctions
-import HypergeometricFunctions
-import Polylogarithms
-import ADTypes
-import ForwardDiff
 import QuantumGrav
 import CausalSets
 import FFTW
 import Distributions
 import LinearAlgebra
+import StatsBase
 import ProgressMeter
+import Distributed
 
 export average_histogram_with_std,
     average_vectors_with_std,
@@ -51,17 +48,37 @@ export average_histogram_with_std,
     replace_zeros,
     scalar_bin_distinguishability,
     scalar_bin_distinguishability_permutation,
-    scalar_bin_mahalanobis_gap_distinguishability
+    scalar_bin_mahalanobis_gap_distinguishability,
+    ev_summary,
+    symmetrize_strictly_upper_triangular!,
+    sym_norm_lap_eigs!,
+    normalized_lap_eigs_symmetrized_links,
+    degrees,
+    height,
+    sparse_hist,
+    dense_future_links,
+    SparseLinksCauset,
+    compute_statistics,
+    create_statistics_dataset_and_save,
+    generate_batch,
+    create_dataset_and_save
+
+
 
 # Base utilities and shared helpers
 include("./data_analysis/minkowski_abundance_analytical.jl")
 include("./data_analysis/dataloading.jl")
 include("./data_analysis/utils.jl")
+include("./data_generation/SparseLinksCauset.jl")
+include("./data_generation/utils.jl")
 
 # Fitting and derived analyses
 include("./data_analysis/histogram_fitting.jl")
 include("./data_analysis/convergence_fitting.jl")
 include("./data_analysis/distinguishability.jl")
 include("./data_analysis/grid_fourier_analysis.jl")
+include("./data_generation/generate_statistics.jl")
+include("./data_generation/generate_dataset.jl")
+include("./data_generation/graph_observables.jl")
 
 end # module CausalSetZoology

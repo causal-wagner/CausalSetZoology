@@ -5,7 +5,7 @@ Sparse causal set representation that stores only link relations
 (transitive reduction), not full transitive closure.
 """
 struct SparseLinksCauset <: CausalSets.AbstractCauset
-    atom_count::Int32
+    atom_count::Int64
     future_links::Vector{Vector{Int32}} # future link neighbors
     past_links::Vector{Vector{Int32}}   # past link neighbors
 end
@@ -21,6 +21,10 @@ function SparseLinksCauset(
     sprinkling::Vector{CausalSets.Coordinates{N}},
 )::SparseLinksCauset where {N}
     return convert(SparseLinksCauset, CausalSets.ManifoldCauset(manifold, sprinkling))
+end
+
+function SparseLinksCauset(causet::CausalSets.AbstractCauset)::SparseLinksCauset
+    return convert(SparseLinksCauset, causet)
 end
 
 """
