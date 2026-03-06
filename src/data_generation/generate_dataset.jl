@@ -130,18 +130,38 @@ function generate_batch(
             push!(link_probability_b, link_probability_value)
 
         elseif kind == "grid"
-            lattice = lattices[rand(rng, lattice_distr)]
-            segment_ratio = rand(rng, segment_ratio_distr)
-            rotate_angle = rand(rng, rotate_angle_distr)
-            oblique_angle = rand(rng, oblique_angle_distr)
-            cset, _, _ = QuantumGrav.create_grid_causet_in_boundary_2D(
-                cset_size_i,
-                lattice,
-                CausalSets.CausalDiamondBoundary{2}(1.0),
-                CausalSets.MinkowskiManifold{2}();
-                b = segment_ratio,
-                gamma_deg = oblique_angle,
-                rotate_deg = rotate_angle
+            max_grid_tries = 20
+            grid_ok = false
+            lattice = ""
+            segment_ratio = 0.0
+            rotate_angle = 0.0
+            oblique_angle = 0.0
+            for _ in 1:max_grid_tries
+                lattice = lattices[rand(rng, lattice_distr)]
+                segment_ratio = rand(rng, segment_ratio_distr)
+                rotate_angle = rand(rng, rotate_angle_distr)
+                oblique_angle = rand(rng, oblique_angle_distr)
+                try
+                    cset, _, _ = QuantumGrav.create_grid_causet_in_boundary_2D(
+                        cset_size_i,
+                        lattice,
+                        CausalSets.BoxBoundary{2}(((0.0, -0.5), (1.0, 0.5))),
+                        CausalSets.MinkowskiManifold{2}();
+                        b = segment_ratio,
+                        gamma_deg = oblique_angle,
+                        rotate_deg = rotate_angle
+                    )
+                    grid_ok = true
+                    break
+                catch err
+                    if !(err isa ArgumentError && occursin("Boundary shell too small", sprint(showerror, err)))
+                        rethrow()
+                    end
+                end
+            end
+            grid_ok || error(
+                "Grid generation failed after $(max_grid_tries) retries (boundary shell too small). " *
+                "Consider narrowing segment_ratio/oblique_angle ranges."
             )
             push!(segment_ratio_b, segment_ratio)
             push!(segment_angle_b, oblique_angle)
@@ -274,48 +294,59 @@ function create_dataset_and_save(
         workers_list = workers_list[1:num_workers]
 
         batch_map = [collect(w:num_workers:nbatches) for w in 1:num_workers]
-        results = Distributed.RemoteChannel(() -> Channel{Tuple{Int,Any}}(num_workers))
+        results = Distributed.RemoteChannel(() -> Channel{Any}(max(num_workers, nbatches)))
+        worker_tasks = Distributed.Future[]
+        worker_checked = Bool[]
 
         @info "Launching worker tasks"
         for (idx, w) in enumerate(workers_list)
-            Distributed.@spawnat w begin
-                for b in batch_map[idx]
-                    data = generate_batch(
-                        b,
-                        batchsize,
-                        N,
-                        kind,
-                        seed;
-                        link_probability = link_probability,
-                        cset_size = cset_size,
-                        D = D,
-                        cut_restriction = cut_restriction,
-                        big_crystal = big_crystal,
+            let worker_id = w, worker_batches = batch_map[idx]
+                fut = Distributed.@spawnat worker_id begin
+                    try
+                        for b in worker_batches
+                            data = generate_batch(
+                                b,
+                                batchsize,
+                                N,
+                                kind,
+                                seed;
+                                link_probability = link_probability,
+                                cset_size = cset_size,
+                                D = D,
+                                cut_restriction = cut_restriction,
+                                big_crystal = big_crystal,
 
-                        mink = mink,
-                        causal_diamond_boundary = causal_diamond_boundary,                        
+                                mink = mink,
+                                causal_diamond_boundary = causal_diamond_boundary,
 
-                        ndistr = ndistr,
+                                ndistr = ndistr,
 
-                        rdistr = rdistr,
-                        genus_distr = genus_distr,
-                        num_boundary_cuts_distr = num_boundary_cuts_distr,
+                                rdistr = rdistr,
+                                genus_distr = genus_distr,
+                                num_boundary_cuts_distr = num_boundary_cuts_distr,
 
-                        lattice_distr = lattice_distr,
-                        lattices = lattices,
-                        segment_ratio_distr = segment_ratio_distr,
-                        rotate_angle_distr = rotate_angle_distr,
-                        oblique_angle_distr = oblique_angle_distr,
+                                lattice_distr = lattice_distr,
+                                lattices = lattices,
+                                segment_ratio_distr = segment_ratio_distr,
+                                rotate_angle_distr = rotate_angle_distr,
+                                oblique_angle_distr = oblique_angle_distr,
 
-                        non_manifoldlikeness_distr = non_manifoldlikeness_distr,
+                                non_manifoldlikeness_distr = non_manifoldlikeness_distr,
 
-                        layers_distr = layers_distr,
-                        link_probability_distr = link_probability_distr,
-                    
-                        connectivity_distr = connectivity_distr,
-                    )
-                    put!(results, (b, data))
+                                layers_distr = layers_distr,
+                                link_probability_distr = link_probability_distr,
+                            
+                                connectivity_distr = connectivity_distr,
+                            )
+                            put!(results, (:ok, b, data))
+                        end
+                    catch e
+                        bt = catch_backtrace()
+                        put!(results, (:err, Distributed.myid(), sprint((io, ex) -> showerror(io, ex, bt), e)))
+                    end
                 end
+                push!(worker_tasks, fut)
+                push!(worker_checked, false)
             end
         end
 
@@ -323,8 +354,33 @@ function create_dataset_and_save(
         pending = Dict{Int,Any}()
         next_b = 1
         @info "Collecting and writing batches" total_batches=nbatches
-        for _ in 1:nbatches
-            b, data = take!(results)
+        received = 0
+        while received < nbatches
+            if !isready(results)
+                for i in eachindex(worker_tasks)
+                    worker_checked[i] && continue
+                    if isready(worker_tasks[i])
+                        try
+                            fetch(worker_tasks[i])
+                            worker_checked[i] = true
+                        catch e
+                            bt = catch_backtrace()
+                            error(
+                                "Worker task failed before sending batch result:\n" *
+                                sprint((io, ex) -> showerror(io, ex, bt), e),
+                            )
+                        end
+                    end
+                end
+                sleep(0.05)
+                continue
+            end
+            msg = take!(results)
+            if msg[1] === :err
+                error("Worker $(msg[2]) failed while generating batch data:\n$(msg[3])")
+            end
+            _, b, data = msg
+            received += 1
             pending[b] = data
             while haskey(pending, next_b)
                 data = pending[next_b]
@@ -379,6 +435,11 @@ function create_dataset_and_save(
 
                 ProgressMeter.next!(p; step=length(data.csets_b))
             end
+        end
+
+        for i in eachindex(worker_tasks)
+            worker_checked[i] && continue
+            fetch(worker_tasks[i])
         end
     end
 end
