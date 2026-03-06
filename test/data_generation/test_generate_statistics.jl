@@ -78,6 +78,11 @@
             if kind == "layered"
                 f["batches/1/num_layers"] = [batch.num_layers_b[1]]
                 f["batches/1/std"] = [batch.std_b[1]]
+            elseif kind == "grid"
+                f["batches/1/segment_ratio"] = [batch.segment_ratio_b[1]]
+                f["batches/1/segment_angle"] = [batch.segment_angle_b[1]]
+                f["batches/1/rotation_angle"] = [batch.rotation_angle_b[1]]
+                f["batches/1/lattice"] = [batch.lattice_b[1]]
             elseif kind == "merged"
                 f["batches/1/r"] = [batch.r_b[1]]
                 f["batches/1/order"] = [batch.order_b[1]]
@@ -233,7 +238,7 @@ end
                 rotate_angle_distr = Distributions.Uniform(0.0, 0.01),
                 oblique_angle_distr = Distributions.Uniform(10.0, 10.01),
             ),
-            expected_stats_fields = [:r, :order, :segment_ratio, :segment_angle, :rotation_angle, :lattice],
+            expected_stats_fields = [:segment_ratio, :segment_angle, :rotation_angle, :lattice],
         ),
         (
             kind = "layered",

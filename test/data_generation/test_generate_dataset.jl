@@ -168,7 +168,6 @@ end
         "grid",
         123;
         cset_size = 12,
-        rdistr = Distributions.Uniform(2.0, 2.001),
         lattice_distr = Distributions.DiscreteUniform(1, 1),
         lattices = ["quadratic"],
         segment_ratio_distr = Distributions.Uniform(1.0, 1.001),
@@ -182,8 +181,8 @@ end
     @test all(l -> l.atom_count == 12, data.links_b)
     @test all(l -> l isa CausalSetZoology.SparseLinksCauset, data.links_b)
     _assert_links_match_generated_csets(data)
-    @test length(data.r_b) == 2
-    @test length(data.order_b) == 2
+    @test isempty(data.r_b)
+    @test isempty(data.order_b)
     @test length(data.lattice_b) == 2
     @test length(data.segment_ratio_b) == 2
     @test length(data.segment_angle_b) == 2

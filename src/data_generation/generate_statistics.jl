@@ -322,7 +322,7 @@ function compute_statistics(
         d = merge(d, d2)
     elseif kind=="grid"
         #@debug "  augmenting grid data..."
-        d2 = (r = r, order = order, segment_ratio = segment_ratio, segment_angle = segment_angle, rotation_angle = rotation_angle, lattice = lattice)
+        d2 = (segment_ratio = segment_ratio, segment_angle = segment_angle, rotation_angle = rotation_angle, lattice = lattice)
         d = merge(d, d2)
     elseif kind == "layered"
         # @debug "  augmenting layered data..."
@@ -448,13 +448,11 @@ function create_statistics_dataset_and_save(
                     end
 
                 elseif kind == "grid"
-                    r_b             = fin["batches/$b/r"]
-                    order_b         = fin["batches/$b/order"]
                     segment_ratio_b = fin["batches/$b/segment_ratio"]
                     segment_angle_b = fin["batches/$b/segment_angle"]
                     rotation_angle_b = fin["batches/$b/rotation_angle"]
                     lattice_b       = fin["batches/$b/lattice"]
-                    if !(length(r_b) == length(order_b) == length(segment_ratio_b) == length(segment_angle_b) == length(rotation_angle_b) == length(lattice_b) == length(csets_b))
+                    if !(length(segment_ratio_b) == length(segment_angle_b) == length(rotation_angle_b) == length(lattice_b) == length(csets_b))
                         throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
                     end
 
@@ -517,8 +515,6 @@ function create_statistics_dataset_and_save(
                             csets_b[i],
                             links_b[i];
                             kind           = kind,
-                            r              = r_b !== nothing               ? r_b[i]               : 0,
-                            order          = order_b !== nothing           ? order_b[i]           : 0,
                             segment_ratio  = segment_ratio_b !== nothing   ? segment_ratio_b[i]   : 0,
                             segment_angle  = segment_angle_b !== nothing   ? segment_angle_b[i]   : 0,
                             rotation_angle = rotation_angle_b !== nothing ? rotation_angle_b[i]  : 0,

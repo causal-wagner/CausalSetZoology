@@ -130,24 +130,19 @@ function generate_batch(
             push!(link_probability_b, link_probability_value)
 
         elseif kind == "grid"
-            r = rand(rng, rdistr)
-            order = Int(ceil(2 * log(cset_size_i) / log(r) + 1))
             lattice = lattices[rand(rng, lattice_distr)]
             segment_ratio = rand(rng, segment_ratio_distr)
             rotate_angle = rand(rng, rotate_angle_distr)
             oblique_angle = rand(rng, oblique_angle_distr)
-            cset, _, _ = QuantumGrav.create_grid_causet_2D_polynomial_manifold(
+            cset, _, _ = QuantumGrav.create_grid_causet_in_boundary_2D(
                 cset_size_i,
                 lattice,
-                rng,
-                order,
-                r;
+                CausalSets.CausalDiamondBoundary{2}(1.0),
+                CausalSets.MinkowskiManifold{2}();
                 b = segment_ratio,
                 gamma_deg = oblique_angle,
                 rotate_deg = rotate_angle
             )
-            push!(r_b, r)
-            push!(order_b, order)
             push!(segment_ratio_b, segment_ratio)
             push!(segment_angle_b, oblique_angle)
             push!(rotation_angle_b, rotate_angle)
@@ -371,8 +366,6 @@ function create_dataset_and_save(
             end
 
             if kind == "grid"
-                fout["batches/$b/r"] = data.r_b
-                fout["batches/$b/order"] = data.order_b
                 fout["batches/$b/segment_ratio"] = data.segment_ratio_b
                 fout["batches/$b/segment_angle"] = data.segment_angle_b
                 fout["batches/$b/rotation_angle"] = data.rotation_angle_b
