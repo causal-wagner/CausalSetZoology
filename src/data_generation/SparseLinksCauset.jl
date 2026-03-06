@@ -44,28 +44,39 @@ function Base.convert(
 
     future_links = [Int32[] for _ in 1:atom_count]
     past_links = [Int32[] for _ in 1:atom_count]
+    tls_future = [Int32[] for _ in 1:Threads.maxthreadid()]
 
-    # Thread-safe first pass: each thread only writes to future_links[i].
-    Threads.@threads for i in 1:atom_count
-        for k in (i + 1):atom_count
+    # Thread-safe first pass: each iteration only writes to future_links[i].
+    # Candidate caching avoids re-checking in_past_of(causet, i, j) for every k.
+    Threads.@threads :dynamic for i in 1:atom_count
+        future_i = tls_future[Threads.threadid()]
+        empty!(future_i)
+
+        @inbounds for k in (i + 1):atom_count
             CausalSets.in_past_of(causet, i, k) || continue
+            push!(future_i, Int32(k))
+        end
+
+        row = future_links[i]
+        @inbounds for k32 in future_i
+            k = Int(k32)
             is_link = true
-            for j in (i + 1):(k - 1)
-                if CausalSets.in_past_of(causet, i, j) && CausalSets.in_past_of(causet, j, k)
+            for j32 in future_i
+                j = Int(j32)
+                j >= k && break
+                if CausalSets.in_past_of(causet, j, k)
                     is_link = false
                     break
                 end
             end
-            if is_link
-                push!(future_links[i], k)
-            end
+            is_link && push!(row, k32)
         end
     end
 
     # Build past links from future links.
     @inbounds for i in 1:atom_count
         for k in future_links[i]
-            push!(past_links[k], Int32(i))
+            push!(past_links[Int(k)], Int32(i))
         end
     end
 
