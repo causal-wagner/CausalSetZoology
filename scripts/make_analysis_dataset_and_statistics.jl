@@ -101,9 +101,7 @@ end
 # ---------------------------------------------------------------------
 # Paths to scripts
 # ---------------------------------------------------------------------
-dataset_script = args["dataset_multiprocessing"] ?
-    joinpath(@__DIR__, "make_analysis_dataset.jl") :
-    joinpath(@__DIR__, "make_analysis_dataset_sequential.jl")
+dataset_script = joinpath(@__DIR__, "make_analysis_dataset.jl")
 stats_script   = joinpath(@__DIR__, "make_analysis_statistics.jl")
 
 isfile(dataset_script) || error("Dataset script not found: $dataset_script")
@@ -237,6 +235,9 @@ args["dataset_multiprocessing"] && (cmd = `$cmd --num_processes $(args["num_proc
 args["D"] !== nothing && (cmd = `$cmd --D $(args["D"])`)
 args["cut_restriction"] !== nothing && (cmd = `$cmd --cut_restriction $(args["cut_restriction"])`)
 args["link_probability"] !== nothing && (cmd = `$cmd --link_probability $(args["link_probability"])`)
+if haskey(ENV, "CSZ_DEBUG_DATASET")
+    cmd = addenv(cmd, "CSZ_DEBUG_DATASET" => ENV["CSZ_DEBUG_DATASET"])
+end
 run(cmd)
 
 # Ensure dataset was written

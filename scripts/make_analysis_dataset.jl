@@ -160,6 +160,10 @@ end
 push!(info_parts, "num_processes=$num_processes")
 
 @info "Running dataset creation with $(join(info_parts, ", "))"
+if lowercase(get(ENV, "CSZ_DEBUG_DATASET", "0")) in ("1", "true", "yes", "on")
+    @info "Dataset debug logging enabled via CSZ_DEBUG_DATASET"
+end
+const _CSZ_DEBUG_DATASET = lowercase(get(ENV, "CSZ_DEBUG_DATASET", "0")) in ("1", "true", "yes", "on")
 
 if !@isdefined(seed)
     seed = 123456
@@ -171,8 +175,12 @@ end
 
 import Pkg
 #Pkg.update()
+t_pkg_start = time_ns()
 Pkg.activate(@__DIR__)
 Pkg.instantiate()
+if _CSZ_DEBUG_DATASET
+    @info "Pkg setup done" ms = round((time_ns() - t_pkg_start) / 1e6; digits = 3)
+end
 
 using ProgressMeter
 import JLD2
@@ -181,16 +189,46 @@ import CausalSetZoology
 
 if nprocs() - 1 < num_processes
     @info "Starting workers" requested=num_processes existing=(nprocs() - 1)
-    addprocs(num_processes - (nprocs() - 1); exeflags="--threads=1")
+    t_addprocs_start = time_ns()
+    active_proj = Base.active_project()
+    exeflags = `--project=$(active_proj) --threads=1`
+    addprocs(
+        num_processes - (nprocs() - 1);
+        exeflags = exeflags,
+        env = Dict("CSZ_DEBUG_DATASET" => get(ENV, "CSZ_DEBUG_DATASET", "0")),
+    )
     @info "Workers started"
+    if _CSZ_DEBUG_DATASET
+        @info "addprocs done" ms = round((time_ns() - t_addprocs_start) / 1e6; digits = 3)
+    end
 end
 
-@everywhere begin
-    import Random
-    import Distributions
-    import LinearAlgebra
-    import JLD2
-    import CausalSetZoology
+if _CSZ_DEBUG_DATASET
+    @info "Initializing worker modules" workers = workers()
+    t_workers_init_start = time_ns()
+    @everywhere begin
+        import Random
+        import Distributions
+        import LinearAlgebra
+        import JLD2
+        import CausalSetZoology
+    end
+    @info "Worker modules initialized" total_ms = round((time_ns() - t_workers_init_start) / 1e6; digits = 3)
+    worker_ping_ms = Dict{Int,Float64}()
+    for w in workers()
+        t0 = time_ns()
+        remotecall_fetch(() -> nothing, w)
+        worker_ping_ms[w] = round((time_ns() - t0) / 1e6; digits = 3)
+    end
+    @info "Worker ping done" per_worker_ms = worker_ping_ms
+else
+    @everywhere begin
+        import Random
+        import Distributions
+        import LinearAlgebra
+        import JLD2
+        import CausalSetZoology
+    end
 end
 
 ################################################################################
@@ -221,7 +259,7 @@ link_probability_distr = Distributions.Uniform(0.0, 1.0)
 connectivity_distr = Distributions.Normal(0.49981532, 0.06963808)
 genus_distr = Distributions.DiscreteUniform(1, 10)
 num_boundary_cuts_distr = Distributions.DiscreteUniform(1, 10)
-lattice_distr = Distributions.DiscreteUniform(1, 5)
+lattice_distr = Distributions.DiscreteUniform(1, 1)
 segment_ratio_distr = Distributions.Uniform(.1, 10.)
 rotate_angle_distr = Distributions.Uniform(0., 180.)
 oblique_angle_distr = Distributions.Uniform(1., 59.)
@@ -280,6 +318,58 @@ else
 end
 
 nbatches = cld(N, batchsize)
+
+warmup_enabled = lowercase(get(ENV, "CSZ_WARMUP", "1")) in ("1", "true", "yes", "on")
+if warmup_enabled && N > 0
+    warmup_size = isnothing(cset_size) ? 32 : min(cset_size, 64)
+    @info "Warming up dataset generation methods" kind=kind warmup_size=warmup_size workers=workers()
+
+    warmup_kwargs = (
+        cset_size = warmup_size,
+        link_probability = link_probability,
+        D = D,
+        cut_restriction = cut_restriction,
+        big_crystal = big_crystal,
+        ndistr = ndistr,
+        rdistr = rdistr,
+        genus_distr = genus_distr,
+        num_boundary_cuts_distr = num_boundary_cuts_distr,
+        lattice_distr = lattice_distr,
+        lattices = lattices,
+        segment_ratio_distr = segment_ratio_distr,
+        rotate_angle_distr = rotate_angle_distr,
+        oblique_angle_distr = oblique_angle_distr,
+        non_manifoldlikeness_distr = non_manifoldlikeness_distr,
+        layers_distr = layers_distr,
+        link_probability_distr = link_probability_distr,
+        connectivity_distr = connectivity_distr,
+        mink = mink,
+        causal_diamond_boundary = causal_diamond_boundary,
+    )
+
+    # Warm up on main process.
+    try
+        CausalSetZoology.generate_batch(1, 1, 1, kind, seed; warmup_kwargs...)
+    catch err
+        @warn "Warmup on main process failed; continuing without warmup." error=err
+    end
+
+    # Warm up on each worker to avoid first-batch JIT stalls.
+    @sync for w in workers()
+        @async begin
+            try
+                Distributed.remotecall_fetch(w) do
+                    CausalSetZoology.generate_batch(1, 1, 1, kind, seed; warmup_kwargs...)
+                    nothing
+                end
+            catch err
+                @warn "Warmup on worker failed; continuing without warmup." worker=w error=err
+            end
+        end
+    end
+
+    @info "Warmup complete"
+end
 
 CausalSetZoology.create_dataset_and_save(
     out_path,
