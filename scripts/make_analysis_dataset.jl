@@ -228,7 +228,7 @@ rotate_angle_distr = Distributions.Uniform(0., 180.)
 oblique_angle_distr = Distributions.Uniform(1., 59.)
 non_manifoldlikeness_distr = Distributions.Uniform(0.01, .2)
 
-lattices = ["quadratic", "rectangular", "rhombic", "hexagonal", "oblique"]
+lattices = ["oblique"]
 
 ################################################################################
 ## Only define Minkowski manifold and boundary for sprinkling, not globally
