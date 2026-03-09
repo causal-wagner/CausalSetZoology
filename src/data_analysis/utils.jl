@@ -191,6 +191,72 @@ function normalize_hists(
 end
 
 """
+    normalize_hists(
+        hists::AbstractVector{<:AbstractVector};
+        normalization::Union{Symbol,Real} = :probability,
+        num_bins::Union{Nothing,Int} = nothing,
+    )
+
+Bridge method for nested vectors with non-concrete element types (e.g. `Vector{Vector}`).
+Infers histogram payload shape at runtime and forwards to the typed implementations.
+"""
+function normalize_hists(
+    hists::AbstractVector{<:AbstractVector};
+    normalization::Union{Symbol,Real} = :probability,
+    num_bins::Union{Nothing,Int} = nothing,
+)
+    isempty(hists) && return Vector{Vector{Dict{Int,Float64}}}()
+
+    first_item = nothing
+    for group in hists
+        isempty(group) && continue
+        first_item = first(group)
+        break
+    end
+    first_item === nothing && return Vector{Vector{Dict{Int,Float64}}}()
+
+    if first_item isa AbstractDict
+        typed = Vector{Vector{Dict{Int,Float64}}}(undef, length(hists))
+        for i in eachindex(hists)
+            typed[i] = Vector{Dict{Int,Float64}}(undef, length(hists[i]))
+            for (j, hist) in enumerate(hists[i])
+                hist isa AbstractDict ||
+                    throw(ArgumentError("Expected histogram dict at ($i,$j), got $(typeof(hist))"))
+                out_hist = Dict{Int,Float64}()
+                for (k, v) in hist
+                    out_hist[Int(k)] = Float64(v)
+                end
+                typed[i][j] = out_hist
+            end
+        end
+        return normalize_hists(typed; normalization = normalization)
+    end
+
+    if first_item isa Tuple &&
+       length(first_item) == 2 &&
+       first_item[1] isa AbstractDict &&
+       first_item[2] isa Real
+        typed = Vector{Vector{Tuple{Dict{Int,Float64},Float64}}}(undef, length(hists))
+        for i in eachindex(hists)
+            typed[i] = Vector{Tuple{Dict{Int,Float64},Float64}}(undef, length(hists[i]))
+            for (j, item) in enumerate(hists[i])
+                (item isa Tuple && length(item) == 2 && item[1] isa AbstractDict && item[2] isa Real) ||
+                    throw(ArgumentError("Expected (dict, scalar) tuple at ($i,$j), got $(typeof(item))"))
+                d_any, s_any = item
+                out_hist = Dict{Int,Float64}()
+                for (k, v) in d_any
+                    out_hist[Int(k)] = Float64(v)
+                end
+                typed[i][j] = (out_hist, Float64(s_any))
+            end
+        end
+        return normalize_hists(typed; normalization = normalization, num_bins = num_bins)
+    end
+
+    throw(ArgumentError("Unsupported histogram payload type $(typeof(first_item)) for normalize_hists"))
+end
+
+"""
     densify_hists(hists::Vector{<:AbstractDict})
 
 Convert sparse histogram dictionaries to a dense matrix with consistent binning.

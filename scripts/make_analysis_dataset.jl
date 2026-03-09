@@ -186,6 +186,7 @@ using ProgressMeter
 import JLD2
 using Distributed
 import CausalSetZoology
+import CausalSets
 
 if nprocs() - 1 < num_processes
     @info "Starting workers" requested=num_processes existing=(nprocs() - 1)
