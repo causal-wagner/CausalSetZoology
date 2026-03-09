@@ -320,58 +320,6 @@ end
 
 nbatches = cld(N, batchsize)
 
-warmup_enabled = lowercase(get(ENV, "CSZ_WARMUP", "1")) in ("1", "true", "yes", "on")
-if warmup_enabled && N > 0
-    warmup_size = isnothing(cset_size) ? 32 : min(cset_size, 64)
-    @info "Warming up dataset generation methods" kind=kind warmup_size=warmup_size workers=workers()
-
-    warmup_kwargs = (
-        cset_size = warmup_size,
-        link_probability = link_probability,
-        D = D,
-        cut_restriction = cut_restriction,
-        big_crystal = big_crystal,
-        ndistr = ndistr,
-        rdistr = rdistr,
-        genus_distr = genus_distr,
-        num_boundary_cuts_distr = num_boundary_cuts_distr,
-        lattice_distr = lattice_distr,
-        lattices = lattices,
-        segment_ratio_distr = segment_ratio_distr,
-        rotate_angle_distr = rotate_angle_distr,
-        oblique_angle_distr = oblique_angle_distr,
-        non_manifoldlikeness_distr = non_manifoldlikeness_distr,
-        layers_distr = layers_distr,
-        link_probability_distr = link_probability_distr,
-        connectivity_distr = connectivity_distr,
-        mink = mink,
-        causal_diamond_boundary = causal_diamond_boundary,
-    )
-
-    # Warm up on main process.
-    try
-        CausalSetZoology.generate_batch(1, 1, 1, kind, seed; warmup_kwargs...)
-    catch err
-        @warn "Warmup on main process failed; continuing without warmup." error=err
-    end
-
-    # Warm up on each worker to avoid first-batch JIT stalls.
-    @sync for w in workers()
-        @async begin
-            try
-                Distributed.remotecall_fetch(w) do
-                    CausalSetZoology.generate_batch(1, 1, 1, kind, seed; warmup_kwargs...)
-                    nothing
-                end
-            catch err
-                @warn "Warmup on worker failed; continuing without warmup." worker=w error=err
-            end
-        end
-    end
-
-    @info "Warmup complete"
-end
-
 CausalSetZoology.create_dataset_and_save(
     out_path,
     kind,

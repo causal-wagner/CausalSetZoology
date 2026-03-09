@@ -283,163 +283,258 @@ function create_dataset_and_save(
         fout["meta/N"]         = N
         fout["meta/config"]    = config
 
-        @info "Assigning batches to workers" nbatches=nbatches num_workers=num_workers
-        workers_list = Distributed.workers()
-        if num_workers < 1
-            error("num_workers must be >= 1")
-        end
-        if length(workers_list) < num_workers
-            error("num_workers=$num_workers but only $(length(workers_list)) workers available")
-        end
-        workers_list = workers_list[1:num_workers]
-
-        batch_map = [collect(w:num_workers:nbatches) for w in 1:num_workers]
-        results = Distributed.RemoteChannel(() -> Channel{Any}(max(num_workers, nbatches)))
-        worker_tasks = Distributed.Future[]
-        worker_checked = Bool[]
-
-        @info "Launching worker tasks"
-        for (idx, w) in enumerate(workers_list)
-            let worker_id = w, worker_batches = batch_map[idx]
-                fut = Distributed.@spawnat worker_id begin
-                    try
-                        for b in worker_batches
-                            data = generate_batch(
-                                b,
-                                batchsize,
-                                N,
-                                kind,
-                                seed;
-                                link_probability = link_probability,
-                                cset_size = cset_size,
-                                D = D,
-                                cut_restriction = cut_restriction,
-                                big_crystal = big_crystal,
-
-                                mink = mink,
-                                causal_diamond_boundary = causal_diamond_boundary,
-
-                                ndistr = ndistr,
-
-                                rdistr = rdistr,
-                                genus_distr = genus_distr,
-                                num_boundary_cuts_distr = num_boundary_cuts_distr,
-
-                                lattice_distr = lattice_distr,
-                                lattices = lattices,
-                                segment_ratio_distr = segment_ratio_distr,
-                                rotate_angle_distr = rotate_angle_distr,
-                                oblique_angle_distr = oblique_angle_distr,
-
-                                non_manifoldlikeness_distr = non_manifoldlikeness_distr,
-
-                                layers_distr = layers_distr,
-                                link_probability_distr = link_probability_distr,
-                            
-                                connectivity_distr = connectivity_distr,
-                            )
-                            put!(results, (:ok, b, data))
-                        end
-                    catch e
-                        bt = catch_backtrace()
-                        put!(results, (:err, Distributed.myid(), sprint((io, ex) -> showerror(io, ex, bt), e)))
-                    end
-                end
-                push!(worker_tasks, fut)
-                push!(worker_checked, false)
-            end
-        end
-
         p = ProgressMeter.Progress(N; desc = "Creating causal sets")
         pending = Dict{Int,Any}()
         next_b = 1
-        @info "Collecting and writing batches" total_batches=nbatches
-        received = 0
-        while received < nbatches
-            if !isready(results)
-                for i in eachindex(worker_tasks)
-                    worker_checked[i] && continue
-                    if isready(worker_tasks[i])
+        @info "Assigning batches to workers" nbatches=nbatches num_workers=num_workers
+
+        if num_workers == 1
+            @info "Running sequential dataset generation (no worker serialization)"
+            for b in 1:nbatches
+                data = generate_batch(
+                    b,
+                    batchsize,
+                    N,
+                    kind,
+                    seed;
+                    link_probability = link_probability,
+                    cset_size = cset_size,
+                    D = D,
+                    cut_restriction = cut_restriction,
+                    big_crystal = big_crystal,
+
+                    mink = mink,
+                    causal_diamond_boundary = causal_diamond_boundary,
+
+                    ndistr = ndistr,
+
+                    rdistr = rdistr,
+                    genus_distr = genus_distr,
+                    num_boundary_cuts_distr = num_boundary_cuts_distr,
+
+                    lattice_distr = lattice_distr,
+                    lattices = lattices,
+                    segment_ratio_distr = segment_ratio_distr,
+                    rotate_angle_distr = rotate_angle_distr,
+                    oblique_angle_distr = oblique_angle_distr,
+
+                    non_manifoldlikeness_distr = non_manifoldlikeness_distr,
+
+                    layers_distr = layers_distr,
+                    link_probability_distr = link_probability_distr,
+                
+                    connectivity_distr = connectivity_distr,
+                )
+                pending[b] = data
+                while haskey(pending, next_b)
+                    data = pending[next_b]
+                    b = next_b
+                    delete!(pending, next_b)
+                    next_b += 1
+
+                    fout["batches/$b/csets"] = data.csets_b
+                    fout["batches/$b/links"] = data.links_b
+
+                    if kind == "minkowski_quasicrystal"
+                        fout["batches/$b/trans_in"]  = data.trans_in_b
+                        fout["batches/$b/trans_out"] = data.trans_out_b
+                    end
+
+                    if kind == "manifoldlike_simply_connected"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                    end
+
+                    if kind == "manifoldlike_non_simply_connected"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                        fout["batches/$b/num_boundary_cuts"] = data.num_boundary_cuts_b
+                        fout["batches/$b/genus"] = data.genus_b
+                    end
+
+                    if kind == "destroyed"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                        fout["batches/$b/rel_num_flips"] = data.rel_num_flips_b
+                    end
+
+                    if kind == "merged"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                        fout["batches/$b/rel_size_KR"] = data.rel_size_KR_b
+                        fout["batches/$b/link_probability"] = data.link_probability_b
+                    end
+
+                    if kind == "grid"
+                        fout["batches/$b/segment_ratio"] = data.segment_ratio_b
+                        fout["batches/$b/segment_angle"] = data.segment_angle_b
+                        fout["batches/$b/rotation_angle"] = data.rotation_angle_b
+                        fout["batches/$b/lattice"] = data.lattice_b
+                    end
+
+                    if kind == "layered"
+                        fout["batches/$b/num_layers"] = data.num_layers_b
+                        fout["batches/$b/std"] = data.std_b
+                    end
+
+                    ProgressMeter.next!(p; step=length(data.csets_b))
+                end
+            end
+        else
+            workers_list = Distributed.workers()
+            if num_workers < 1
+                error("num_workers must be >= 1")
+            end
+            if length(workers_list) < num_workers
+                error("num_workers=$num_workers but only $(length(workers_list)) workers available")
+            end
+            workers_list = workers_list[1:num_workers]
+
+            batch_map = [collect(w:num_workers:nbatches) for w in 1:num_workers]
+            results = Distributed.RemoteChannel(() -> Channel{Any}(max(num_workers, nbatches)))
+            worker_tasks = Distributed.Future[]
+            worker_checked = Bool[]
+
+            @info "Launching worker tasks"
+            for (idx, w) in enumerate(workers_list)
+                let worker_id = w, worker_batches = batch_map[idx]
+                    fut = Distributed.@spawnat worker_id begin
                         try
-                            fetch(worker_tasks[i])
-                            worker_checked[i] = true
+                            for b in worker_batches
+                                data = generate_batch(
+                                    b,
+                                    batchsize,
+                                    N,
+                                    kind,
+                                    seed;
+                                    link_probability = link_probability,
+                                    cset_size = cset_size,
+                                    D = D,
+                                    cut_restriction = cut_restriction,
+                                    big_crystal = big_crystal,
+
+                                    mink = mink,
+                                    causal_diamond_boundary = causal_diamond_boundary,
+
+                                    ndistr = ndistr,
+
+                                    rdistr = rdistr,
+                                    genus_distr = genus_distr,
+                                    num_boundary_cuts_distr = num_boundary_cuts_distr,
+
+                                    lattice_distr = lattice_distr,
+                                    lattices = lattices,
+                                    segment_ratio_distr = segment_ratio_distr,
+                                    rotate_angle_distr = rotate_angle_distr,
+                                    oblique_angle_distr = oblique_angle_distr,
+
+                                    non_manifoldlikeness_distr = non_manifoldlikeness_distr,
+
+                                    layers_distr = layers_distr,
+                                    link_probability_distr = link_probability_distr,
+                                
+                                    connectivity_distr = connectivity_distr,
+                                )
+                                put!(results, (:ok, b, data))
+                            end
                         catch e
                             bt = catch_backtrace()
-                            error(
-                                "Worker task failed before sending batch result:\n" *
-                                sprint((io, ex) -> showerror(io, ex, bt), e),
-                            )
+                            put!(results, (:err, Distributed.myid(), sprint((io, ex) -> showerror(io, ex, bt), e)))
                         end
                     end
+                    push!(worker_tasks, fut)
+                    push!(worker_checked, false)
                 end
-                sleep(0.05)
-                continue
-            end
-            msg = take!(results)
-            if msg[1] === :err
-                error("Worker $(msg[2]) failed while generating batch data:\n$(msg[3])")
-            end
-            _, b, data = msg
-            received += 1
-            pending[b] = data
-            while haskey(pending, next_b)
-                data = pending[next_b]
-                b = next_b
-                delete!(pending, next_b)
-                next_b += 1
-
-            fout["batches/$b/csets"] = data.csets_b
-            fout["batches/$b/links"] = data.links_b
-
-            if kind == "minkowski_quasicrystal"
-                fout["batches/$b/trans_in"]  = data.trans_in_b
-                fout["batches/$b/trans_out"] = data.trans_out_b
             end
 
-            if kind == "manifoldlike_simply_connected"
-                fout["batches/$b/r"] = data.r_b
-                fout["batches/$b/order"] = data.order_b
+            @info "Collecting and writing batches" total_batches=nbatches
+            received = 0
+            while received < nbatches
+                if !isready(results)
+                    for i in eachindex(worker_tasks)
+                        worker_checked[i] && continue
+                        if isready(worker_tasks[i])
+                            try
+                                fetch(worker_tasks[i])
+                                worker_checked[i] = true
+                            catch e
+                                bt = catch_backtrace()
+                                error(
+                                    "Worker task failed before sending batch result:\n" *
+                                    sprint((io, ex) -> showerror(io, ex, bt), e),
+                                )
+                            end
+                        end
+                    end
+                    sleep(0.05)
+                    continue
+                end
+                msg = take!(results)
+                if msg[1] === :err
+                    error("Worker $(msg[2]) failed while generating batch data:\n$(msg[3])")
+                end
+                _, b, data = msg
+                received += 1
+                pending[b] = data
+                while haskey(pending, next_b)
+                    data = pending[next_b]
+                    b = next_b
+                    delete!(pending, next_b)
+                    next_b += 1
+
+                    fout["batches/$b/csets"] = data.csets_b
+                    fout["batches/$b/links"] = data.links_b
+
+                    if kind == "minkowski_quasicrystal"
+                        fout["batches/$b/trans_in"]  = data.trans_in_b
+                        fout["batches/$b/trans_out"] = data.trans_out_b
+                    end
+
+                    if kind == "manifoldlike_simply_connected"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                    end
+
+                    if kind == "manifoldlike_non_simply_connected"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                        fout["batches/$b/num_boundary_cuts"] = data.num_boundary_cuts_b
+                        fout["batches/$b/genus"] = data.genus_b
+                    end
+
+                    if kind == "destroyed"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                        fout["batches/$b/rel_num_flips"] = data.rel_num_flips_b
+                    end
+
+                    if kind == "merged"
+                        fout["batches/$b/r"] = data.r_b
+                        fout["batches/$b/order"] = data.order_b
+                        fout["batches/$b/rel_size_KR"] = data.rel_size_KR_b
+                        fout["batches/$b/link_probability"] = data.link_probability_b
+                    end
+
+                    if kind == "grid"
+                        fout["batches/$b/segment_ratio"] = data.segment_ratio_b
+                        fout["batches/$b/segment_angle"] = data.segment_angle_b
+                        fout["batches/$b/rotation_angle"] = data.rotation_angle_b
+                        fout["batches/$b/lattice"] = data.lattice_b
+                    end
+
+                    if kind == "layered"
+                        fout["batches/$b/num_layers"] = data.num_layers_b
+                        fout["batches/$b/std"] = data.std_b
+                    end
+
+                    ProgressMeter.next!(p; step=length(data.csets_b))
+                end
             end
 
-            if kind == "manifoldlike_non_simply_connected"
-                fout["batches/$b/r"] = data.r_b
-                fout["batches/$b/order"] = data.order_b
-                fout["batches/$b/num_boundary_cuts"] = data.num_boundary_cuts_b
-                fout["batches/$b/genus"] = data.genus_b
+            for i in eachindex(worker_tasks)
+                worker_checked[i] && continue
+                fetch(worker_tasks[i])
             end
-
-            if kind == "destroyed"
-                fout["batches/$b/r"] = data.r_b
-                fout["batches/$b/order"] = data.order_b
-                fout["batches/$b/rel_num_flips"] = data.rel_num_flips_b
-            end
-
-            if kind == "merged"
-                fout["batches/$b/r"] = data.r_b
-                fout["batches/$b/order"] = data.order_b
-                fout["batches/$b/rel_size_KR"] = data.rel_size_KR_b
-                fout["batches/$b/link_probability"] = data.link_probability_b
-            end
-
-            if kind == "grid"
-                fout["batches/$b/segment_ratio"] = data.segment_ratio_b
-                fout["batches/$b/segment_angle"] = data.segment_angle_b
-                fout["batches/$b/rotation_angle"] = data.rotation_angle_b
-                fout["batches/$b/lattice"] = data.lattice_b
-            end
-
-            if kind == "layered"
-                fout["batches/$b/num_layers"] = data.num_layers_b
-                fout["batches/$b/std"] = data.std_b
-            end
-
-                ProgressMeter.next!(p; step=length(data.csets_b))
-            end
-        end
-
-        for i in eachindex(worker_tasks)
-            worker_checked[i] && continue
-            fetch(worker_tasks[i])
         end
     end
 end
