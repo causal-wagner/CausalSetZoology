@@ -27,7 +27,9 @@ function write_distinguishability_csv(path::AbstractString, rows::Vector{NamedTu
                     string(
                         row.observable, ",",
                         row.D, ",",
-                        row.D_mi, ",",
+                        row.D_mutual_information, ",",
+                        row.D_mahalanobis, ",",
+                        row.D_mahalanobis_sym, ",",
                         row.M_obs, ",",
                         row.distinguishable, ",",
                         row.threshold, ",",
@@ -41,7 +43,7 @@ function write_distinguishability_csv(path::AbstractString, rows::Vector{NamedTu
                     string(
                         row.observable, ",",
                         row.D, ",",
-                        row.D_mi,
+                        row.D_mutual_information,
                     )
                 end
             )
@@ -293,7 +295,7 @@ function compute_all_observables(
                 R = mahalanobis_R,
                 progress = mahalanobis_progress,
             )
-            println("For observable $(name), M_obs = $(m_res.M_obs), threshold = $(m_res.threshold).")
+            println("For observable $(name), D_mahalanobis = $(m_res.D), $(mahalanobis_symmetric ? "D_mahalanobis_sym = $(m_res.D_sym)," : "") M_obs = $(m_res.M_obs), threshold = $(m_res.threshold).")
         end
         if mahalanobis
             push!(
@@ -301,15 +303,17 @@ function compute_all_observables(
                     (
                         observable = name,
                         D = D_res.D,
-                        D_mi = D_mi_res.D_mi,
+                        D_mutual_information = D_mi_res.D_mi,
+                        D_mahalanobis = m_res.D,
+                        D_mahalanobis_sym = m_res.D_sym,
                         M_obs = m_res.M_obs,
                         distinguishable = m_res.distinguishable,
                         threshold = m_res.threshold,
-                    z_emp = m_res.z_emp,
-                    M_obs_sym = m_res.M_obs_sym,
-                    M_obs_min = m_res.M_obs_min,
-                    threshold_sym = m_res.threshold_sym,
-                    threshold_max = m_res.threshold_max,
+                        z_emp = m_res.z_emp,
+                        M_obs_sym = m_res.M_obs_sym,
+                        M_obs_min = m_res.M_obs_min,
+                        threshold_sym = m_res.threshold_sym,
+                        threshold_max = m_res.threshold_max,
                 ),
             )
         else
@@ -318,7 +322,7 @@ function compute_all_observables(
                     (
                         observable = name,
                         D = D_res.D,
-                        D_mi = D_mi_res.D_mi,
+                        D_mutual_information = D_mi_res.D_mi,
                     ),
                 )
         end
@@ -358,7 +362,9 @@ function compute_all_observables(
             (
                 observable = "total_selected",
                 D = total_D_res.D,
-                D_mi = total_D_mi_res.D_mi,
+                D_mututal_information = total_D_mi_res.D_mi,
+                D_mahalanobis = total_m_res.D,
+                D_mahalanobis_sym = total_m_res.D_sym,
                 M_obs = total_m_res.M_obs,
                 distinguishable = total_m_res.distinguishable,
                 threshold = total_m_res.threshold,
@@ -375,7 +381,7 @@ function compute_all_observables(
             (
                 observable = "total_selected",
                 D = total_D_res.D,
-                D_mi = total_D_mi_res.D_mi,
+                D_mutual_information = total_D_mi_res.D_mi,
             ),
         )
     end

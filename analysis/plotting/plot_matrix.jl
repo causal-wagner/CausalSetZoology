@@ -560,8 +560,8 @@ Panels (in order):
 1. connectivity link histograms
 2. max path length histograms
 3. ev_sym_link vectors
-4. `M_obs` vs scalar from `scalar_bin_mahalanobis_gap_distinguishability` for the
-   three observables above (computed with `symmetric = false`).
+4. Scalar evolution of one selected distinguishability measure (`distinguishability`)
+   for the three observables above and their concatenated total vector.
 
 Returns the saved `CairoMakie.Figure`.
 
@@ -577,7 +577,9 @@ Returns the saved `CairoMakie.Figure`.
 - `num_bins`, `regulator`, `R`, `q`, `alpha`: Distinguishability estimator controls.
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: Must remain `false` for this function.
-    - `projection_tolerance`, `progress`: Distinguishability runtime controls.
+- `projection_tolerance`, `to_regularize_rel`, `progress`: Mahalanobis runtime controls.
+- `distinguishability`: One of `:energy`, `:mahalanobis`, `:mutual_information` for panel 4.
+- `mutual_information_*`: MI estimator controls propagated to `distinguishability_mutual_information`.
 - `invert_color_scaling`: Reverse scalar-to-color mapping.
 - `colorbar_label`, `colorbar_ticks`: Optional colorbar label and tick mapping.
 - `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
@@ -617,7 +619,15 @@ function hist_hist_vec_distinguishability_plot_matrix(
     rng = Random.default_rng(),
     symmetric::Bool = false,
     projection_tolerance::Float64 = 1e-10,
+    to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
+    distinguishability::Symbol = :energy,
+    mutual_information_k::Int = 5,
+    mutual_information_pca_mode::Symbol = :dim,
+    mutual_information_pca_dim::Int = 32,
+    mutual_information_explained_variance::Real = 0.99,
+    mutual_information_eigenvalue_rtol::Real = 1e-10,
+    mutual_information_max_per_class::Union{Nothing,Int} = 2_000,
     # plot kwargs
     colormap = :viridis,
     invert_color_scaling::Bool = false,
@@ -655,6 +665,9 @@ function hist_hist_vec_distinguishability_plot_matrix(
     end
     if symmetric
         throw(ArgumentError("symmetric must be false for hist_hist_vec_distinguishability_plot_matrix"))
+    end
+    if !(distinguishability in (:energy, :mahalanobis, :mutual_information))
+        throw(ArgumentError("distinguishability must be one of :energy, :mahalanobis, :mutual_information"))
     end
     if !(magnification > 0)
         throw(DomainError(magnification, "magnification must be > 0"))
@@ -709,47 +722,6 @@ function hist_hist_vec_distinguishability_plot_matrix(
     connectivity_ref = to_reference(normalized_connectivity_comp)
     max_pathlen_ref = to_reference(normalized_max_pathlen_comp)
     ev_sym_link_ref = to_reference(ev_sym_link_comp)
-
-    # distinguishability (symmetric = false by design)
-    conn_dist = scalar_bin_mahalanobis_gap_distinguishability(
-        connectivity_data_single,
-        connectivity_ref;
-        num_bins = num_bins,
-        regulator = regulator,
-        R = R,
-        q = q,
-        alpha = alpha,
-        rng = rng,
-        symmetric = false,
-        projection_tolerance = projection_tolerance,
-        progress = progress,
-    )
-    max_path_dist = scalar_bin_mahalanobis_gap_distinguishability(
-        max_pathlen_data_single,
-        max_pathlen_ref;
-        num_bins = num_bins,
-        regulator = regulator,
-        R = R,
-        q = q,
-        alpha = alpha,
-        rng = rng,
-        symmetric = false,
-        projection_tolerance = projection_tolerance,
-        progress = progress,
-    )
-    ev_sym_dist = scalar_bin_mahalanobis_gap_distinguishability(
-        ev_sym_link_data_single,
-        ev_sym_link_ref;
-        num_bins = num_bins,
-        regulator = regulator,
-        R = R,
-        q = q,
-        alpha = alpha,
-        rng = rng,
-        symmetric = false,
-        projection_tolerance = projection_tolerance,
-        progress = progress,
-    )
 
     # prepare panel data (first 3 panels like hist_hist_vec_hist_plot_matrix)
     d1 = avg_hist_or_vec(connectivity_data_single[1]; num_bins = num_bins)
@@ -838,7 +810,7 @@ function hist_hist_vec_distinguishability_plot_matrix(
         logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
-    # panel 4: M_obs vs scalar for the three observables (default cycle colors)
+    # panel 4: scalar evolution of selected distinguishability for three observables + total
     ax4 = axs[4]
     xlabel[4] !== nothing && (ax4.xlabel = xlabel[4])
     ylabel[4] !== nothing && (ax4.ylabel = ylabel[4])
@@ -851,16 +823,64 @@ function hist_hist_vec_distinguishability_plot_matrix(
         ax4.yticks = ([t[1] for t in yt[4]], [t[2] for t in yt[4]])
     end
 
-    conn_x = [r.scalar for r in conn_dist]
-    conn_y = [r.M_obs for r in conn_dist]
-    max_x = [r.scalar for r in max_path_dist]
-    max_y = [r.M_obs for r in max_path_dist]
-    ev_x = [r.scalar for r in ev_sym_dist]
-    ev_y = [r.M_obs for r in ev_sym_dist]
+    measure_val = function (vecs_a, vecs_b)
+        if distinguishability == :energy
+            return histogram_distinguishability(vecs_a, vecs_b).D
+        elseif distinguishability == :mahalanobis
+            return mahalanobis_gap_distinguishability(
+                vecs_a,
+                vecs_b;
+                regulator = regulator,
+                R = R,
+                q = q,
+                alpha = alpha,
+                rng = Random.Xoshiro(rand(rng, UInt64)),
+                symmetric = false,
+                projection_tolerance = projection_tolerance,
+                to_regularize_rel = to_regularize_rel,
+                progress = progress,
+            ).D
+        else
+            return distinguishability_mutual_information(
+                vecs_a,
+                vecs_b;
+                k = mutual_information_k,
+                pca_mode = mutual_information_pca_mode,
+                pca_dim = mutual_information_pca_dim,
+                explained_variance = mutual_information_explained_variance,
+                eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                max_per_class = mutual_information_max_per_class,
+                rng = Random.Xoshiro(rand(rng, UInt64)),
+            ).D_mi
+        end
+    end
 
-    CairoMakie.lines!(ax4, conn_x, conn_y, label = "connectivity_link")
-    CairoMakie.lines!(ax4, max_x, max_y, label = "max_pathlen")
-    CairoMakie.lines!(ax4, ev_x, ev_y, label = "ev_sym_link")
+    conn_bins = Dict(bin_scalar_pairs(connectivity_data_single[1], num_bins, nothing))
+    max_bins = Dict(bin_scalar_pairs(max_pathlen_data_single[1], num_bins, nothing))
+    ev_bins = Dict(bin_scalar_pairs(ev_sym_link_data_single[1], num_bins, nothing))
+
+    conn_s = sort(collect(keys(conn_bins)))
+    max_s = sort(collect(keys(max_bins)))
+    ev_s = sort(collect(keys(ev_bins)))
+    total_s = sort(intersect(intersect(conn_s, max_s), ev_s))
+
+    conn_y = [measure_val(conn_bins[s], connectivity_ref) for s in conn_s]
+    max_y = [measure_val(max_bins[s], max_pathlen_ref) for s in max_s]
+    ev_y = [measure_val(ev_bins[s], ev_sym_link_ref) for s in ev_s]
+    total_y = Float64[]
+    for s in total_s
+        vecs_a, vecs_b = concatenate_hists(
+            [conn_bins[s], connectivity_ref],
+            [max_bins[s], max_pathlen_ref],
+            [ev_bins[s], ev_sym_link_ref],
+        )
+        push!(total_y, measure_val(vecs_a, vecs_b))
+    end
+
+    CairoMakie.lines!(ax4, conn_s, conn_y, label = "connectivity_link")
+    CairoMakie.lines!(ax4, max_s, max_y, label = "max_pathlen")
+    CairoMakie.lines!(ax4, ev_s, ev_y, label = "ev_sym_link")
+    CairoMakie.lines!(ax4, total_s, total_y, label = "total_selected")
     CairoMakie.axislegend(ax4)
 
     cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
