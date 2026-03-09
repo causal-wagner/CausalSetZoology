@@ -1133,8 +1133,8 @@ function _pca_project(
     if isempty(s2)
         return Xc
     end
-    λmax = maximum(s2)
-    keep = findall(λ -> λ > λmax * Float64(eigenvalue_rtol), s2)
+    λmed = Statistics.median(s2)
+    keep = findall(λ -> λ > λmed * Float64(eigenvalue_rtol), s2)
     r_cut = isempty(keep) ? 1 : last(keep)
     if pca_mode == :cutoff
         r = r_cut
@@ -1856,7 +1856,7 @@ function histogram_distinguishability_permutation(
 end
 
 """
-    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
+    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
 
 See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
 
@@ -1874,10 +1874,9 @@ delegates to the vector implementation.
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `verbose`: If true, print stabilization diagnostics.
-- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
-- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
-- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `projection_tolerance`: Relative pooled/full eigenvalue cutoff for near-null projection/flooring.
+- `to_regularize_rel`: Relative eigenvalue cutoff for split-based small-mode variance regularization.
+- `progress`: If true, show progress for resampling stages where applicable.
 
 # Returns
 - `result`: Named tuple with Mahalanobis-gap statistic, threshold comparison, and optional symmetric outputs.
@@ -1895,16 +1894,12 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    verbose::Bool = false,
-    rank_tol::Float64 = 1e-12,
-    stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
-    progress_step::Union{Nothing,Int} = nothing,
 )
-    if !(!isempty(hists_a) && !isempty(hists_b))
-        throw(ArgumentError("inputs must be non-empty"))
-    end
+    isempty(hists_a) && throw(ArgumentError("hists_a must be non-empty"))
+    isempty(hists_b) && throw(ArgumentError("hists_b must be non-empty"))
     norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
     norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
 
@@ -1926,17 +1921,14 @@ function mahalanobis_gap_distinguishability(
         alpha = alpha,
         rng = rng,
         symmetric = symmetric,
-        verbose = verbose,
-        rank_tol = rank_tol,
-        stabilization_method = stabilization_method,
         projection_tolerance = projection_tolerance,
+        to_regularize_rel = to_regularize_rel,
         progress = progress,
-        progress_step = progress_step,
     )
 end
 
 """
-    mahalanobis_gap_distinguishability(vals_a, vals_b; kwargs...)
+    mahalanobis_gap_distinguishability(vals_a, vals_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
 
 See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
 
@@ -1948,7 +1940,15 @@ vectors-of-vectors to the corresponding concrete method.
 - `vals_b`: Second input sample collection.
 
 # Keyword Arguments
-- `kwargs`: Additional keyword arguments forwarded to inner methods.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `R`: Number of baseline resampling runs.
+- `q`: Quantile parameter in [0, 1].
+- `alpha`: Significance level used for thresholding (1 - alpha).
+- `rng`: Random number generator used for stochastic steps.
+- `symmetric`: If true, also evaluate the reverse direction.
+- `projection_tolerance`: Relative pooled/full eigenvalue cutoff for near-null projection/flooring.
+- `to_regularize_rel`: Relative eigenvalue cutoff for split-based small-mode variance regularization.
+- `progress`: If true, show progress for resampling stages where applicable.
 
 # Returns
 - `result`: Named tuple with Mahalanobis-gap statistic, threshold comparison, and optional symmetric outputs.
@@ -1967,16 +1967,12 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    verbose::Bool = false,
-    rank_tol::Float64 = 1e-12,
-    stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
-    progress_step::Union{Nothing,Int} = nothing,
 )
-    if !(!isempty(vals_a) && !isempty(vals_b))
-        throw(ArgumentError("inputs must be non-empty"))
-    end
+    isempty(vals_a) && throw(ArgumentError("vals_a must be non-empty"))
+    isempty(vals_b) && throw(ArgumentError("vals_b must be non-empty"))
     if all(v -> v isa AbstractDict, vals_a) && all(v -> v isa AbstractDict, vals_b)
         hists_a = AbstractDict[v for v in vals_a]
         hists_b = AbstractDict[v for v in vals_b]
@@ -1989,12 +1985,9 @@ function mahalanobis_gap_distinguishability(
             alpha = alpha,
             rng = rng,
             symmetric = symmetric,
-            verbose = verbose,
-            rank_tol = rank_tol,
-            stabilization_method = stabilization_method,
             projection_tolerance = projection_tolerance,
+            to_regularize_rel = to_regularize_rel,
             progress = progress,
-            progress_step = progress_step,
         )
     elseif all(v -> v isa AbstractVector, vals_a) && all(v -> v isa AbstractVector, vals_b)
         bad_a = findfirst(v -> any(x -> !(x isa Real), v), vals_a)
@@ -2018,12 +2011,9 @@ function mahalanobis_gap_distinguishability(
             alpha = alpha,
             rng = rng,
             symmetric = symmetric,
-            verbose = verbose,
-            rank_tol = rank_tol,
-            stabilization_method = stabilization_method,
             projection_tolerance = projection_tolerance,
+            to_regularize_rel = to_regularize_rel,
             progress = progress,
-            progress_step = progress_step,
         )
     else
         throw(ArgumentError("mahalanobis_gap_distinguishability expects vectors of dicts or vectors of numeric vectors"))
@@ -2046,12 +2036,15 @@ Tuple `(A, B)` where both entries are `Vector{Vector{Float64}}`.
 - `vecs_a`: Vector-valued input data.
 - `vecs_b`: Vector-valued input data.
 
-
+# Throws
+- `ArgumentError`: If either input collection is empty.
 """
 function _prepare_vectors_for_mahalanobis(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
 )
+    isempty(vecs_a) && throw(ArgumentError("vecs_a must be non-empty"))
+    isempty(vecs_b) && throw(ArgumentError("vecs_b must be non-empty"))
     maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
     pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
     A = [pad_to(v, maxlen) for v in vecs_a]
@@ -2309,6 +2302,23 @@ end
     _mahal_resample_many_progress(seeds, X, regulator, q, stabilization_method, projection_tolerance, verbose, rank_tol; desc="mahalanobis null", progress_step=nothing)
 
 Compute Mahalanobis null-resampling statistics in serial with progress updates.
+
+# Arguments
+- `seeds`: Seed values for independent resampling draws.
+- `X`: Vector-valued input data.
+- `regulator`: Nonnegative diagonal regularization added to covariance.
+- `q`: Quantile parameter in [0, 1].
+- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
+- `projection_tolerance`: Eigenvalue cutoff for projection stabilization.
+- `verbose`: If true, print stabilization diagnostics.
+- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
+
+# Keyword Arguments
+- `desc`: Progress-bar description.
+- `progress_step`: Optional progress update stride.
+
+# Returns
+- `result`: Vector of summary statistics, one value per input seed.
 """
 function _mahal_resample_many_progress(
     seeds::Vector{UInt64},
@@ -2406,13 +2416,13 @@ halves of size `length(B) ÷ 2` (dropping one element if odd).
 - `result`: Tuple of equally sized random splits (B1, B2).
 
 # Throws
-- `DomainError`: Raised for out-of-range numeric parameters.
+- `DomainError`: If `length(B) < 2`.
 """
 function _random_split_equal(B::Vector{Vector{Float64}}, rng)
     n = length(B)
     n2 = n ÷ 2
     if !(n2 >= 1)
-        throw(DomainError(n2, "need at least 2 samples to split"))
+        throw(DomainError(n, "need at least 2 samples to split"))
     end
     perm = Random.randperm(rng, n)
     B1 = B[perm[1:n2]]
@@ -2420,8 +2430,148 @@ function _random_split_equal(B::Vector{Vector{Float64}}, rng)
     return B1, B2
 end
 
+@inline function _safe_cov_matrix(X::AbstractMatrix{<:Real})::Matrix{Float64}
+    n, d = size(X)
+    if n <= 1
+        return zeros(Float64, d, d)
+    end
+    return Matrix{Float64}(Statistics.cov(Matrix{Float64}(X); dims = 1))
+end
+
+@inline function _matrix_from_vecs(V::Vector{Vector{Float64}})::Matrix{Float64}
+    n = length(V)
+    d = length(V[1])
+    X = Matrix{Float64}(undef, n, d)
+    @inbounds for i in 1:n
+        X[i, :] = V[i]
+    end
+    return X
+end
+
+function _pooled_project_nonzero(
+    A::Matrix{Float64},
+    B::Matrix{Float64},
+    eps_rel::Float64,
+)
+    X = vcat(A, B)
+    Σp = _safe_cov_matrix(X)
+    eig = LinearAlgebra.eigen(LinearAlgebra.Symmetric(Σp))
+    λ = eig.values
+    U = eig.vectors
+    medλ = Statistics.median(λ)
+    cutoff = eps_rel * medλ
+    keep = findall(>(cutoff), λ)
+    if isempty(keep)
+        keep = [argmax(λ)]
+    end
+    Uk = U[:, keep]
+    return A * Uk, B * Uk
+end
+
+@inline function _split_indices(n::Int, rng)::Tuple{Vector{Int},Vector{Int}}
+    n2 = n ÷ 2
+    perm = Random.randperm(rng, n)
+    return perm[1:n2], perm[(n2 + 1):(2 * n2)]
+end
+
+function _split_floor_estimates_small_modes(
+    X::Matrix{Float64},
+    U_small::AbstractMatrix{<:Real},
+    seeds::Vector{UInt64},
+)
+    m = size(U_small, 2)
+    if m == 0
+        return Matrix{Float64}(undef, 0, 0)
+    end
+    R = length(seeds)
+    out = Matrix{Float64}(undef, m, 2R)
+    @inbounds for r in 1:R
+        rng_r = Random.Xoshiro(seeds[r])
+        i1, i2 = _split_indices(size(X, 1), rng_r)
+        X1 = @view X[i1, :]
+        X2 = @view X[i2, :]
+        μ1 = vec(Statistics.mean(X1; dims = 1))
+        μ2 = vec(Statistics.mean(X2; dims = 1))
+        Z1 = (X1 .- transpose(μ1)) * U_small
+        Z2 = (X2 .- transpose(μ2)) * U_small
+        for j in 1:m
+            out[j, 2r - 1] = Statistics.var(@view Z1[:, j]; corrected = true)
+            out[j, 2r] = Statistics.var(@view Z2[:, j]; corrected = true)
+        end
+    end
+    return out
+end
+
+@inline function _mahal_sigmas_projected(
+    X::AbstractMatrix{<:Real},
+    mu::Vector{Float64},
+    U::Matrix{Float64},
+    w::Vector{Float64},
+)::Vector{Float64}
+    n = size(X, 1)
+    d = size(X, 2)
+    out = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        xi = @view X[i, :]
+        z = transpose(U) * (xi .- mu)
+        qf = 0.0
+        for j in 1:d
+            qf += (z[j] * z[j]) / w[j]
+        end
+        out[i] = _sqrt_with_tolerance(qf; name = "Mahalanobis quadratic form")
+    end
+    return out
+end
+
+function _build_regularized_model_and_baseline(
+    X::Matrix{Float64},
+    q::Float64,
+    seeds::Vector{UInt64},
+    eps_rel::Float64,
+    to_regularize_rel::Float64,
+    ;
+    progress::Bool = false,
+    desc::AbstractString = "mahalanobis mc",
+)
+    Σ = _safe_cov_matrix(X)
+    eig = LinearAlgebra.eigen(LinearAlgebra.Symmetric(Σ))
+    λ = map(x -> max(x, 0.0), eig.values)
+    U = eig.vectors
+    med_full = Statistics.median(λ)
+    floor_abs = eps_rel * med_full
+
+    split_med = zeros(Float64, length(λ))
+    reg_cutoff = to_regularize_rel * med_full
+    small_idx = findall(<(reg_cutoff), λ)
+    if !isempty(small_idx)
+        U_small = @view U[:, small_idx]
+        split_diag_small = _split_floor_estimates_small_modes(X, U_small, seeds)
+        split_med_small = vec(mapslices(Statistics.median, split_diag_small; dims = 2))
+        split_med[small_idx] .= split_med_small
+    end
+    w = max.(λ, split_med, floor_abs)
+
+    R = length(seeds)
+    base = Vector{Float64}(undef, R)
+    n = size(X, 1)
+    pm = progress ? ProgressMeter.Progress(R; desc = desc) : nothing
+    @inbounds for r in 1:R
+        rng_r = Random.Xoshiro(seeds[r])
+        i1, i2 = _split_indices(n, rng_r)
+        X1 = @view X[i1, :]
+        X2 = @view X[i2, :]
+        mu2 = vec(Statistics.mean(X2; dims = 1))
+        sig = _mahal_sigmas_projected(X1, mu2, U, w)
+        base[r] = _summary_stat(sig, q)
+        progress && ProgressMeter.next!(pm)
+    end
+
+    mu_full = vec(Statistics.mean(X; dims = 1))
+    return (mu = mu_full, U = U, w = w, baseline = base)
+end
+
 """
-    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10)
+    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
 
 Compute Mahalanobis-gap distinguishability for two vector-valued datasets.
 
@@ -2448,10 +2598,9 @@ Named tuple
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `verbose`: If true, print stabilization diagnostics.
-- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
-- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
-- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `projection_tolerance`: Relative pooled/full eigenvalue cutoff for near-null projection/flooring.
+- `to_regularize_rel`: Relative eigenvalue cutoff for split-based small-mode variance regularization.
+- `progress`: If true, show progress for Monte Carlo baseline sampling.
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
@@ -2466,16 +2615,12 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    verbose::Bool = false,
-    rank_tol::Float64 = 1e-12,
-    stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
-    progress_step::Union{Nothing,Int} = nothing,
 )
-    if !(!isempty(vecs_a) && !isempty(vecs_b))
-        throw(ArgumentError("inputs must be non-empty"))
-    end
+    isempty(vecs_a) && throw(ArgumentError("vecs_a must be non-empty"))
+    isempty(vecs_b) && throw(ArgumentError("vecs_b must be non-empty"))
     if !(R > 0)
         throw(DomainError(R, "R must be positive"))
     end
@@ -2488,123 +2633,52 @@ function mahalanobis_gap_distinguishability(
     if !(regulator >= 0.0)
         throw(DomainError(regulator, "regulator must be nonnegative"))
     end
+    if !(to_regularize_rel > 0.0)
+        throw(DomainError(to_regularize_rel, "to_regularize_rel must be positive"))
+    end
     A, B = _prepare_vectors_for_mahalanobis(vecs_a, vecs_b)
+    Am = _matrix_from_vecs(A)
+    Bm = _matrix_from_vecs(B)
+    Ap, Bp = _pooled_project_nonzero(Am, Bm, projection_tolerance)
 
-    muB, invB = _fit_reference(
-        B,
-        regulator;
-        stabilization_method = stabilization_method,
-        projection_tolerance = projection_tolerance,
-        verbose = verbose,
-        rank_tol = rank_tol,
+    seeds_b = rand(rng, UInt64, R)
+    modelB = _build_regularized_model_and_baseline(
+        Bp,
+        q,
+        seeds_b,
+        projection_tolerance,
+        to_regularize_rel;
+        progress = progress,
+        desc = "mahalanobis mc (B)",
     )
-    sigA = _mahal_sigmas(A, muB, invB)
+    sigA = _mahal_sigmas_projected(Ap, modelB.mu, modelB.U, modelB.w)
     M_obs = _summary_stat(sigA, q)
 
     M_obs_sym = nothing
     M_obs_min = nothing
     threshold_sym = nothing
     threshold_max = nothing
+    D_sym = nothing
     if symmetric
-        muA, invA = _fit_reference(
-            A,
-            regulator;
-            stabilization_method = stabilization_method,
-            projection_tolerance = projection_tolerance,
-            verbose = verbose,
-            rank_tol = rank_tol,
+        seeds_a = rand(rng, UInt64, R)
+        modelA = _build_regularized_model_and_baseline(
+            Ap,
+            q,
+            seeds_a,
+            projection_tolerance,
+            to_regularize_rel;
+            progress = progress,
+            desc = "mahalanobis mc (A)",
         )
-        sigB = _mahal_sigmas(B, muA, invA)
+        sigB = _mahal_sigmas_projected(Bp, modelA.mu, modelA.U, modelA.w)
         M_obs_sym = _summary_stat(sigB, q)
+        threshold_sym = _summary_stat(modelA.baseline, 1 - alpha)
+        z_emp_sym = (M_obs_sym - Statistics.mean(modelA.baseline)) / (Statistics.std(modelA.baseline) + eps())
+        D_sym = Distributions.cdf(Distributions.Normal(), z_emp_sym)
     end
 
-    S_base = Vector{Float64}(undef, R)
-    seeds = rand(rng, UInt64, R)
-
-    n_threads = Threads.maxthreadid()
-    use_threaded = !progress && n_threads > 1 && R > 1
-
-    if use_threaded
-        S_base .= _mahal_resample_many_threaded(
-            seeds,
-            B,
-            regulator,
-            q,
-            stabilization_method,
-            projection_tolerance,
-            verbose,
-            rank_tol,
-            n_threads,
-        )
-    elseif progress
-        S_base .= _mahal_resample_many_progress(
-            seeds,
-            B,
-            regulator,
-            q,
-            stabilization_method,
-            projection_tolerance,
-            verbose,
-            rank_tol;
-            desc = "mahalanobis null (B)",
-            progress_step = progress_step,
-        )
-    else
-        S_base .= _mahal_resample_many(
-            seeds,
-            B,
-            regulator,
-            q,
-            stabilization_method,
-            projection_tolerance,
-            verbose,
-            rank_tol,
-        )
-    end
-
+    S_base = modelB.baseline
     threshold = _summary_stat(S_base, 1 - alpha)
-    if symmetric
-        S_base_sym = Vector{Float64}(undef, R)
-        seeds_sym = rand(rng, UInt64, R)
-        if use_threaded
-            S_base_sym .= _mahal_resample_many_threaded(
-                seeds_sym,
-                A,
-                regulator,
-                q,
-                stabilization_method,
-                projection_tolerance,
-                verbose,
-                rank_tol,
-                n_threads,
-            )
-        elseif progress
-            S_base_sym .= _mahal_resample_many_progress(
-                seeds_sym,
-                A,
-                regulator,
-                q,
-                stabilization_method,
-                projection_tolerance,
-                verbose,
-                rank_tol;
-                desc = "mahalanobis null (A)",
-                progress_step = progress_step,
-            )
-        else
-            S_base_sym .= _mahal_resample_many(
-                seeds_sym,
-                A,
-                regulator,
-                q,
-                stabilization_method,
-                projection_tolerance,
-                verbose,
-                rank_tol,
-            )
-        end
-        threshold_sym = _summary_stat(S_base_sym, 1 - alpha)
-    end
 
     if symmetric
         M_obs_min = min(M_obs, M_obs_sym)
@@ -2614,13 +2688,16 @@ function mahalanobis_gap_distinguishability(
         distinguishable = M_obs > threshold
     end
     z_emp = (M_obs - Statistics.mean(S_base)) / (Statistics.std(S_base) + eps())
+    D = Distributions.cdf(Distributions.Normal(), z_emp)
 
     return (
         M_obs = M_obs,
+        D = D,
         distinguishable = distinguishable,
         threshold = threshold,
         z_emp = z_emp,
         M_obs_sym = M_obs_sym,
+        D_sym = D_sym,
         M_obs_min = M_obs_min,
         threshold_sym = threshold_sym,
         threshold_max = threshold_max,
@@ -2628,7 +2705,7 @@ function mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
 
 Bin-pair version: compare every bin to every other bin. Returns a vector of
 `(s1, s2, rel_change, M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
@@ -2644,12 +2721,9 @@ Bin-pair version: compare every bin to every other bin. Returns a vector of
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `verbose`: If true, print stabilization diagnostics.
-- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
-- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
-- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `projection_tolerance`: Relative pooled/full eigenvalue cutoff for near-null projection/flooring.
+- `to_regularize_rel`: Relative eigenvalue cutoff for split-based small-mode variance regularization.
 - `progress`: If true, display progress while processing bin tasks.
-- `progress_step`: Manual progress print/update interval when progress display is active.
 
 # Returns
 - `result`: Vector of named tuples with Mahalanobis-gap metrics per bin pair or per bin vs. reference.
@@ -2669,12 +2743,9 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    verbose::Bool = false,
-    rank_tol::Float64 = 1e-12,
-    stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
-    progress_step::Union{Nothing,Int} = nothing,
 )
     ctx = _prepare_scalar_bin_context(
         data,
@@ -2701,7 +2772,6 @@ function scalar_bin_mahalanobis_gap_distinguishability(
         pm = ProgressMeter.Progress(total; desc = "mahalanobis bins")
         use_pm = true
     end
-    step = progress_step === nothing ? max(1, round(Int, total * 0.05)) : max(1, progress_step)
     compute_task = function (k::Int)
         i, j = tasks[k]
         s1, vals1 = bins[i]
@@ -2716,10 +2786,9 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             alpha = alpha,
             rng = rng_k,
             symmetric = symmetric,
-            verbose = verbose,
-            rank_tol = rank_tol,
-            stabilization_method = stabilization_method,
             projection_tolerance = projection_tolerance,
+            to_regularize_rel = to_regularize_rel,
+            progress = progress,
         )
         return (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
     end
@@ -2744,7 +2813,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             if progress
                 if use_pm
                     ProgressMeter.next!(pm)
-                elseif done % step == 0 || done == total
+                elseif done % max(1, round(Int, total * 0.05)) == 0 || done == total
                     println("Progress: $done/$total")
                 end
             end
@@ -2754,7 +2823,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, verbose=false, rank_tol=1e-12, stabilization_method=:regularization, projection_tolerance=1e-10, progress=false, progress_step=nothing)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
 
 See `scalar_bin_mahalanobis_gap_distinguishability(data; ...)`.
 
@@ -2773,12 +2842,9 @@ instead of comparing all bin pairs.
 - `alpha`: Significance level used for thresholding (1 - alpha).
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: If true, also evaluate the reverse direction.
-- `verbose`: If true, print stabilization diagnostics.
-- `rank_tol`: Tolerance for near-zero eigenvalue reporting.
-- `stabilization_method`: Covariance inversion strategy (`:regularization` or `:projection`).
-- `projection_tolerance`: Eigenvalue cutoff when `stabilization_method = :projection`.
+- `projection_tolerance`: Relative pooled/full eigenvalue cutoff for near-null projection/flooring.
+- `to_regularize_rel`: Relative eigenvalue cutoff for split-based small-mode variance regularization.
 - `progress`: If true, display progress while processing bin tasks.
-- `progress_step`: Manual progress print/update interval when progress display is active.
 
 # Returns
 - `result`: Vector of named tuples with Mahalanobis-gap metrics per bin pair or per bin vs. reference.
@@ -2799,12 +2865,9 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    verbose::Bool = false,
-    rank_tol::Float64 = 1e-12,
-    stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
+    to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
-    progress_step::Union{Nothing,Int} = nothing,
 )
     ctx = _prepare_scalar_bin_context(
         data,
@@ -2823,7 +2886,6 @@ function scalar_bin_mahalanobis_gap_distinguishability(
         pm = ProgressMeter.Progress(total; desc = "mahalanobis bins")
         use_pm = true
     end
-    step = progress_step === nothing ? max(1, round(Int, total * 0.05)) : max(1, progress_step)
     compute_idx = function (k::Int)
         s, vals = bins[k]
         rng_k = Random.Xoshiro(seeds[k])
@@ -2836,10 +2898,9 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             alpha = alpha,
             rng = rng_k,
             symmetric = symmetric,
-            verbose = verbose,
-            rank_tol = rank_tol,
-            stabilization_method = stabilization_method,
             projection_tolerance = projection_tolerance,
+            to_regularize_rel = to_regularize_rel,
+            progress = progress,
         )
         return (scalar = s, M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
     end
@@ -2864,7 +2925,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             if progress
                 if use_pm
                     ProgressMeter.next!(pm)
-                elseif done % step == 0 || done == total
+                elseif done % max(1, round(Int, total * 0.05)) == 0 || done == total
                     println("Progress: $done/$total")
                 end
             end

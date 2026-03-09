@@ -553,6 +553,32 @@ end
     @test isapprox(d_dim.D_mi, d_cut.D_mi; atol = 0.25)
 end
 
+@testitem "distinguishability: mutual_information pooled cutoff removes null modes" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3], [0.95, 0.05], [0.85, 0.15]]
+    b = [[0.0, 1.0], [0.1, 0.9], [0.2, 0.8], [0.3, 0.7], [0.05, 0.95], [0.15, 0.85]]
+    a_pad = [vcat(v, 0.0, 0.0, 0.0) for v in a]
+    b_pad = [vcat(v, 0.0, 0.0, 0.0) for v in b]
+
+    r1 = CausalSetZoology.distinguishability_mutual_information(
+        a,
+        b;
+        k = 3,
+        pca_mode = :cutoff,
+        eigenvalue_rtol = 1e-8,
+        max_per_class = nothing,
+    )
+    r2 = CausalSetZoology.distinguishability_mutual_information(
+        a_pad,
+        b_pad;
+        k = 3,
+        pca_mode = :cutoff,
+        eigenvalue_rtol = 1e-8,
+        max_per_class = nothing,
+    )
+
+    @test r2.D_mi ≈ r1.D_mi atol = 1e-12
+end
+
 @testitem "distinguishability: histogram_distinguishability threaded RNG reproducibility" setup=[setupDistinguishability] begin
     a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05], [0.85, 0.15], [0.92, 0.08]]
     b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95], [0.15, 0.85], [0.08, 0.92]]
@@ -769,6 +795,8 @@ end
 @testitem "distinguishability: mahalanobis helper validation" setup=[setupDistinguishability] begin
     # Test intent: validate distinguishability: mahalanobis helper validation behavior and output contract.
     @test_throws DomainError CausalSetZoology._random_split_equal([[0.0]], Random.Xoshiro(1))
+    @test_throws ArgumentError CausalSetZoology._prepare_vectors_for_mahalanobis(Vector{Vector{Float64}}(), [[0.0]])
+    @test_throws ArgumentError CausalSetZoology._prepare_vectors_for_mahalanobis([[0.0]], Vector{Vector{Float64}}())
 
     Bref = [[0.0, 0.0], [0.1, 0.2], [0.2, 0.4], [0.3, 0.6], [0.4, 0.8]]
     @test_throws ArgumentError CausalSetZoology._fit_reference(Bref, 0.0; stabilization_method = :not_a_method)
@@ -796,9 +824,11 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test keys(res) == (:M_obs, :distinguishable, :threshold, :z_emp, :M_obs_sym, :M_obs_min, :threshold_sym, :threshold_max)
-    @test res.M_obs ≈ expected_min_far atol = 1e-12
+    @test keys(res) == (:M_obs, :D, :distinguishable, :threshold, :z_emp, :M_obs_sym, :D_sym, :M_obs_min, :threshold_sym, :threshold_max)
+    @test res.M_obs ≈ expected_min_far atol = 1e-6
+    @test 0.0 <= res.D <= 1.0
     @test res.M_obs_sym === nothing
+    @test res.D_sym === nothing
     @test res.M_obs_min === nothing
     @test res.threshold_sym === nothing
     @test res.threshold_max === nothing
@@ -864,8 +894,8 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test res_q0.M_obs ≈ expected_min_far atol = 1e-12
-    @test res_q50.M_obs ≈ expected_med_far atol = 1e-12
+    @test res_q0.M_obs ≈ expected_min_far atol = 1e-6
+    @test res_q50.M_obs ≈ expected_med_far atol = 1e-6
     @test res_q50.M_obs > res_q0.M_obs
 
     res_alpha0 = CausalSetZoology.mahalanobis_gap_distinguishability(
@@ -899,8 +929,11 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test res_sym.M_obs ≈ expected_min_far atol = 1e-12
-    @test res_sym.M_obs_sym ≈ expected_min_far atol = 1e-12
+    @test res_sym.M_obs ≈ expected_min_far atol = 1e-6
+    @test res_sym.M_obs_sym ≈ expected_min_far atol = 1e-6
+    @test res_sym.D ≈ cdf(Normal(), res_sym.z_emp) atol = 1e-12
+    @test res_sym.D_sym !== nothing
+    @test 0.0 <= res_sym.D_sym <= 1.0
     @test res_sym.M_obs_min == min(res_sym.M_obs, res_sym.M_obs_sym)
     @test res_sym.threshold_max == max(res_sym.threshold, res_sym.threshold_sym)
     @test res_sym.distinguishable == ((res_sym.M_obs > res_sym.threshold) && (res_sym.M_obs_sym > res_sym.threshold_sym))
@@ -933,7 +966,7 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test res_near.M_obs ≈ expected_min_near atol = 1e-12
+    @test res_near.M_obs ≈ expected_min_near atol = 1e-6
     @test res_near.M_obs < res_far.M_obs
 end
 
@@ -998,6 +1031,7 @@ end
     @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; q = -0.1)
     @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; alpha = 1.0)
     @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; regulator = -1.0)
+    @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; to_regularize_rel = 0.0)
     @test_throws ArgumentError CausalSetZoology.mahalanobis_gap_distinguishability(Vector{Vector{Float64}}(), b)
     @test_throws ArgumentError CausalSetZoology.mahalanobis_gap_distinguishability(Any[1], Any[2])
     @test_throws TypeError CausalSetZoology.mahalanobis_gap_distinguishability(Any[[1.0, "bad"]], Any[[0.0, 1.0]])
@@ -1014,4 +1048,52 @@ end
     @test_throws TypeError CausalSetZoology.scalar_bin_mahalanobis_gap_distinguishability(bad_pair_slot, [[0.0]]; num_bins = 2, R = 10, rng = rng)
     @test_throws TypeError CausalSetZoology.scalar_bin_mahalanobis_gap_distinguishability(bad_scalar_val, [[0.0]]; num_bins = 2, R = 10, rng = rng)
     @test_throws DomainError CausalSetZoology.scalar_bin_mahalanobis_gap_distinguishability(data, [[0.0]]; num_bins = 0, R = 10, rng = rng)
+end
+
+@testitem "distinguishability: mahalanobis pooled projection invariance" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.2], [1.1, 0.3], [0.9, 0.1], [1.2, 0.4], [0.8, 0.0], [1.05, 0.25]]
+    b = [[0.0, 1.0], [0.1, 0.9], [0.2, 0.8], [0.3, 0.7], [0.05, 0.95], [0.15, 0.85]]
+    a_pad = [vcat(v, 0.0, 0.0, 0.0) for v in a]
+    b_pad = [vcat(v, 0.0, 0.0, 0.0) for v in b]
+
+    r1 = CausalSetZoology.mahalanobis_gap_distinguishability(
+        a,
+        b;
+        R = 40,
+        rng = Random.Xoshiro(404),
+        q = 0.0,
+        projection_tolerance = 1e-10,
+    )
+    r2 = CausalSetZoology.mahalanobis_gap_distinguishability(
+        a_pad,
+        b_pad;
+        R = 40,
+        rng = Random.Xoshiro(404),
+        q = 0.0,
+        projection_tolerance = 1e-10,
+    )
+
+    @test r2.M_obs ≈ r1.M_obs atol = 1e-10
+    @test r2.threshold ≈ r1.threshold atol = 1e-10
+    @test r2.z_emp ≈ r1.z_emp atol = 1e-10
+    @test r2.D ≈ r1.D atol = 1e-12
+end
+
+@testitem "distinguishability: mahalanobis small-mode floor helper" setup=[setupDistinguishability] begin
+    rng = Random.Xoshiro(909)
+    X = rand(rng, 24, 6)
+    Σ = CausalSetZoology._safe_cov_matrix(X)
+    eig = LinearAlgebra.eigen(Symmetric(Σ))
+    U = eig.vectors
+    small = [1, 2]
+    U_small = U[:, small]
+    seeds = rand(rng, UInt64, 12)
+
+    floors = CausalSetZoology._split_floor_estimates_small_modes(X, U_small, seeds)
+    @test size(floors) == (length(small), 2 * length(seeds))
+    @test all(isfinite, floors)
+    @test all(>=(0.0), floors)
+
+    empty_floors = CausalSetZoology._split_floor_estimates_small_modes(X, U[:, Int[]], seeds)
+    @test size(empty_floors) == (0, 0)
 end

@@ -91,7 +91,6 @@ function compute_all_observables(
     legendpos_max_pathlen = :lt,
 
     mahalanobis::Bool = false,
-    mahalanobis_stabilization_method::Symbol = :projection,
     mahalanobis_alpha = 0.05,
     mahalanobis_q = 0.05,
     mahalanobis_symmetric = true,
@@ -288,7 +287,6 @@ function compute_all_observables(
             m_res = mahalanobis_gap_distinguishability(
                 data[1],
                 data[2];
-                stabilization_method = mahalanobis_stabilization_method,
                 alpha = mahalanobis_alpha,
                 q = mahalanobis_q,
                 symmetric = mahalanobis_symmetric,
@@ -349,7 +347,6 @@ function compute_all_observables(
         total_m_res = mahalanobis_gap_distinguishability(
             total_vecs_a,
             total_vecs_b;
-            stabilization_method = mahalanobis_stabilization_method,
             alpha = mahalanobis_alpha,
             q = mahalanobis_q,
             symmetric = mahalanobis_symmetric,

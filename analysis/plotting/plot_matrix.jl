@@ -526,12 +526,8 @@ end
         alpha = 0.05,
         rng = Random.default_rng(),
         symmetric = false,
-        verbose = false,
-        rank_tol = 1e-12,
-        stabilization_method = :regularization,
         projection_tolerance = 1e-10,
         progress = false,
-        progress_step = nothing,
         # plot kwargs (aligned with hist_hist_vec_hist_plot_matrix)
         colormap = :viridis,
         invert_color_scaling = false,
@@ -581,7 +577,7 @@ Returns the saved `CairoMakie.Figure`.
 - `num_bins`, `regulator`, `R`, `q`, `alpha`: Distinguishability estimator controls.
 - `rng`: Random number generator used for stochastic steps.
 - `symmetric`: Must remain `false` for this function.
-- `verbose`, `rank_tol`, `stabilization_method`, `projection_tolerance`, `progress`, `progress_step`: Distinguishability runtime controls.
+    - `projection_tolerance`, `progress`: Distinguishability runtime controls.
 - `invert_color_scaling`: Reverse scalar-to-color mapping.
 - `colorbar_label`, `colorbar_ticks`: Optional colorbar label and tick mapping.
 - `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
@@ -620,12 +616,8 @@ function hist_hist_vec_distinguishability_plot_matrix(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    verbose::Bool = false,
-    rank_tol::Float64 = 1e-12,
-    stabilization_method::Symbol = :regularization,
     projection_tolerance::Float64 = 1e-10,
     progress::Bool = false,
-    progress_step::Union{Nothing,Int} = nothing,
     # plot kwargs
     colormap = :viridis,
     invert_color_scaling::Bool = false,
@@ -729,12 +721,8 @@ function hist_hist_vec_distinguishability_plot_matrix(
         alpha = alpha,
         rng = rng,
         symmetric = false,
-        verbose = verbose,
-        rank_tol = rank_tol,
-        stabilization_method = stabilization_method,
         projection_tolerance = projection_tolerance,
         progress = progress,
-        progress_step = progress_step,
     )
     max_path_dist = scalar_bin_mahalanobis_gap_distinguishability(
         max_pathlen_data_single,
@@ -746,12 +734,8 @@ function hist_hist_vec_distinguishability_plot_matrix(
         alpha = alpha,
         rng = rng,
         symmetric = false,
-        verbose = verbose,
-        rank_tol = rank_tol,
-        stabilization_method = stabilization_method,
         projection_tolerance = projection_tolerance,
         progress = progress,
-        progress_step = progress_step,
     )
     ev_sym_dist = scalar_bin_mahalanobis_gap_distinguishability(
         ev_sym_link_data_single,
@@ -763,12 +747,8 @@ function hist_hist_vec_distinguishability_plot_matrix(
         alpha = alpha,
         rng = rng,
         symmetric = false,
-        verbose = verbose,
-        rank_tol = rank_tol,
-        stabilization_method = stabilization_method,
         projection_tolerance = projection_tolerance,
         progress = progress,
-        progress_step = progress_step,
     )
 
     # prepare panel data (first 3 panels like hist_hist_vec_hist_plot_matrix)
