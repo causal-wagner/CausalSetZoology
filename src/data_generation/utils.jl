@@ -1,135 +1,105 @@
 """
-    CausalSets.transitive_reduction!(tcg, trg)
+    dense_future_links(cset::SparseLinksCauset)::BitMatrix
 
-Populate `trg` with the transitive reduction (link graph) of causal set `tcg`.
+Materialize the sparse future-link adjacency of `cset` as a dense `BitMatrix`.
 
 # Arguments
-- `tcg`: Input transitive-closure causal set.
-- `trg`: Output DAG storage to be overwritten.
+- `cset`: Sparse-links causal set with `future_links` adjacency lists.
 
 # Returns
-- `trg`: Mutated `trg`.
+- `A::BitMatrix`: Dense adjacency matrix where `A[i, j] == true` iff `j` is in `future_links[i]`.
 
 # Throws
-- `DimensionMismatch`: If `trg` size does not match `tcg.atom_count`.
+- `DimensionMismatch`: If `future_links` row count does not match `atom_count`.
+- `BoundsError`: If a stored target index is outside `1:atom_count`.
 """
-function CausalSets.transitive_reduction!(tcg::CausalSets.BitArrayCauset, trg::CausalSets.ToposortedDAG)
-    if length(trg.edges) != tcg.atom_count
+function dense_future_links(cset::SparseLinksCauset)::BitMatrix
+    n = cset.atom_count
+    if length(cset.future_links) != n
         throw(
             DimensionMismatch(
-                "trg has $(length(trg.edges)) rows, but tcg.atom_count=$(tcg.atom_count)",
+                "future_links has $(length(cset.future_links)) rows but atom_count=$n",
             ),
         )
     end
-    for i in 1:tcg.atom_count
-        trg.edges[i] .= false
-    end
-    for i in 1:tcg.atom_count
-        for k in i+1:tcg.atom_count
-            if tcg.future_relations[i][k]
-                is_link = true
-                for j in i+1:k-1
-                    if tcg.future_relations[i][j] && tcg.future_relations[j][k]
-                        is_link = false
-                        break
-                    end
-                end
-                trg.edges[i][k] = is_link
+    A = falses(n, n)
+    @inbounds for i in 1:n
+        for j in cset.future_links[i]
+            jj = Int(j)
+            if !(1 <= jj <= n)
+                throw(BoundsError(1:n, jj))
             end
+            A[i, jj] = true
         end
     end
-    return trg
+    return A
 end
 
 """
-    symmetrize_strictly_upper_triangular!(M)
+    sparse_hist(v::AbstractVector{<:Integer})::Dict{Int,Int}
 
-Copy the strict upper triangle of `M` into the strict lower triangle in-place.
+Convert a dense histogram count vector to a sparse dictionary, dropping zero bins.
 
 # Arguments
-- `M`: Square matrix whose upper triangle defines the symmetric entries.
+- `v`: Dense histogram counts indexed from 1.
 
 # Returns
-- `M`: Mutated symmetric matrix.
+- `d::Dict{Int,Int}`: Sparse nonzero bins as `bin_index => count`.
 
 # Throws
-- `DimensionMismatch`: If `M` is not square.
+- `DomainError`: If any count is negative.
 """
-function symmetrize_strictly_upper_triangular!(M::AbstractMatrix)
-    n, m = size(M)
-    n == m || throw(DimensionMismatch("symmetrize_strictly_upper_triangular! requires a square matrix, got size ($(n), $(m))"))
-
-    @inbounds for i in 1:n
-        for j in (i + 1):n
-            M[j, i] = M[i, j]
-        end
+function sparse_hist(v::AbstractVector{<:Integer})::Dict{Int,Int}
+    if any(<(0), v)
+        throw(DomainError(minimum(v), "histogram counts must be nonnegative"))
     end
-    return M
+    d = Dict{Int,Int}()
+    for (k, count) in enumerate(v)
+        count == 0 && continue
+        d[k] = count
+    end
+    return d
 end
 
 """
-    sym_norm_lap_eigs!(W)
+    ev_summary(ev::AbstractVector{<:Real})
 
-Compute eigenvalues of the symmetrically normalized Laplacian in-place from
-adjacency-like matrix `W`.
+Compute summary statistics for an eigenvalue vector.
 
-The function mutates `W` to `L_sym = I - D^{-1/2} W D^{-1/2}` and returns
-`eigvals(Hermitian(W))`.
+Returned tuple fields are:
+`(ev, num_zero_ev, min_abs_nonzero_ev, minimum, maximum, mean, q25, q75, median)`.
 
 # Arguments
-- `W`: Real square symmetric matrix.
+- `ev`: Eigenvalue vector.
 
 # Returns
-- `λ::Vector{Float64}`: Eigenvalues of the normalized Laplacian.
+- `summary::Tuple`: Summary tuple described above.
 
 # Throws
-- `DimensionMismatch`: If `W` is not square.
-- `ArgumentError`: If `W` is not symmetric.
+- `ArgumentError`: If `ev` is empty.
+- `DomainError`: If `ev` contains non-finite values.
 """
-function sym_norm_lap_eigs!(W::AbstractMatrix{<:Real})::Vector{Float64}
-    n, m = size(W)
-    if n != m
-        throw(DimensionMismatch("sym_norm_lap_eigs! requires a square matrix, got size ($n, $m)"))
+function ev_summary(ev::AbstractVector{<:Real})
+    if isempty(ev)
+        throw(ArgumentError("ev must be non-empty"))
     end
-    if !LinearAlgebra.issymmetric(W)
-        throw(ArgumentError("sym_norm_lap_eigs! requires a symmetric matrix"))
+    if any(!isfinite, ev)
+        throw(DomainError(ev, "ev must contain only finite values"))
     end
-    n = size(W, 1)
-    deg = vec(sum(W, dims = 2))
-    dinvsqrt = Vector{Float64}(undef, n)
-    @inbounds for i in 1:n
-        di = deg[i]
-        dinvsqrt[i] = di > 0.0 ? inv(sqrt(di)) : 0.0
+    abs_ev = abs.(ev)
+    num_zero_ev = count(abs_ev .<= 1e-10)
+    min_abs_nonzero_ev = let nz = abs_ev[abs_ev .> 1e-10]
+        isempty(nz) ? NaN : minimum(nz)
     end
-
-    LinearAlgebra.lmul!(LinearAlgebra.Diagonal(dinvsqrt), W)
-    LinearAlgebra.rmul!(W, LinearAlgebra.Diagonal(dinvsqrt))
-    W .*= -1.0
-    @inbounds for i in 1:n
-        W[i, i] += 1.0
-    end
-
-    return LinearAlgebra.eigvals(LinearAlgebra.Hermitian(W))
-end
-
-"""
-    normalized_lap_eigs_symmetrized_links(cset)
-
-Compute normalized-Laplacian eigenvalues from the undirected link graph of `cset`.
-
-# Arguments
-- `cset`: Input causal set.
-
-# Returns
-- `λ::Vector{Float64}`: Eigenvalues of the normalized Laplacian of the symmetrized links.
-"""
-function normalized_lap_eigs_symmetrized_links(cset::CausalSets.BitArrayCauset)::Vector{Float64}
-    links = CausalSets.empty_graph(cset.atom_count)
-    CausalSets.transitive_reduction!(cset, links)
-
-    # links.edges stores one outgoing row per vertex; transpose hcat result so
-    # matrix rows/cols align with (source, target) indexing.
-    W_sym = Float64.(transpose(reduce(hcat, links.edges)))
-    symmetrize_strictly_upper_triangular!(W_sym)
-    return sym_norm_lap_eigs!(W_sym)
+    return (
+        ev,
+        num_zero_ev,
+        min_abs_nonzero_ev,
+        minimum(ev),
+        maximum(ev),
+        Statistics.mean(ev),
+        Statistics.quantile(ev, 0.25),
+        Statistics.quantile(ev, 0.75),
+        Statistics.quantile(ev, 0.5),
+    )
 end

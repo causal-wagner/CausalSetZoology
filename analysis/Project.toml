@@ -33,4 +33,4 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [sources]
 CausalSets = {url = "https://codeberg.org/cyclopentane/CausalSets.jl"}
-QuantumGrav = {rev = "main", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}
+QuantumGrav = {rev = "spacetime_quasicrystals", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}

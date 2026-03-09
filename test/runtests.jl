@@ -11,11 +11,11 @@ include("./data_analysis/test_histogram_fitting.jl")
 include("./data_analysis/test_grid_fourier_analysis.jl")
 include("./data_analysis/test_minkowski_abundance_analytical.jl")
 
-# data_creation
-include("./data_creation/test_utils.jl")
-include("./data_creation/test_make_analysis_dataset.jl")
-include("./data_creation/test_make_analysis_statistics.jl")
-include("./data_creation/test_make_analysis_dataset_and_statistics.jl")
-include("./data_creation/test_data_generation_integration.jl")
+# data_generation
+include("./data_generation/test_utils.jl")
+include("./data_generation/test_sparse_links_causet.jl")
+include("./data_generation/test_graph_observables.jl")
+include("./data_generation/test_generate_dataset.jl")
+include("./data_generation/test_generate_statistics.jl")
 
 @run_package_tests
