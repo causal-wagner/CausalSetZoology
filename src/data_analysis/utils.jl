@@ -361,7 +361,7 @@ Given multiple observables, each shaped as `[class_a_samples, class_b_samples]`,
 align each observable across both classes and concatenate all observables
 sample-wise.
 
-Returns `(vecs_a, vecs_b)` suitable for `histogram_distinguishability`.
+Returns `(vecs_a, vecs_b)` suitable for `energy_based_histogram_distinguishability`.
 
 # Arguments
 - `hists`: One or more observables, each shaped as `[class_a_samples, class_b_samples]`.

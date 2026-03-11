@@ -100,11 +100,13 @@ function compute_all_observables(
     mahalanobis_progress = false,
     
     mutual_information_k::Int = 5,
-    mutual_information_pca_mode::Symbol = :dim,
+    mutual_information_pca_mode::Symbol = :cutoff,
     mutual_information_pca_dim::Int = 32,
     mutual_information_explained_variance::Real = 0.99,
-    mutual_information_eigenvalue_rtol::Real = 1e-10,
-    mutual_information_max_per_class::Union{Nothing,Int} = 2_000,
+    mutual_information_eigenvalue_rtol::Real = 1e-6,
+    mutual_information_max_per_class::Union{Nothing,Int} = nothing,
+    energy_distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )   
 
     if kind == "minkowski_quasicrystal"
@@ -117,8 +119,10 @@ function compute_all_observables(
         :cardinalities_hist,
         :in_degree_hist,
         :out_degree_hist,
+        :degree_hist,
         :in_degree_hist_link,
         :out_degree_hist_link,
+        :degree_hist_link,
         :ev_sym_link,
         :max_pathlen_hist,
     ]
@@ -129,12 +133,12 @@ function compute_all_observables(
     cardinalities_hists = [loaded[i][1] for i in eachindex(paths)]
     in_degree_hists      = [loaded[i][2] for i in eachindex(paths)]
     out_degree_hists     = [loaded[i][3] for i in eachindex(paths)]
-    connectivity_hists      = join_histograms([in_degree_hists,out_degree_hists])
-    in_degree_link_hists    = [loaded[i][4] for i in eachindex(paths)]
-    out_degree_link_hists   = [loaded[i][5] for i in eachindex(paths)]
-    connectivity_link_hists = join_histograms([in_degree_link_hists,out_degree_link_hists])
-    ev_sym_link             = [loaded[i][6] for i in eachindex(paths)]
-    max_pathlen_hists       = [loaded[i][7] for i in eachindex(paths)]
+    connectivity_hists      = [loaded[i][4] for i in eachindex(paths)]
+    in_degree_link_hists    = [loaded[i][5] for i in eachindex(paths)]
+    out_degree_link_hists   = [loaded[i][6] for i in eachindex(paths)]
+    connectivity_link_hists = [loaded[i][7] for i in eachindex(paths)]
+    ev_sym_link             = [loaded[i][8] for i in eachindex(paths)]
+    max_pathlen_hists       = [loaded[i][9] for i in eachindex(paths)]
 
     normalized_cardinalities_hists     = normalize_hists(cardinalities_hists)
     normalized_in_degree_hists         = normalize_hists(in_degree_hists)
@@ -270,7 +274,7 @@ function compute_all_observables(
 
     rows = NamedTuple[]
     for (name, data) in observables
-        D_res = histogram_distinguishability(data[1], data[2])
+        D_res = energy_based_histogram_distinguishability(data[1], data[2]; distance = energy_distance, verbose = verbose)
         D_mi_res = distinguishability_mutual_information(
             data[1],
             data[2];
@@ -280,6 +284,7 @@ function compute_all_observables(
             explained_variance = mutual_information_explained_variance,
             eigenvalue_rtol = mutual_information_eigenvalue_rtol,
             max_per_class = mutual_information_max_per_class,
+            verbose = verbose,
         )
 
         println("For observable $(name), D = $(D_res.D).")
@@ -294,6 +299,7 @@ function compute_all_observables(
                 symmetric = mahalanobis_symmetric,
                 R = mahalanobis_R,
                 progress = mahalanobis_progress,
+                verbose = verbose,
             )
             println("For observable $(name), D_mahalanobis = $(m_res.D), $(mahalanobis_symmetric ? "D_mahalanobis_sym = $(m_res.D_sym)," : "") M_obs = $(m_res.M_obs), threshold = $(m_res.threshold).")
         end
@@ -334,7 +340,7 @@ function compute_all_observables(
         normalized_max_pathlen_hists,
         ev_sym_link,
     )
-    total_D_res = total_histogram_distinguishability(total_selected...)
+    total_D_res = total_histogram_distinguishability(total_selected...; distance = energy_distance, verbose = verbose)
     total_D_mi_res = total_histogram_mutual_information_distinguishability(
         total_selected...;
         k = mutual_information_k,
@@ -343,6 +349,7 @@ function compute_all_observables(
         explained_variance = mutual_information_explained_variance,
         eigenvalue_rtol = mutual_information_eigenvalue_rtol,
         max_per_class = mutual_information_max_per_class,
+        verbose = verbose,
     )
     println("For observable total_selected, D = $(total_D_res.D).")
     println("For observable total_selected, D_mi = $(total_D_mi_res.D_mi).")
@@ -356,13 +363,14 @@ function compute_all_observables(
             symmetric = mahalanobis_symmetric,
             R = mahalanobis_R,
             progress = mahalanobis_progress,
+            verbose = verbose,
         )
         push!(
             rows,
             (
                 observable = "total_selected",
                 D = total_D_res.D,
-                D_mututal_information = total_D_mi_res.D_mi,
+                D_mutual_information = total_D_mi_res.D_mi,
                 D_mahalanobis = total_m_res.D,
                 D_mahalanobis_sym = total_m_res.D_sym,
                 M_obs = total_m_res.M_obs,

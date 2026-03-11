@@ -1,6 +1,7 @@
 using CairoMakie
 using LaTeXStrings
 using PlotUtils
+using ProgressMeter
 using Random
 
 """
@@ -65,6 +66,7 @@ function plot_hist_or_vec_panel!(
     yticks_i;
     logscale_y::Bool,
     invert_color_scaling::Bool,
+    log_color_scaling::Bool,
     plot_std::Bool,
     vmin::Real,
     denom::Real,
@@ -72,16 +74,7 @@ function plot_hist_or_vec_panel!(
     comp_color,
     comp_linewidth::Union{Nothing,Real},
 )
-    xlabel_i !== nothing && (ax.xlabel = xlabel_i)
-    ylabel_i !== nothing && (ax.ylabel = ylabel_i)
-    xlim_i !== nothing && CairoMakie.xlims!(ax, xlim_i...)
-    ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
-    if xticks_i !== nothing
-        ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
-    end
-    if yticks_i !== nothing
-        ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
-    end
+    apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, yticks_i)
 
     eps = if logscale_y
         if ylim_i !== nothing
@@ -120,7 +113,8 @@ function plot_hist_or_vec_panel!(
         if !(length(mean) == length(std))
             throw(ArgumentError("each curve requires mean and std vectors of equal length"))
         end
-        t = (val - vmin) / denom
+        color_val = log_color_scaling ? log10(Float64(val)) : Float64(val)
+        t = (color_val - vmin) / denom
         t = invert_color_scaling ? (1 - t) : t
         color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
 
@@ -150,6 +144,61 @@ function plot_hist_or_vec_panel!(
     return nothing
 end
 
+function group_scalar_pairs_for_plot(
+    pairs::AbstractVector{<:Tuple{T,S}};
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+) where {T,S<:Real}
+    isempty(pairs) && return Vector{Tuple{Real,Vector{T}}}()
+    if num_bins !== nothing && !(num_bins >= 1)
+        throw(DomainError(num_bins, "num_bins must be >= 1"))
+    end
+
+    if num_bins === nothing && bin_edges === nothing
+        groups = Dict{Real,Vector{T}}()
+        for (v, s) in pairs
+            get!(groups, s, T[])
+            push!(groups[s], v)
+        end
+        keys_sorted = sort(collect(keys(groups)))
+        return [(k, groups[k]) for k in keys_sorted]
+    end
+
+    edges = bin_edges
+    if edges === nothing
+        scalars = [Float64(s) for (_, s) in pairs]
+        vmin, vmax = minimum(scalars), maximum(scalars)
+        if log_binning
+            if !(vmin > 0)
+                throw(DomainError(vmin, "log_binning requires positive scalar values"))
+            end
+            edges = vmin == vmax ?
+                [vmin, vmin * (1 + 1e-12)] :
+                collect(10 .^ range(log10(vmin), log10(vmax); length = num_bins + 1))
+        else
+            edges = vmin == vmax ?
+                [vmin, vmax + 1e-12] :
+                collect(range(vmin, vmax; length = num_bins + 1))
+        end
+    end
+
+    groups = Dict{Real,Vector{T}}()
+    for (v, s_raw) in pairs
+        s = Float64(s_raw)
+        idx = searchsortedlast(edges, s)
+        idx = clamp(idx, 1, length(edges) - 1)
+        lo = Float64(edges[idx])
+        hi = Float64(edges[idx + 1])
+        key = log_binning ? sqrt(lo * hi) : (lo + hi) / 2
+        get!(groups, key, T[])
+        push!(groups[key], v)
+    end
+
+    keys_sorted = sort(collect(keys(groups)))
+    return [(k, groups[k]) for k in keys_sorted]
+end
+
 """
     avg_hist_or_vec(data_group; num_bins = nothing)
 
@@ -164,12 +213,35 @@ Average one histogram/scalar or vector/scalar data group to `(scalar, mean, std)
 # Returns
 - `Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}`: Averaged curves with uncertainty.
 """
-function avg_hist_or_vec(data_group; num_bins::Union{Nothing,Int} = nothing)
+function avg_hist_or_vec(
+    data_group;
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+)
     if isempty(data_group)
         return Vector{Tuple{Real,Vector{Float64},Vector{Float64}}}()
     end
     if data_group[1][1] isa AbstractDict
+        if num_bins !== nothing || bin_edges !== nothing
+            bins = group_scalar_pairs_for_plot(
+                data_group;
+                num_bins = num_bins,
+                bin_edges = bin_edges,
+                log_binning = log_binning,
+            )
+            return [(s, average_histogram_with_std(vals)...) for (s, vals) in bins]
+        end
         return average_histogram_with_std(data_group)
+    end
+    if num_bins !== nothing || bin_edges !== nothing
+        bins = group_scalar_pairs_for_plot(
+            data_group;
+            num_bins = num_bins,
+            bin_edges = bin_edges,
+            log_binning = log_binning,
+        )
+        return [(s, average_vectors_with_std(vals)...) for (s, vals) in bins]
     end
     return average_vectors_with_std(data_group; num_bins = num_bins)
 end
@@ -212,8 +284,288 @@ function comp_avg_hist_or_vec(data_group; num_bins::Union{Nothing,Int} = nothing
     return nothing
 end
 
+function compute_plot_matrix_scalar_bin_edges(
+    data::Tuple;
+    num_bins::Union{Nothing,Int} = nothing,
+    log_binning::Bool = false,
+)
+    if num_bins === nothing || !log_binning
+        return nothing
+    end
+    scalars = Float64[]
+    for panel_groups in data
+        for group in panel_groups
+            append!(scalars, (Float64(s) for (_, s) in group))
+        end
+    end
+    isempty(scalars) && return nothing
+    vmin, vmax = minimum(scalars), maximum(scalars)
+    if !(vmin > 0)
+        throw(DomainError(vmin, "log_binning requires positive scalar values"))
+    end
+    return vmin == vmax ?
+        [vmin, vmin * (1 + 1e-12)] :
+        collect(10 .^ range(log10(vmin), log10(vmax); length = num_bins + 1))
+end
+
+function validate_plot_matrix_inputs(
+    xlim,
+    ylim,
+    xlabel,
+    ylabel;
+    magnification::Real,
+    rowgap,
+    colgap,
+    colorbar_size,
+)
+    if !(length(xlim) == 4)
+        throw(ArgumentError("xlim must have length 4"))
+    end
+    if !(length(ylim) == 4)
+        throw(ArgumentError("ylim must have length 4"))
+    end
+    if !(length(xlabel) == 4)
+        throw(ArgumentError("xlabel must have length 4"))
+    end
+    if !(length(ylabel) == 4)
+        throw(ArgumentError("ylabel must have length 4"))
+    end
+    if !(magnification > 0)
+        throw(DomainError(magnification, "magnification must be > 0"))
+    end
+    if rowgap !== nothing && !(rowgap >= 0)
+        throw(DomainError(rowgap, "rowgap must be >= 0 when provided"))
+    end
+    if colgap !== nothing && !(colgap >= 0)
+        throw(DomainError(colgap, "colgap must be >= 0 when provided"))
+    end
+    if colorbar_size !== nothing && !(colorbar_size[1] > 0 && colorbar_size[2] > 0)
+        throw(DomainError(colorbar_size, "colorbar_size entries must be > 0"))
+    end
+    return nothing
+end
+
+function compute_color_scale(
+    panel_data::AbstractVector{<:AbstractVector{<:Tuple}};
+    log_color_scaling::Bool = false,
+)
+    all_vals = Float64[]
+    for data in panel_data
+        append!(all_vals, (Float64(v) for (v, _, _) in data))
+    end
+    if log_color_scaling && !isempty(all_vals) && !(minimum(all_vals) > 0)
+        throw(DomainError(minimum(all_vals), "log color scaling requires positive scalar values"))
+    end
+    if log_color_scaling
+        all_vals = log10.(all_vals)
+    end
+    vmin = isempty(all_vals) ? 0.0 : minimum(all_vals)
+    vmax = isempty(all_vals) ? 1.0 : maximum(all_vals)
+    denom = vmax == vmin ? 1.0 : (vmax - vmin)
+    return (; vmin, vmax, denom)
+end
+
+function normalize_panel_ticks(ticks, name::AbstractString)
+    normalized = ticks === nothing ? fill(nothing, 4) : ticks
+    if !(length(normalized) == 4)
+        throw(ArgumentError("$name must have length 4"))
+    end
+    return normalized
+end
+
+function apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, yticks_i)
+    xlabel_i !== nothing && (ax.xlabel = xlabel_i)
+    ylabel_i !== nothing && (ax.ylabel = ylabel_i)
+    xlim_i !== nothing && CairoMakie.xlims!(ax, xlim_i...)
+    ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
+    if xticks_i !== nothing
+        if !isempty(xticks_i) && first(xticks_i) isa Tuple
+            ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
+        else
+            ax.xticks = collect(xticks_i)
+        end
+    end
+    if yticks_i !== nothing
+        if !isempty(yticks_i) && first(yticks_i) isa Tuple
+            ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
+        else
+            ax.yticks = collect(yticks_i)
+        end
+    end
+    return nothing
+end
+
+function create_plot_matrix_figure_and_axes(;
+    logscale_x::Bool,
+    logscale_y::Bool,
+    double_column::Bool,
+    magnification::Real,
+    top_xaxis::Bool,
+    right_yaxis::Bool,
+    rowgap,
+    colgap,
+)
+    figsize = 2 .* apply_paper_theme!(
+        double_column = double_column,
+        magnification = magnification,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+    )
+
+    fig = CairoMakie.Figure(size = figsize)
+    if rowgap !== nothing
+        fig.layout.default_rowgap = CairoMakie.Fixed(rowgap)
+    end
+    if colgap !== nothing
+        fig.layout.default_colgap = CairoMakie.Fixed(colgap)
+    end
+
+    xscale = logscale_x ? log10 : identity
+    yscale = logscale_y ? log10 : identity
+    axs = [
+        CairoMakie.Axis(fig[1, 1]; xscale = xscale, yscale = yscale),
+        CairoMakie.Axis(fig[1, 2]; xscale = xscale, yscale = yscale),
+        CairoMakie.Axis(fig[2, 1]; xscale = xscale, yscale = yscale),
+        CairoMakie.Axis(fig[2, 2]; xscale = xscale, yscale = yscale),
+    ]
+
+    if top_xaxis
+        for ax in (axs[1], axs[2])
+            ax.xaxisposition = :top
+            ax.xticklabelalign = (:center, :bottom)
+        end
+    end
+    if right_yaxis
+        for ax in (axs[2], axs[4])
+            ax.yaxisposition = :right
+            ax.yticklabelalign = (:left, :center)
+            ax.flip_ylabel = true
+        end
+        for (ax, cell) in zip((axs[2], axs[4]), (fig[1, 2], fig[2, 2]))
+            ax_left = CairoMakie.Axis(cell;
+                xscale = xscale,
+                yscale = yscale,
+                xlabelvisible = false,
+                xticksvisible = false,
+                xticklabelsvisible = false,
+                xgridvisible = false,
+                xminorgridvisible = false,
+                yticklabelsvisible = false,
+                ygridvisible = false,
+                yminorgridvisible = false,
+                backgroundcolor = :transparent,
+            )
+            ax_left.yaxisposition = :left
+            ax_left.rightspinevisible = false
+            CairoMakie.linkxaxes!(ax, ax_left)
+            CairoMakie.linkyaxes!(ax, ax_left)
+        end
+    end
+
+    return fig, axs
+end
+
+function add_plot_matrix_colorbar!(
+    fig,
+    vmin,
+    vmax;
+    colormap,
+    invert_color_scaling::Bool,
+    log_color_scaling::Bool,
+    colorbar_label,
+    colorbar_ticks,
+    colorbar_pos,
+    colorbar_size,
+    colorbar_side::Symbol,
+    colorbar_label_pos::Symbol,
+)
+    cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
+    limits = log_color_scaling ? (10.0^vmin, 10.0^vmax) : (vmin, vmax)
+    cb = if colorbar_pos === nothing
+        if colorbar_side == :right
+            CairoMakie.Colorbar(fig[1:2, 3], limits = limits, colormap = cb_cmap, scale = log_color_scaling ? log10 : identity)
+        elseif colorbar_side == :left
+            CairoMakie.Colorbar(fig[1:2, 0], limits = limits, colormap = cb_cmap, scale = log_color_scaling ? log10 : identity)
+        elseif colorbar_side == :top
+            CairoMakie.Colorbar(fig[0, 1:2], limits = limits, colormap = cb_cmap, vertical = false, scale = log_color_scaling ? log10 : identity)
+        elseif colorbar_side == :bottom
+            CairoMakie.Colorbar(fig[3, 1:2], limits = limits, colormap = cb_cmap, vertical = false, scale = log_color_scaling ? log10 : identity)
+        else
+            throw(ArgumentError("colorbar_side must be one of :left, :right, :top, :bottom"))
+        end
+    else
+        positioned_cb = CairoMakie.Colorbar(fig[1:2, 3], limits = limits, colormap = cb_cmap, scale = log_color_scaling ? log10 : identity)
+        positioned_cb.halign = colorbar_pos[1]
+        positioned_cb.valign = colorbar_pos[2]
+        positioned_cb.tellwidth = false
+        positioned_cb.tellheight = false
+        positioned_cb
+    end
+    if colorbar_size !== nothing
+        cb.width = colorbar_size[1]
+        cb.height = colorbar_size[2]
+    end
+    if colorbar_label !== nothing
+        if !(colorbar_label_pos in (:side, :top))
+            throw(ArgumentError("colorbar_label_pos must be :side or :top"))
+        end
+        if colorbar_label_pos == :top
+            cb.label = ""
+            if colorbar_side == :left
+                lbl = CairoMakie.Label(fig[1:2, 0], colorbar_label; tellwidth = false, tellheight = false)
+                lbl.halign = 0.5
+                lbl.valign = 1.055
+            elseif colorbar_side == :right
+                lbl = CairoMakie.Label(fig[1:2, 3], colorbar_label; tellwidth = false, tellheight = false)
+                lbl.halign = 0.5
+                lbl.valign = 1.055
+            else
+                cb.label = colorbar_label
+            end
+        else
+            if colorbar_side == :left
+                cb.label = ""
+                lbl = CairoMakie.Label(
+                    fig[1:2, -1],
+                    colorbar_label;
+                    tellwidth = true,
+                    tellheight = false,
+                )
+                lbl.halign = 0.5
+                lbl.valign = 0.5
+            else
+                cb.label = colorbar_label
+            end
+        end
+    end
+    if colorbar_ticks !== nothing
+        cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
+    end
+    return cb
+end
+
+function load_observable_plot_matrix_observables(paths::Vector{String}, scalar::Symbol)
+    fields = [:degree_hist_link, :ev_sym_link, :max_pathlen_hist, :cardinalities_hist]
+    loaded = load_fields_from_paths(paths, fields, scalar)
+    connectivity_link_hists = [dataset[1] for dataset in loaded]
+    ev_sym_link = [dataset[2] for dataset in loaded]
+    max_pathlen_hists = [dataset[3] for dataset in loaded]
+    cardinalities_hists = [dataset[4] for dataset in loaded]
+    return (; connectivity_link_hists, max_pathlen_hists, ev_sym_link, cardinalities_hists)
+end
+
+function load_observable_plot_matrix_observables(paths::Vector{String})
+    fields = [:degree_hist_link, :ev_sym_link, :max_pathlen_hist, :cardinalities_hist]
+    loaded = load_fields_from_paths(paths, fields)
+    connectivity_link_hists = [dataset[1] for dataset in loaded]
+    ev_sym_link = [dataset[2] for dataset in loaded]
+    max_pathlen_hists = [dataset[3] for dataset in loaded]
+    cardinalities_hists = [dataset[4] for dataset in loaded]
+    return (; connectivity_link_hists, max_pathlen_hists, ev_sym_link, cardinalities_hists)
+end
+
 """
-    hist_hist_vec_hist_plot_matrix(
+    _observable_plot_matrix_from_data(
         data::Tuple{
             Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
             Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
@@ -237,14 +589,18 @@ end
         return_axis = false,
     )
 
-Create a 2×2 matrix plot. The 1st, 2nd, and 4th entries are histogram+scalar
-datasets; the 3rd is a vector+scalar dataset. A single colorbar is placed to
-the right, spanning both rows. The color scaling is shared across all panels.
+Render a 2×2 observable plot matrix from preloaded scalar-conditioned data.
+
+Panel order:
+1. connectivity_link histogram
+2. max_pathlen histogram
+3. ev_sym_link vector
+4. cardinalities histogram
 
 Returns `fig` or `(fig, axs)` when `return_axis=true`.
 
 # Arguments
-- `data`: Tuple `(h1, h2, v3, h4)` with three histogram+scalar groups and one vector+scalar group.
+- `data`: Tuple `(connectivity_link, max_pathlen, ev_sym_link, cardinalities)`.
 - `fig_path`: Output path passed to `CairoMakie.save`.
 
 # Keyword Arguments
@@ -256,7 +612,7 @@ Returns `fig` or `(fig, axs)` when `return_axis=true`.
 - `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
 - `colorbar_side`: Side for automatic colorbar placement (`:left`, `:right`, `:top`, `:bottom`).
 - `colorbar_label_pos`: Colorbar label placement (`:side` or `:top`).
-- `comp`: Optional tuple of comparison datasets for panel overlays.
+- `comp`: Optional tuple of comparison datasets in the same panel order.
 - `comp_color`, `comp_linewidth`: Styling for comparison overlays.
 - `xticks`, `yticks`: Optional per-panel tick specifications (length 4 when provided).
 - `logscale_x`, `logscale_y`: Axis scaling toggles.
@@ -272,7 +628,7 @@ Returns `fig` or `(fig, axs)` when `return_axis=true`.
 # Throws
 - `ArgumentError`: Raised when structural inputs are inconsistent.
 - `DomainError`: Raised when numeric parameters violate domain constraints."""
-function hist_hist_vec_hist_plot_matrix(
+function _observable_plot_matrix_from_data(
     data::Tuple{
         Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
         Vector{Vector{Tuple{Dict{Int64, Float64}, Real}}},
@@ -307,105 +663,47 @@ function hist_hist_vec_hist_plot_matrix(
     top_xaxis::Bool = true,
     rowgap::Union{Nothing,Real} = 0.0,
     colgap::Union{Nothing,Real} = 0.0,
+    log_binning::Bool = false,
     return_axis::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Vector{CairoMakie.Axis}}}
-    if !(length(xlim) == 4)
-        throw(ArgumentError("xlim must have length 4"))
-    end
-    if !(length(ylim) == 4)
-        throw(ArgumentError("ylim must have length 4"))
-    end
-    if !(length(xlabel) == 4)
-        throw(ArgumentError("xlabel must have length 4"))
-    end
-    if !(length(ylabel) == 4)
-        throw(ArgumentError("ylabel must have length 4"))
-    end
-    if !(magnification > 0)
-        throw(DomainError(magnification, "magnification must be > 0"))
-    end
-    if rowgap !== nothing && !(rowgap >= 0)
-        throw(DomainError(rowgap, "rowgap must be >= 0 when provided"))
-    end
-    if colgap !== nothing && !(colgap >= 0)
-        throw(DomainError(colgap, "colgap must be >= 0 when provided"))
-    end
-    if colorbar_size !== nothing && !(colorbar_size[1] > 0 && colorbar_size[2] > 0)
-        throw(DomainError(colorbar_size, "colorbar_size entries must be > 0"))
-    end
+    validate_plot_matrix_inputs(
+        xlim,
+        ylim,
+        xlabel,
+        ylabel;
+        magnification = magnification,
+        rowgap = rowgap,
+        colgap = colgap,
+        colorbar_size = colorbar_size,
+    )
     h1, h2, v3, h4 = data
+    scalar_bin_edges = compute_plot_matrix_scalar_bin_edges(
+        data;
+        num_bins = num_bins,
+        log_binning = log_binning,
+    )
 
-    avg1 = [avg_hist_or_vec(h1[i]; num_bins = num_bins) for i in 1:length(h1)]
-    avg2 = [avg_hist_or_vec(h2[i]; num_bins = num_bins) for i in 1:length(h2)]
-    avg3 = [avg_hist_or_vec(v3[i]; num_bins = num_bins) for i in 1:length(v3)]
-    avg4 = [avg_hist_or_vec(h4[i]; num_bins = num_bins) for i in 1:length(h4)]
+    avg1 = [avg_hist_or_vec(h1[i]; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for i in 1:length(h1)]
+    avg2 = [avg_hist_or_vec(h2[i]; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for i in 1:length(h2)]
+    avg3 = [avg_hist_or_vec(v3[i]; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for i in 1:length(v3)]
+    avg4 = [avg_hist_or_vec(h4[i]; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for i in 1:length(h4)]
 
     d1 = length(avg1) == 1 ? avg1[1] : vcat(avg1...)
     d2 = length(avg2) == 1 ? avg2[1] : vcat(avg2...)
     d3 = length(avg3) == 1 ? avg3[1] : vcat(avg3...)
     d4 = length(avg4) == 1 ? avg4[1] : vcat(avg4...)
 
-    all_vals = [v for (v, _, _) in d1]
-    append!(all_vals, (v for (v, _, _) in d2))
-    append!(all_vals, (v for (v, _, _) in d3))
-    append!(all_vals, (v for (v, _, _) in d4))
-    vmin = isempty(all_vals) ? 0.0 : minimum(all_vals)
-    vmax = isempty(all_vals) ? 1.0 : maximum(all_vals)
-    denom = vmax == vmin ? 1.0 : (vmax - vmin)
-
-    figsize = 2 .* apply_paper_theme!(
-        double_column = double_column,
-        magnification = magnification,
+    (; vmin, vmax, denom) = compute_color_scale([d1, d2, d3, d4]; log_color_scaling = log_binning)
+    fig, axs = create_plot_matrix_figure_and_axes(;
         logscale_x = logscale_x,
         logscale_y = logscale_y,
+        double_column = double_column,
+        magnification = magnification,
+        top_xaxis = top_xaxis,
+        right_yaxis = right_yaxis,
+        rowgap = rowgap,
+        colgap = colgap,
     )
-
-    fig = CairoMakie.Figure(size = figsize)
-    if rowgap !== nothing
-        fig.layout.default_rowgap = CairoMakie.Fixed(rowgap)
-    end
-    if colgap !== nothing
-        fig.layout.default_colgap = CairoMakie.Fixed(colgap)
-    end
-    axs = [
-        CairoMakie.Axis(fig[1,1]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-        CairoMakie.Axis(fig[1,2]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-        CairoMakie.Axis(fig[2,1]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-        CairoMakie.Axis(fig[2,2]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-    ]
-    if top_xaxis
-        for ax in (axs[1], axs[2])
-            ax.xaxisposition = :top
-            ax.xticklabelalign = (:center, :bottom)
-        end
-    end
-    if right_yaxis
-        for ax in (axs[2], axs[4])
-            ax.yaxisposition = :right
-            ax.yticklabelalign = (:left, :center)
-            ax.flip_ylabel = true
-        end
-        # add dummy left ticks on right-hand plots
-        for (ax, cell) in zip((axs[2], axs[4]), (fig[1,2], fig[2,2]))
-            ax_left = CairoMakie.Axis(cell;
-                xscale = logscale_x ? log10 : identity,
-                yscale = logscale_y ? log10 : identity,
-                xlabelvisible = false,
-                xticksvisible = false,
-                xticklabelsvisible = false,
-                xgridvisible = false,
-                xminorgridvisible = false,
-                yticklabelsvisible = false,
-                ygridvisible = false,
-                yminorgridvisible = false,
-                backgroundcolor = :transparent,
-            )
-            ax_left.yaxisposition = :left
-            ax_left.rightspinevisible = false
-            CairoMakie.linkxaxes!(ax, ax_left)
-            CairoMakie.linkyaxes!(ax, ax_left)
-        end
-    end
 
     comp1 = nothing
     comp2 = nothing
@@ -422,185 +720,64 @@ function hist_hist_vec_hist_plot_matrix(
         comp4 = comp_avg_hist_or_vec(comp4_flat; num_bins = num_bins)
     end
 
-    xt = xticks === nothing ? fill(nothing, 4) : xticks
-    yt = yticks === nothing ? fill(nothing, 4) : yticks
-    if !(length(xt) == 4)
-        throw(ArgumentError("xticks must have length 4"))
-    end
-    if !(length(yt) == 4)
-        throw(ArgumentError("yticks must have length 4"))
-    end
+    xt = normalize_panel_ticks(xticks, "xticks")
+    yt = normalize_panel_ticks(yticks, "yticks")
     plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[4], d4, comp4, xlim[4], ylim[4], xlabel[4], ylabel[4], xt[4], yt[4];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
-    cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
-    cb = if colorbar_pos === nothing
-        if colorbar_side == :right
-            CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
-        elseif colorbar_side == :left
-            CairoMakie.Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
-        elseif colorbar_side == :top
-            CairoMakie.Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
-        elseif colorbar_side == :bottom
-            CairoMakie.Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
-        else
-            throw(ArgumentError("colorbar_side must be one of :left, :right, :top, :bottom"))
-        end
-    else
-        cb = CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
-        cb.halign = colorbar_pos[1]
-        cb.valign = colorbar_pos[2]
-        cb.tellwidth = false
-        cb.tellheight = false
-        cb
-    end
-    if colorbar_size !== nothing
-        cb.width = colorbar_size[1]
-        cb.height = colorbar_size[2]
-    end
-    if colorbar_label !== nothing
-        if !(colorbar_label_pos in (:side, :top))
-            throw(ArgumentError("colorbar_label_pos must be :side or :top"))
-        end
-        if colorbar_label_pos == :top
-            cb.label = ""
-            if colorbar_side == :left
-                lbl = CairoMakie.Label(fig[1:2, 0], colorbar_label; tellwidth = false, tellheight = false)
-                lbl.halign = 0.5
-                lbl.valign = 1.055
-            elseif colorbar_side == :right
-                lbl = CairoMakie.Label(fig[1:2, 3], colorbar_label; tellwidth = false, tellheight = false)
-                lbl.halign = 0.5
-                lbl.valign = 1.055
-            else
-                cb.label = colorbar_label
-            end
-        else
-            if colorbar_side == :left
-                cb.label = ""
-                # put label in its own column to the left of the colorbar
-                lbl = CairoMakie.Label(
-                    fig[1:2, -1],
-                    colorbar_label;
-                    tellwidth = true,
-                    tellheight = false,
-                )
-                lbl.halign = 0.5
-                lbl.valign = 0.5
-            else
-                cb.label = colorbar_label
-            end
-        end
-    end
-    if colorbar_ticks !== nothing
-        cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
-    end
+    add_plot_matrix_colorbar!(
+        fig,
+        vmin,
+        vmax;
+        colormap = colormap,
+        invert_color_scaling = invert_color_scaling,
+        log_color_scaling = log_binning,
+        colorbar_label = colorbar_label,
+        colorbar_ticks = colorbar_ticks,
+        colorbar_pos = colorbar_pos,
+        colorbar_size = colorbar_size,
+        colorbar_side = colorbar_side,
+        colorbar_label_pos = colorbar_label_pos,
+    )
 
     CairoMakie.save(fig_path, fig)
     return return_axis ? (fig, axs) : fig
 end
 
 """
-    hist_hist_vec_distinguishability_plot_matrix(
+    observable_plot_matrix(
         data_paths,
         comp_paths,
         scalar::Symbol,
         fig_path::String;
         xlim, ylim, xlabel, ylabel,
-        sqrt_scalars::Bool = false,
-        # scalar_bin_mahalanobis_gap_distinguishability kwargs
+        sqrt_scalars = false,
         num_bins = nothing,
-        regulator = 0.0,
-        R = 1000,
-        q = 0.0,
-        alpha = 0.05,
-        rng = Random.default_rng(),
-        symmetric = false,
-        projection_tolerance = 1e-10,
-        progress = false,
-        # plot kwargs (aligned with hist_hist_vec_hist_plot_matrix)
-        colormap = :viridis,
-        invert_color_scaling = false,
-        colorbar_label = nothing,
-        colorbar_ticks = nothing,
-        colorbar_pos = nothing,
-        colorbar_size = nothing,
-        colorbar_side = :right,
-        colorbar_label_pos = :side,
-        comp_color = :black,
-        comp_linewidth = 2,
-        xticks = nothing,
-        yticks = nothing,
-        logscale_x = true,
-        logscale_y = true,
-        double_column = false,
-        magnification = 1.0,
-        plot_std = true,
-        right_yaxis = true,
-        top_xaxis = true,
-        rowgap = 0.0,
-        colgap = 0.0,
-    )::CairoMakie.Figure
+        ...
+    )
 
-See `hist_hist_vec_hist_plot_matrix(...)`.
+Load and render a 2×2 observable plot matrix.
 
-This variant replaces the fourth panel with a distinguishability summary.
+Panel order:
+1. connectivity_link histogram
+2. max_pathlen histogram
+3. ev_sym_link vector
+4. cardinalities histogram
 
-Panels (in order):
-1. connectivity link histograms
-2. max path length histograms
-3. ev_sym_link vectors
-4. Scalar evolution of one selected distinguishability measure (`distinguishability`)
-   for the three observables above and their concatenated total vector.
-
-Returns the saved `CairoMakie.Figure`.
-
-# Arguments
-- `data_paths`: Path or collection of paths used for loading/saving data.
-- `comp_paths`: Path or collection of paths used for loading/saving data.
-- `scalar`: Scalar field used for x/color conditioning.
-- `fig_path`: Output path passed to `CairoMakie.save`.
-
-# Keyword Arguments
-- `xlim`, `ylim`, `xlabel`, `ylabel`: Per-panel vectors of length 4.
-- `sqrt_scalars`: Apply `sqrt` to dataset scalar values before plotting/distinguishability.
-- `num_bins`, `regulator`, `R`, `q`, `alpha`: Distinguishability estimator controls.
-- `rng`: Random number generator used for stochastic steps.
-- `symmetric`: Must remain `false` for this function.
-- `projection_tolerance`, `to_regularize_rel`, `progress`: Mahalanobis runtime controls.
-- `distinguishability`: One of `:energy`, `:mahalanobis`, `:mutual_information` for panel 4.
-- `mutual_information_*`: MI estimator controls propagated to `distinguishability_mutual_information`.
-- `invert_color_scaling`: Reverse scalar-to-color mapping.
-- `colorbar_label`, `colorbar_ticks`: Optional colorbar label and tick mapping.
-- `colorbar_pos`, `colorbar_size`: Optional manual colorbar placement/alignment sizing.
-- `colorbar_side`: Side for automatic colorbar placement (`:left`, `:right`, `:top`, `:bottom`).
-- `colorbar_label_pos`: Colorbar label placement (`:side` or `:top`).
-- `comp_color`, `comp_linewidth`: Styling for comparison overlays in panels 1-3.
-- `xticks`, `yticks`: Optional per-panel tick specifications (length 4 when provided).
-- `logscale_x`: Toggle for logarithmic axis scaling.
-- `logscale_y`: Toggle for logarithmic axis scaling.
-- `double_column`, `magnification`: Theme/layout controls.
-- `plot_std`: Draw mean ± std bands in panels 1-3.
-- `right_yaxis`, `top_xaxis`: Move right-column y-axes / top-row x-axes.
-- `rowgap`, `colgap`: Optional layout gap overrides.
-
-# Returns
-- `fig::CairoMakie.Figure`: Saved and returned plot figure.
-
-# Throws
-- `ArgumentError`: Raised when structural inputs are inconsistent.
-- `DomainError`: Raised when numeric parameters violate domain constraints."""
-function hist_hist_vec_distinguishability_plot_matrix(
+The dataset observables are loaded in one bulk pass via `load_fields_from_paths`.
+Comparison data is loaded the same way and reduced to one reference band/line per panel.
+"""
+function observable_plot_matrix(
     data_paths_in,
     comp_paths_in,
     scalar::Symbol,
@@ -610,25 +787,7 @@ function hist_hist_vec_distinguishability_plot_matrix(
     xlabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
     ylabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
     sqrt_scalars::Bool = false,
-    # scalar_bin_mahalanobis_gap_distinguishability kwargs
     num_bins::Union{Nothing,Int} = nothing,
-    regulator::Float64 = 0.0,
-    R::Int = 1000,
-    q::Float64 = 0.0,
-    alpha::Float64 = 0.05,
-    rng = Random.default_rng(),
-    symmetric::Bool = false,
-    projection_tolerance::Float64 = 1e-10,
-    to_regularize_rel::Float64 = 0.01,
-    progress::Bool = false,
-    distinguishability::Symbol = :energy,
-    mutual_information_k::Int = 5,
-    mutual_information_pca_mode::Symbol = :dim,
-    mutual_information_pca_dim::Int = 32,
-    mutual_information_explained_variance::Real = 0.99,
-    mutual_information_eigenvalue_rtol::Real = 1e-10,
-    mutual_information_max_per_class::Union{Nothing,Int} = 2_000,
-    # plot kwargs
     colormap = :viridis,
     invert_color_scaling::Bool = false,
     colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
@@ -650,300 +809,963 @@ function hist_hist_vec_distinguishability_plot_matrix(
     top_xaxis::Bool = true,
     rowgap::Union{Nothing,Real} = 0.0,
     colgap::Union{Nothing,Real} = 0.0,
-)::CairoMakie.Figure
-    if !(length(xlim) == 4)
-        throw(ArgumentError("xlim must have length 4"))
-    end
-    if !(length(ylim) == 4)
-        throw(ArgumentError("ylim must have length 4"))
-    end
-    if !(length(xlabel) == 4)
-        throw(ArgumentError("xlabel must have length 4"))
-    end
-    if !(length(ylabel) == 4)
-        throw(ArgumentError("ylabel must have length 4"))
-    end
-    if symmetric
-        throw(ArgumentError("symmetric must be false for hist_hist_vec_distinguishability_plot_matrix"))
-    end
-    if !(distinguishability in (:energy, :mahalanobis, :mutual_information))
-        throw(ArgumentError("distinguishability must be one of :energy, :mahalanobis, :mutual_information"))
-    end
-    if !(magnification > 0)
-        throw(DomainError(magnification, "magnification must be > 0"))
-    end
-    if rowgap !== nothing && !(rowgap >= 0)
-        throw(DomainError(rowgap, "rowgap must be >= 0 when provided"))
-    end
-    if colgap !== nothing && !(colgap >= 0)
-        throw(DomainError(colgap, "colgap must be >= 0 when provided"))
-    end
-    if colorbar_size !== nothing && !(colorbar_size[1] > 0 && colorbar_size[2] > 0)
-        throw(DomainError(colorbar_size, "colorbar_size entries must be > 0"))
-    end
+    log_binning::Bool = false,
+    return_axis::Bool = false,
+)::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Vector{CairoMakie.Axis}}}
     to_paths(x) = x isa AbstractString ? [String(x)] : String.(collect(x))
     data_paths = to_paths(data_paths_in)
     comp_paths = to_paths(comp_paths_in)
 
-    # dataset
-    in_degree_link_hists_data = load_histograms_from_paths(data_paths, :in_degree_hist_link, scalar)
-    out_degree_link_hists_data = load_histograms_from_paths(data_paths, :out_degree_hist_link, scalar)
-    connectivity_link_hists_data = join_histograms([in_degree_link_hists_data, out_degree_link_hists_data])
-    ev_sym_link_data = load_field_with_scalar(data_paths, :ev_sym_link, scalar)
-    max_pathlen_hists_data = load_histograms_from_paths(data_paths, :max_pathlen_hist, scalar)
+    data_loaded = load_observable_plot_matrix_observables(data_paths, scalar)
+    comp_loaded = load_observable_plot_matrix_observables(comp_paths)
 
-    # comparison dataset
-    in_degree_link_hists_comp = load_histograms_from_paths(comp_paths, :in_degree_hist_link, scalar)
-    out_degree_link_hists_comp = load_histograms_from_paths(comp_paths, :out_degree_hist_link, scalar)
-    connectivity_link_hists_comp = join_histograms([in_degree_link_hists_comp, out_degree_link_hists_comp])
-    ev_sym_link_comp = load_field_with_scalar(comp_paths, :ev_sym_link, scalar)
-    max_pathlen_hists_comp = load_histograms_from_paths(comp_paths, :max_pathlen_hist, scalar)
+    normalized_connectivity_data = normalize_hists(data_loaded.connectivity_link_hists)
+    normalized_connectivity_comp = normalize_hists(comp_loaded.connectivity_link_hists)
+    normalized_max_pathlen_data = normalize_hists(data_loaded.max_pathlen_hists; normalization = 1)
+    normalized_max_pathlen_comp = normalize_hists(comp_loaded.max_pathlen_hists; normalization = 1)
+    normalized_cardinalities_data = normalize_hists(data_loaded.cardinalities_hists)
+    normalized_cardinalities_comp = normalize_hists(comp_loaded.cardinalities_hists)
 
-    # normalization as requested
-    normalized_connectivity_data = normalize_hists(connectivity_link_hists_data; num_bins = num_bins)
-    normalized_connectivity_comp = normalize_hists(connectivity_link_hists_comp; num_bins = num_bins)
-    normalized_max_pathlen_data = normalize_hists(max_pathlen_hists_data; normalization = 1, num_bins = num_bins)
-    normalized_max_pathlen_comp = normalize_hists(max_pathlen_hists_comp; normalization = 1, num_bins = num_bins)
-
-    # optionally transform only dataset scalars
     maybe_sqrt_pairs(pairs) = sqrt_scalars ? [(v, sqrt(Float64(s))) for (v, s) in pairs] : pairs
     normalized_connectivity_data = [maybe_sqrt_pairs(g) for g in normalized_connectivity_data]
     normalized_max_pathlen_data = [maybe_sqrt_pairs(g) for g in normalized_max_pathlen_data]
-    ev_sym_link_data = [maybe_sqrt_pairs(g) for g in ev_sym_link_data]
+    ev_sym_link_data = [maybe_sqrt_pairs(g) for g in data_loaded.ev_sym_link]
+    normalized_cardinalities_data = [maybe_sqrt_pairs(g) for g in normalized_cardinalities_data]
 
-    # scalar_bin_mahalanobis expects one dataset (one path)
-    to_single_dataset(groups) = [length(groups) == 1 ? groups[1] : vcat(groups...)]
-    to_reference(groups) = length(groups) == 1 ? groups[1] : vcat(groups...)
+    data = (
+        normalized_connectivity_data,
+        normalized_max_pathlen_data,
+        ev_sym_link_data,
+        normalized_cardinalities_data,
+    )
+    comp = (
+        normalized_connectivity_comp,
+        normalized_max_pathlen_comp,
+        comp_loaded.ev_sym_link,
+        normalized_cardinalities_comp,
+    )
 
-    connectivity_data_single = to_single_dataset(normalized_connectivity_data)
-    max_pathlen_data_single = to_single_dataset(normalized_max_pathlen_data)
-    ev_sym_link_data_single = to_single_dataset(ev_sym_link_data)
+    return _observable_plot_matrix_from_data(
+        data,
+        fig_path;
+        xlim = xlim,
+        ylim = ylim,
+        xlabel = xlabel,
+        ylabel = ylabel,
+        num_bins = num_bins,
+        colormap = colormap,
+        invert_color_scaling = invert_color_scaling,
+        colorbar_label = colorbar_label,
+        colorbar_ticks = colorbar_ticks,
+        colorbar_pos = colorbar_pos,
+        colorbar_size = colorbar_size,
+        colorbar_side = colorbar_side,
+        colorbar_label_pos = colorbar_label_pos,
+        comp = comp,
+        comp_color = comp_color,
+        comp_linewidth = comp_linewidth,
+        xticks = xticks,
+        yticks = yticks,
+        logscale_x = logscale_x,
+        logscale_y = logscale_y,
+        double_column = double_column,
+        magnification = magnification,
+        plot_std = plot_std,
+        right_yaxis = right_yaxis,
+        top_xaxis = top_xaxis,
+        rowgap = rowgap,
+        colgap = colgap,
+        log_binning = log_binning,
+        return_axis = return_axis,
+    )
+end
 
-    connectivity_ref = to_reference(normalized_connectivity_comp)
-    max_pathlen_ref = to_reference(normalized_max_pathlen_comp)
-    ev_sym_link_ref = to_reference(ev_sym_link_comp)
+function hist_hist_vec_hist_plot_matrix(args...; kwargs...)
+    return _observable_plot_matrix_from_data(args...; kwargs...)
+end
 
-    # prepare panel data (first 3 panels like hist_hist_vec_hist_plot_matrix)
-    d1 = avg_hist_or_vec(connectivity_data_single[1]; num_bins = num_bins)
-    d2 = avg_hist_or_vec(max_pathlen_data_single[1]; num_bins = num_bins)
-    d3 = avg_hist_or_vec(ev_sym_link_data_single[1]; num_bins = num_bins)
+"""
+    observable_distinguishability_plotmatrix(
+        kind::String,
+        scalar::Symbol,
+        fig_path::String;
+        size = 2048,
+        ...
+    )
+
+Load and render a 2×2 plot matrix with the observables `connectivity_link`,
+`max_pathlen`, and `ev_sym_link` in the first three panels and the
+permutation-distinguishability p-value versus scalar in the fourth panel.
+"""
+function observable_distinguishability_plotmatrix(
+    kind::String,
+    scalar::Symbol,
+    fig_path::String;
+    size::Int = 2048,
+    num_csets::Int=10000,
+    comp_kind::Union{Nothing,String} = nothing,
+    distinguishability::Symbol = :permutation,
+    xlim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
+    ylim::AbstractVector{<:Union{Tuple{Float64,Float64},Nothing}},
+    xlabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
+    ylabel::AbstractVector{<:Union{AbstractString,LaTeXStrings.LaTeXString,Nothing}},
+    sqrt_scalars::Bool = false,
+    num_bins::Union{Nothing,Int} = nothing,
+    num_draws::Union{Nothing,Int} = nothing,
+    n_perm::Int = 1000,
+    energy_distance::Symbol = :Hellinger,
+    mutual_information_k::Int = 5,
+    mutual_information_pca_mode::Symbol = :cutoff,
+    mutual_information_pca_dim::Int = 32,
+    mutual_information_explained_variance::Real = 0.99,
+    mutual_information_eigenvalue_rtol::Real = 1e-6,
+    mutual_information_max_per_class::Union{Nothing,Int} = nothing,
+    regulator::Float64 = 0.0,
+    R::Int = 1000,
+    q::Float64 = 0.0,
+    alpha::Float64 = 0.05,
+    projection_tolerance::Float64 = 1e-6,
+    to_regularize_rel::Float64 = 0.01,
+    tv_quantization_digits::Int = 8,
+    check_bias::Bool = false,
+    bias_num_splits::Int = 20,
+    rng = Random.default_rng(),
+    colormap = :magma,
+    invert_color_scaling::Bool = false,
+    colorbar_label::Union{Nothing,AbstractString,LaTeXStrings.LaTeXString} = nothing,
+    colorbar_ticks::Union{Nothing,Vector{<:Tuple{<:Real,Any}}} = nothing,
+    colorbar_pos::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    colorbar_size::Union{Nothing,Tuple{Real,Real}} = nothing,
+    colorbar_side::Symbol = :right,
+    colorbar_label_pos::Symbol = :side,
+    comp_color = :black,
+    comp_linewidth::Union{Nothing,Real} = 2,
+    xticks::Union{Nothing,AbstractVector} = nothing,
+    yticks::Union{Nothing,AbstractVector} = nothing,
+    logscale_x::Bool = true,
+    logscale_y::Bool = true,
+    double_column::Bool = false,
+    magnification::Real = 1.0,
+    plot_std::Bool = true,
+    right_yaxis::Bool = true,
+    top_xaxis::Bool = true,
+    rowgap::Union{Nothing,Real} = 0.0,
+    colgap::Union{Nothing,Real} = 0.0,
+    log_binning::Bool = false,
+    legendpos = :rb,
+    progress::Bool = false,
+    verbose::Bool = false,
+    return_axis::Bool = false,
+)::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Vector{CairoMakie.Axis}}}
+    validate_plot_matrix_inputs(
+        xlim,
+        ylim,
+        xlabel,
+        ylabel;
+        magnification = magnification,
+        rowgap = rowgap,
+        colgap = colgap,
+        colorbar_size = colorbar_size,
+    )
+    if !(size > 0)
+        throw(DomainError(size, "size must be > 0"))
+    end
+    if !(n_perm >= 1)
+        throw(DomainError(n_perm, "n_perm must be >= 1"))
+    end
+    if num_draws !== nothing && !(num_draws >= 1)
+        throw(DomainError(num_draws, "num_draws must be >= 1 when provided"))
+    end
+    distinguishability_aliases = Dict(:mi => :mutual_information, :energy_distance => :energy)
+    distinguishability = get(distinguishability_aliases, distinguishability, distinguishability)
+    if distinguishability ∉ (:permutation, :tv, :energy, :mutual_information, :mahalanobis)
+        throw(ArgumentError("distinguishability must be :permutation, :tv, :energy, :energy_distance, :mutual_information, :mi, or :mahalanobis"))
+    end
+
+    comp_name = isnothing(comp_kind) ? comparison_kind_for_observable_plot(kind) : comp_kind
+    obs_paths = data_paths(["$(kind)_$(size)_$(num_csets)/statistics.jld2"])
+    comp_paths = data_paths(["$(comp_name)_$(size)_10000/statistics.jld2"])
+
+    data_loaded = load_observable_plot_matrix_observables(obs_paths, scalar)
+    comp_loaded = load_observable_plot_matrix_observables(comp_paths)
+
+    normalized_connectivity_data = normalize_hists(data_loaded.connectivity_link_hists)
+    normalized_connectivity_comp = normalize_hists(comp_loaded.connectivity_link_hists)
+    normalized_max_pathlen_data = normalize_hists(data_loaded.max_pathlen_hists; normalization = 1)
+    normalized_max_pathlen_comp = normalize_hists(comp_loaded.max_pathlen_hists; normalization = 1)
+
+    maybe_sqrt_pairs(pairs) = sqrt_scalars ? [(v, sqrt(Float64(s))) for (v, s) in pairs] : pairs
+    normalized_connectivity_data = [maybe_sqrt_pairs(g) for g in normalized_connectivity_data]
+    normalized_max_pathlen_data = [maybe_sqrt_pairs(g) for g in normalized_max_pathlen_data]
+    ev_sym_link_data = [maybe_sqrt_pairs(g) for g in data_loaded.ev_sym_link]
+
+    data = (
+        normalized_connectivity_data,
+        normalized_max_pathlen_data,
+        ev_sym_link_data,
+        normalized_connectivity_data,
+    )
+    scalar_bin_edges = compute_plot_matrix_scalar_bin_edges(
+        data;
+        num_bins = num_bins,
+        log_binning = log_binning,
+    )
+
+    d1_groups = [avg_hist_or_vec(g; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for g in normalized_connectivity_data]
+    d2_groups = [avg_hist_or_vec(g; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for g in normalized_max_pathlen_data]
+    d3_groups = [avg_hist_or_vec(g; num_bins = num_bins, bin_edges = scalar_bin_edges, log_binning = log_binning) for g in ev_sym_link_data]
+    d1 = length(d1_groups) == 1 ? d1_groups[1] : vcat(d1_groups...)
+    d2 = length(d2_groups) == 1 ? d2_groups[1] : vcat(d2_groups...)
+    d3 = length(d3_groups) == 1 ? d3_groups[1] : vcat(d3_groups...)
+
+    connectivity_ref = flatten_loaded_values(normalized_connectivity_comp)
+    max_pathlen_ref = flatten_loaded_values(normalized_max_pathlen_comp)
+    ev_sym_link_ref = flatten_loaded_values(comp_loaded.ev_sym_link)
     comp1 = comp_avg_hist_or_vec(connectivity_ref; num_bins = num_bins)
     comp2 = comp_avg_hist_or_vec(max_pathlen_ref; num_bins = num_bins)
     comp3 = comp_avg_hist_or_vec(ev_sym_link_ref; num_bins = num_bins)
 
-    all_vals = [v for (v, _, _) in d1]
-    append!(all_vals, (v for (v, _, _) in d2))
-    append!(all_vals, (v for (v, _, _) in d3))
-    vmin = isempty(all_vals) ? 0.0 : minimum(all_vals)
-    vmax = isempty(all_vals) ? 1.0 : maximum(all_vals)
-    denom = vmax == vmin ? 1.0 : (vmax - vmin)
+    distinguishability_series =
+        if distinguishability == :permutation
+            (
+                connectivity_link = compute_permutation_scalar_series(
+                    normalized_connectivity_data,
+                    connectivity_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    num_draws = num_draws,
+                    n_perm = n_perm,
+                    distance = energy_distance,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                max_pathlen = compute_permutation_scalar_series(
+                    normalized_max_pathlen_data,
+                    max_pathlen_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    num_draws = num_draws,
+                    n_perm = n_perm,
+                    distance = energy_distance,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                ev_sym_link = compute_permutation_scalar_series(
+                    ev_sym_link_data,
+                    ev_sym_link_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    num_draws = num_draws,
+                    n_perm = n_perm,
+                    distance = energy_distance,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+            )
+        elseif distinguishability == :tv
+            (
+                connectivity_link = compute_total_variation_scalar_series(
+                    normalized_connectivity_data,
+                    connectivity_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    tv_quantization_digits = tv_quantization_digits,
+                    check_bias = check_bias,
+                    bias_num_splits = bias_num_splits,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                max_pathlen = compute_total_variation_scalar_series(
+                    normalized_max_pathlen_data,
+                    max_pathlen_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    tv_quantization_digits = tv_quantization_digits,
+                    check_bias = check_bias,
+                    bias_num_splits = bias_num_splits,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                ev_sym_link = compute_total_variation_scalar_series(
+                    ev_sym_link_data,
+                    ev_sym_link_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    tv_quantization_digits = tv_quantization_digits,
+                    check_bias = check_bias,
+                    bias_num_splits = bias_num_splits,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+            )
+        elseif distinguishability == :energy
+            (
+                connectivity_link = compute_energy_scalar_series(
+                    normalized_connectivity_data,
+                    connectivity_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    num_draws = num_draws,
+                    distance = energy_distance,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                max_pathlen = compute_energy_scalar_series(
+                    normalized_max_pathlen_data,
+                    max_pathlen_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    num_draws = num_draws,
+                    distance = energy_distance,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                ev_sym_link = compute_energy_scalar_series(
+                    ev_sym_link_data,
+                    ev_sym_link_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    num_draws = num_draws,
+                    distance = energy_distance,
+                    rng = rng,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+            )
+        elseif distinguishability == :mutual_information
+            (
+                connectivity_link = compute_mutual_information_scalar_series(
+                    normalized_connectivity_data,
+                    connectivity_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    k = mutual_information_k,
+                    pca_mode = mutual_information_pca_mode,
+                    pca_dim = mutual_information_pca_dim,
+                    explained_variance = mutual_information_explained_variance,
+                    eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                    max_per_class = mutual_information_max_per_class,
+                    rng = rng,
+                    verbose = verbose,
+                ),
+                max_pathlen = compute_mutual_information_scalar_series(
+                    normalized_max_pathlen_data,
+                    max_pathlen_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    k = mutual_information_k,
+                    pca_mode = mutual_information_pca_mode,
+                    pca_dim = mutual_information_pca_dim,
+                    explained_variance = mutual_information_explained_variance,
+                    eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                    max_per_class = mutual_information_max_per_class,
+                    rng = rng,
+                    verbose = verbose,
+                ),
+                ev_sym_link = compute_mutual_information_scalar_series(
+                    ev_sym_link_data,
+                    ev_sym_link_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    k = mutual_information_k,
+                    pca_mode = mutual_information_pca_mode,
+                    pca_dim = mutual_information_pca_dim,
+                    explained_variance = mutual_information_explained_variance,
+                    eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                    max_per_class = mutual_information_max_per_class,
+                    rng = rng,
+                    verbose = verbose,
+                ),
+            )
+        else
+            (
+                connectivity_link = compute_mahalanobis_scalar_series(
+                    normalized_connectivity_data,
+                    connectivity_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    regulator = regulator,
+                    R = R,
+                    q = q,
+                    alpha = alpha,
+                    rng = rng,
+                    projection_tolerance = projection_tolerance,
+                    to_regularize_rel = to_regularize_rel,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                max_pathlen = compute_mahalanobis_scalar_series(
+                    normalized_max_pathlen_data,
+                    max_pathlen_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    regulator = regulator,
+                    R = R,
+                    q = q,
+                    alpha = alpha,
+                    rng = rng,
+                    projection_tolerance = projection_tolerance,
+                    to_regularize_rel = to_regularize_rel,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+                ev_sym_link = compute_mahalanobis_scalar_series(
+                    ev_sym_link_data,
+                    ev_sym_link_ref;
+                    num_bins = num_bins,
+                    bin_edges = scalar_bin_edges,
+                    log_binning = log_binning,
+                    regulator = regulator,
+                    R = R,
+                    q = q,
+                    alpha = alpha,
+                    rng = rng,
+                    projection_tolerance = projection_tolerance,
+                    to_regularize_rel = to_regularize_rel,
+                    progress = progress,
+                    verbose = verbose,
+                ),
+            )
+        end
 
-    figsize = 2 .* apply_paper_theme!(
-        double_column = double_column,
-        magnification = magnification,
+    if verbose
+        for (observable, series) in pairs(distinguishability_series)
+            for row in series
+                if distinguishability == :permutation
+                    println(
+                        "observable_distinguishability_plotmatrix ",
+                        observable,
+                        " scalar=", row.scalar,
+                        " D_obs=", row.D_obs,
+                        " p_value=", row.p_value,
+                        " z_emp=", row.z_emp,
+                        " z_coll=", row.z_coll,
+                        " std_Ts=", row.std_Ts,
+                    )
+                elseif distinguishability == :tv
+                    println(
+                        "observable_distinguishability_plotmatrix ",
+                        observable,
+                        " scalar=", row.scalar,
+                        " D_tv=", row.D_tv,
+                        " bayes_accuracy=", row.bayes_accuracy,
+                        " tv_bias_mean=", row.tv_bias_mean,
+                        " tv_bias_std=", row.tv_bias_std,
+                    )
+                elseif distinguishability == :energy
+                    println(
+                        "observable_distinguishability_plotmatrix ",
+                        observable,
+                        " scalar=", row.scalar,
+                        " D=", row.D,
+                        isnothing(num_draws) ? "" : " std=$(row.std)",
+                    )
+                elseif distinguishability == :mutual_information
+                    println(
+                        "observable_distinguishability_plotmatrix ",
+                        observable,
+                        " scalar=", row.scalar,
+                        " D_mi=", row.D,
+                    )
+                else
+                    println(
+                        "observable_distinguishability_plotmatrix ",
+                        observable,
+                        " scalar=", row.scalar,
+                        " D_mahalanobis=", row.D,
+                    )
+                end
+            end
+        end
+    end
+
+    panel4_key =
+        distinguishability == :permutation ? :p_value :
+        distinguishability == :tv ? :bayes_accuracy :
+        :D
+    panel4_data = [
+        (row.scalar, [getproperty(row, panel4_key)], zeros(1))
+        for row in distinguishability_series.connectivity_link
+    ]
+    append!(panel4_data, ((row.scalar, [getproperty(row, panel4_key)], zeros(1)) for row in distinguishability_series.max_pathlen))
+    append!(panel4_data, ((row.scalar, [getproperty(row, panel4_key)], zeros(1)) for row in distinguishability_series.ev_sym_link))
+
+    (; vmin, vmax, denom) = compute_color_scale([d1, d2, d3, panel4_data]; log_color_scaling = log_binning)
+    fig, axs = create_plot_matrix_figure_and_axes(;
         logscale_x = logscale_x,
         logscale_y = logscale_y,
+        double_column = double_column,
+        magnification = magnification,
+        top_xaxis = top_xaxis,
+        right_yaxis = right_yaxis,
+        rowgap = rowgap,
+        colgap = colgap,
     )
 
-    fig = CairoMakie.Figure(size = figsize)
-    if rowgap !== nothing
-        fig.layout.default_rowgap = CairoMakie.Fixed(rowgap)
-    end
-    if colgap !== nothing
-        fig.layout.default_colgap = CairoMakie.Fixed(colgap)
-    end
-    axs = [
-        CairoMakie.Axis(fig[1,1]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-        CairoMakie.Axis(fig[1,2]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-        CairoMakie.Axis(fig[2,1]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-        CairoMakie.Axis(fig[2,2]; xscale = logscale_x ? log10 : identity, yscale = logscale_y ? log10 : identity),
-    ]
-
-    if top_xaxis
-        for ax in (axs[1], axs[2])
-            ax.xaxisposition = :top
-            ax.xticklabelalign = (:center, :bottom)
-        end
-    end
-    if right_yaxis
-        for ax in (axs[2], axs[4])
-            ax.yaxisposition = :right
-            ax.yticklabelalign = (:left, :center)
-            ax.flip_ylabel = true
-        end
-        for (ax, cell) in zip((axs[2], axs[4]), (fig[1,2], fig[2,2]))
-            ax_left = CairoMakie.Axis(cell;
-                xscale = logscale_x ? log10 : identity,
-                yscale = logscale_y ? log10 : identity,
-                xlabelvisible = false,
-                xticksvisible = false,
-                xticklabelsvisible = false,
-                xgridvisible = false,
-                xminorgridvisible = false,
-                yticklabelsvisible = false,
-                ygridvisible = false,
-                yminorgridvisible = false,
-                backgroundcolor = :transparent,
-            )
-            ax_left.yaxisposition = :left
-            ax_left.rightspinevisible = false
-            CairoMakie.linkxaxes!(ax, ax_left)
-            CairoMakie.linkyaxes!(ax, ax_left)
-        end
-    end
-
-    xt = xticks === nothing ? fill(nothing, 4) : xticks
-    yt = yticks === nothing ? fill(nothing, 4) : yticks
-    if !(length(xt) == 4)
-        throw(ArgumentError("xticks must have length 4"))
-    end
-    if !(length(yt) == 4)
-        throw(ArgumentError("yticks must have length 4"))
-    end
+    xt = normalize_panel_ticks(xticks, "xticks")
+    yt = normalize_panel_ticks(yticks, "yticks")
     plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, plot_std = plot_std,
+        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
-    # panel 4: scalar evolution of selected distinguishability for three observables + total
     ax4 = axs[4]
-    xlabel[4] !== nothing && (ax4.xlabel = xlabel[4])
-    ylabel[4] !== nothing && (ax4.ylabel = ylabel[4])
-    xlim[4] !== nothing && CairoMakie.xlims!(ax4, xlim[4]...)
-    ylim[4] !== nothing && CairoMakie.ylims!(ax4, ylim[4]...)
-    if xt[4] !== nothing
-        ax4.xticks = ([t[1] for t in xt[4]], [t[2] for t in xt[4]])
+    apply_axis_metadata!(ax4, xlim[4], ylim[4], xlabel[4], ylabel[4], xt[4], yt[4])
+    observable_labels = observable_distinguishability_symbol_labels()
+    panel4_specs = [
+        (:connectivity_link, distinguishability_series.connectivity_link, nothing),
+        (:max_pathlen, distinguishability_series.max_pathlen, :dash),
+        (:ev_sym_link, distinguishability_series.ev_sym_link, :dot),
+    ]
+    for (observable, series, linestyle) in panel4_specs
+        xs = Float64[row.scalar for row in series]
+        ys = Float64[getproperty(row, panel4_key) for row in series]
+        CairoMakie.lines!(ax4, xs, ys; label = getproperty(observable_labels, observable), linestyle = linestyle)
     end
-    if yt[4] !== nothing
-        ax4.yticks = ([t[1] for t in yt[4]], [t[2] for t in yt[4]])
-    end
+    CairoMakie.axislegend(ax4; position = legendpos)
 
-    measure_val = function (vecs_a, vecs_b)
-        if distinguishability == :energy
-            return histogram_distinguishability(vecs_a, vecs_b).D
-        elseif distinguishability == :mahalanobis
-            return mahalanobis_gap_distinguishability(
-                vecs_a,
-                vecs_b;
-                regulator = regulator,
-                R = R,
-                q = q,
-                alpha = alpha,
-                rng = Random.Xoshiro(rand(rng, UInt64)),
-                symmetric = false,
-                projection_tolerance = projection_tolerance,
-                to_regularize_rel = to_regularize_rel,
-                progress = progress,
-            ).D
-        else
-            return distinguishability_mutual_information(
-                vecs_a,
-                vecs_b;
-                k = mutual_information_k,
-                pca_mode = mutual_information_pca_mode,
-                pca_dim = mutual_information_pca_dim,
-                explained_variance = mutual_information_explained_variance,
-                eigenvalue_rtol = mutual_information_eigenvalue_rtol,
-                max_per_class = mutual_information_max_per_class,
-                rng = Random.Xoshiro(rand(rng, UInt64)),
-            ).D_mi
-        end
-    end
+    add_plot_matrix_colorbar!(
+        fig,
+        vmin,
+        vmax;
+        colormap = colormap,
+        invert_color_scaling = invert_color_scaling,
+        log_color_scaling = log_binning,
+        colorbar_label = colorbar_label,
+        colorbar_ticks = colorbar_ticks,
+        colorbar_pos = colorbar_pos,
+        colorbar_size = colorbar_size,
+        colorbar_side = colorbar_side,
+        colorbar_label_pos = colorbar_label_pos,
+    )
 
-    conn_bins = Dict(bin_scalar_pairs(connectivity_data_single[1], num_bins, nothing))
-    max_bins = Dict(bin_scalar_pairs(max_pathlen_data_single[1], num_bins, nothing))
-    ev_bins = Dict(bin_scalar_pairs(ev_sym_link_data_single[1], num_bins, nothing))
+    CairoMakie.save(fig_path, fig)
+    return return_axis ? (fig, axs) : fig
+end
 
-    conn_s = sort(collect(keys(conn_bins)))
-    max_s = sort(collect(keys(max_bins)))
-    ev_s = sort(collect(keys(ev_bins)))
-    total_s = sort(intersect(intersect(conn_s, max_s), ev_s))
+comparison_kind_for_observable_plot(kind::AbstractString) =
+    kind == "minkowski_quasicrystal" ? "minkowski_sprinkling" : "manifoldlike_simply_connected"
 
-    conn_y = [measure_val(conn_bins[s], connectivity_ref) for s in conn_s]
-    max_y = [measure_val(max_bins[s], max_pathlen_ref) for s in max_s]
-    ev_y = [measure_val(ev_bins[s], ev_sym_link_ref) for s in ev_s]
-    total_y = Float64[]
-    for s in total_s
-        vecs_a, vecs_b = concatenate_hists(
-            [conn_bins[s], connectivity_ref],
-            [max_bins[s], max_pathlen_ref],
-            [ev_bins[s], ev_sym_link_ref],
+flatten_scalar_paired_values(groups::AbstractVector{<:AbstractVector}) =
+    getindex.(length(groups) == 1 ? groups[1] : vcat(groups...), 1)
+
+flatten_loaded_values(groups::AbstractVector{<:AbstractVector}) =
+    length(groups) == 1 ? groups[1] : vcat(groups...)
+
+function compute_mutual_information_scalar_series(
+    data_groups::AbstractVector{<:AbstractVector},
+    ref_values::AbstractVector;
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+    k::Int = 5,
+    pca_mode::Symbol = :cutoff,
+    pca_dim::Int = 32,
+    explained_variance::Real = 0.99,
+    eigenvalue_rtol::Real = 1e-6,
+    max_per_class::Union{Nothing,Int} = nothing,
+    rng = Random.default_rng(),
+    verbose::Bool = false,
+)
+    pairs = length(data_groups) == 1 ? data_groups[1] : vcat(data_groups...)
+    bins = group_scalar_pairs_for_plot(
+        pairs;
+        num_bins = num_bins,
+        bin_edges = bin_edges,
+        log_binning = log_binning,
+    )
+    seeds = rand(rng, UInt64, length(bins))
+    out = Vector{NamedTuple}(undef, length(bins))
+    for (i, (s, vals)) in enumerate(bins)
+        res = distinguishability_mutual_information(
+            vals,
+            ref_values;
+            k = k,
+            pca_mode = pca_mode,
+            pca_dim = pca_dim,
+            explained_variance = explained_variance,
+            eigenvalue_rtol = eigenvalue_rtol,
+            max_per_class = max_per_class,
+            rng = Random.Xoshiro(seeds[i]),
+            verbose = verbose,
         )
-        push!(total_y, measure_val(vecs_a, vecs_b))
+        out[i] = (scalar = s, D = res.D_mi)
+    end
+    return out
+end
+
+function compute_mahalanobis_scalar_series(
+    data_groups::AbstractVector{<:AbstractVector},
+    ref_values::AbstractVector;
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+    regulator::Float64 = 0.0,
+    R::Int = 1000,
+    q::Float64 = 0.0,
+    alpha::Float64 = 0.05,
+    rng = Random.default_rng(),
+    projection_tolerance::Float64 = 1e-6,
+    to_regularize_rel::Float64 = 0.01,
+    progress::Bool = false,
+    verbose::Bool = false,
+)
+    pairs = length(data_groups) == 1 ? data_groups[1] : vcat(data_groups...)
+    bins = group_scalar_pairs_for_plot(
+        pairs;
+        num_bins = num_bins,
+        bin_edges = bin_edges,
+        log_binning = log_binning,
+    )
+    seeds = rand(rng, UInt64, length(bins))
+    out = Vector{NamedTuple}(undef, length(bins))
+    for (i, (s, vals)) in enumerate(bins)
+        res = mahalanobis_gap_distinguishability(
+            vals,
+            ref_values;
+            regulator = regulator,
+            R = R,
+            q = q,
+            alpha = alpha,
+            rng = Random.Xoshiro(seeds[i]),
+            symmetric = false,
+            projection_tolerance = projection_tolerance,
+            to_regularize_rel = to_regularize_rel,
+            progress = progress,
+            verbose = verbose,
+        )
+        out[i] = (scalar = s, D = res.D)
+    end
+    return out
+end
+
+function compute_energy_scalar_series(
+    data_groups::AbstractVector{<:AbstractVector},
+    ref_values::AbstractVector;
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+    num_draws::Union{Nothing,Int} = nothing,
+    distance::Symbol = :Hellinger,
+    rng = Random.default_rng(),
+    progress::Bool = false,
+    verbose::Bool = false,
+)
+    pairs = length(data_groups) == 1 ? data_groups[1] : vcat(data_groups...)
+    bins = group_scalar_pairs_for_plot(
+        pairs;
+        num_bins = num_bins,
+        bin_edges = bin_edges,
+        log_binning = log_binning,
+    )
+    out = Vector{NamedTuple}(undef, length(bins))
+    pm = progress ? ProgressMeter.Progress(length(bins); desc = "energy scalar bins") : nothing
+    for (k, (s, vals)) in enumerate(bins)
+        res = isnothing(num_draws) ?
+            energy_based_histogram_distinguishability(vals, ref_values; distance = distance, verbose = verbose) :
+            energy_based_histogram_distinguishability(vals, ref_values, num_draws; rng = rng, distance = distance, verbose = verbose)
+        out[k] = isnothing(num_draws) ? (scalar = s, D = res.D) : (scalar = s, D = res.D, std = res.std)
+        progress && ProgressMeter.next!(pm)
+    end
+    return out
+end
+
+function compute_permutation_scalar_series(
+    data_groups::AbstractVector{<:AbstractVector},
+    ref_values::AbstractVector;
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+    num_draws::Union{Nothing,Int} = nothing,
+    n_perm::Int = 1000,
+    distance::Symbol = :Hellinger,
+    rng = Random.default_rng(),
+    progress::Bool = false,
+    verbose::Bool = false,
+)
+    pairs = length(data_groups) == 1 ? data_groups[1] : vcat(data_groups...)
+    bins = group_scalar_pairs_for_plot(
+        pairs;
+        num_bins = num_bins,
+        bin_edges = bin_edges,
+        log_binning = log_binning,
+    )
+    out = Vector{NamedTuple}(undef, length(bins))
+    pm = progress ? ProgressMeter.Progress(length(bins); desc = "perm scalar bins") : nothing
+    for (k, (s, vals)) in enumerate(bins)
+        res = isnothing(num_draws) ?
+            histogram_distinguishability_permutation(vals, ref_values; n_perm = n_perm, rng = rng, progress = false, distance = distance, verbose = verbose) :
+            histogram_distinguishability_permutation(vals, ref_values, num_draws; n_perm = n_perm, rng = rng, progress = false, distance = distance, verbose = verbose)
+        out[k] = (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+        progress && ProgressMeter.next!(pm)
+    end
+    return out
+end
+
+function compute_total_variation_scalar_series(
+    data_groups::AbstractVector{<:AbstractVector},
+    ref_values::AbstractVector;
+    num_bins::Union{Nothing,Int} = nothing,
+    bin_edges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    log_binning::Bool = false,
+    tv_quantization_digits::Int = 8,
+    check_bias::Bool = false,
+    bias_num_splits::Int = 20,
+    rng = Random.default_rng(),
+    progress::Bool = false,
+    verbose::Bool = false,
+)
+    pairs = length(data_groups) == 1 ? data_groups[1] : vcat(data_groups...)
+    bins = group_scalar_pairs_for_plot(
+        pairs;
+        num_bins = num_bins,
+        bin_edges = bin_edges,
+        log_binning = log_binning,
+    )
+    out = Vector{NamedTuple}(undef, length(bins))
+    pm = progress ? ProgressMeter.Progress(length(bins); desc = "tv scalar bins") : nothing
+    for (k, (s, vals)) in enumerate(bins)
+        res = distinguishability_total_variation(
+            vals,
+            ref_values;
+            tv_quantization_digits = tv_quantization_digits,
+            check_bias = check_bias,
+            bias_num_splits = bias_num_splits,
+            rng = rng,
+            verbose = verbose,
+        )
+        out[k] = (
+            scalar = s,
+            D_tv = res.D_tv,
+            bayes_accuracy = res.bayes_accuracy,
+            tv_bias_mean = res.tv_bias_mean,
+            tv_bias_std = res.tv_bias_std,
+            D_tv_debiased = res.D_tv_debiased,
+            bayes_accuracy_debiased = res.bayes_accuracy_debiased,
+        )
+        progress && ProgressMeter.next!(pm)
+    end
+    return out
+end
+
+function observable_distinguishability_symbol_labels()
+    return (
+        cardinalities = LaTeXStrings.L"\mathcal{S}_j",
+        ev_sym_link = LaTeXStrings.L"\lambda_j",
+        connectivity_link = LaTeXStrings.L"P^{\mathrm{link}}_j",
+        max_pathlen = LaTeXStrings.L"\mathcal{H}_j",
+    )
+end
+
+"""
+    distinguishability_plot_row(
+        kind::String,
+        scalar::Symbol,
+        fig_path::String;
+        size = 2048,
+        ...
+    )
+
+Compute and plot scalar-conditioned distinguishability curves for one dataset kind
+against its comparison dataset in a 1×3 row.
+
+Panels:
+1. energy-based distinguishability
+2. mutual-information distinguishability
+3. mahalanobis distinguishability
+
+Each panel overlays the observables `cardinalities`, `ev_sym_link`,
+`connectivity_link`, and `max_pathlen`. A shared legend is placed to the right
+of the full row.
+"""
+function distinguishability_plot_row(
+    kind::String,
+    scalar::Symbol,
+    fig_path::String;
+    size::Int = 2048,
+    comp_kind::Union{Nothing,String} = nothing,
+    sqrt_scalars::Bool = false,
+    num_bins::Union{Nothing,Int} = nothing,
+    xlim::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+    ylim_energy::Union{Nothing,Tuple{Float64,Float64}} = (0.0, 1.0),
+    ylim_mutual_information::Union{Nothing,Tuple{Float64,Float64}} = (0.0, 1.0),
+    ylim_mahalanobis::Union{Nothing,Tuple{Float64,Float64}} = (0.0, 1.0),
+    xticks = nothing,
+    yticks_energy = nothing,
+    yticks_mutual_information = nothing,
+    yticks_mahalanobis = nothing,
+    regulator::Float64 = 0.0,
+    R::Int = 1000,
+    q::Float64 = 0.0,
+    alpha::Float64 = 0.05,
+    rng = Random.default_rng(),
+    projection_tolerance::Float64 = 1e-6,
+    to_regularize_rel::Float64 = 0.01,
+    progress::Bool = false,
+    energy_distance::Symbol = :Hellinger,
+    mutual_information_k::Int = 5,
+    mutual_information_pca_mode::Symbol = :cutoff,
+    mutual_information_pca_dim::Int = 32,
+    mutual_information_explained_variance::Real = 0.99,
+    mutual_information_eigenvalue_rtol::Real = 1e-6,
+    mutual_information_max_per_class::Union{Nothing,Int} = nothing,
+    magnification::Real = 1.0,
+    verbose::Bool = false,
+)::CairoMakie.Figure
+    if !(size > 0)
+        throw(DomainError(size, "size must be > 0"))
+    end
+    if !(magnification > 0)
+        throw(DomainError(magnification, "magnification must be > 0"))
     end
 
-    CairoMakie.lines!(ax4, conn_s, conn_y, label = "connectivity_link")
-    CairoMakie.lines!(ax4, max_s, max_y, label = "max_pathlen")
-    CairoMakie.lines!(ax4, ev_s, ev_y, label = "ev_sym_link")
-    CairoMakie.lines!(ax4, total_s, total_y, label = "total_selected")
-    CairoMakie.axislegend(ax4)
+    comp_name = isnothing(comp_kind) ? comparison_kind_for_observable_plot(kind) : comp_kind
+    obs_paths = data_paths(["$(kind)_$(size)_10000/statistics.jld2"])
+    comp_paths = data_paths(["$(comp_name)_$(size)_10000/statistics.jld2"])
 
-    cb_cmap = invert_color_scaling ? CairoMakie.Reverse(colormap) : colormap
-    cb = if colorbar_pos === nothing
-        if colorbar_side == :right
-            CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
-        elseif colorbar_side == :left
-            CairoMakie.Colorbar(fig[1:2, 0], limits = (vmin, vmax), colormap = cb_cmap)
-        elseif colorbar_side == :top
-            CairoMakie.Colorbar(fig[0, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
-        elseif colorbar_side == :bottom
-            CairoMakie.Colorbar(fig[3, 1:2], limits = (vmin, vmax), colormap = cb_cmap, vertical = false)
-        else
-            throw(ArgumentError("colorbar_side must be one of :left, :right, :top, :bottom"))
-        end
-    else
-        cb = CairoMakie.Colorbar(fig[1:2, 3], limits = (vmin, vmax), colormap = cb_cmap)
-        cb.halign = colorbar_pos[1]
-        cb.valign = colorbar_pos[2]
-        cb.tellwidth = false
-        cb.tellheight = false
-        cb
-    end
-    if colorbar_size !== nothing
-        cb.width = colorbar_size[1]
-        cb.height = colorbar_size[2]
-    end
-    if colorbar_label !== nothing
-        if !(colorbar_label_pos in (:side, :top))
-            throw(ArgumentError("colorbar_label_pos must be :side or :top"))
-        end
-        if colorbar_label_pos == :top
-            cb.label = ""
-            if colorbar_side == :left
-                lbl = CairoMakie.Label(fig[1:2, 0], colorbar_label; tellwidth = false, tellheight = false)
-                lbl.halign = 0.5
-                lbl.valign = 1.055
-            elseif colorbar_side == :right
-                lbl = CairoMakie.Label(fig[1:2, 3], colorbar_label; tellwidth = false, tellheight = false)
-                lbl.halign = 0.5
-                lbl.valign = 1.055
-            else
-                cb.label = colorbar_label
+    data_loaded = load_observable_plot_matrix_observables(obs_paths, scalar)
+    comp_loaded = load_observable_plot_matrix_observables(comp_paths, scalar)
+
+    normalized_cardinalities_data = normalize_hists(data_loaded.cardinalities_hists)
+    normalized_cardinalities_comp = normalize_hists(comp_loaded.cardinalities_hists)
+    normalized_connectivity_data = normalize_hists(data_loaded.connectivity_link_hists)
+    normalized_connectivity_comp = normalize_hists(comp_loaded.connectivity_link_hists)
+    normalized_max_pathlen_data = normalize_hists(data_loaded.max_pathlen_hists; normalization = 1)
+    normalized_max_pathlen_comp = normalize_hists(comp_loaded.max_pathlen_hists; normalization = 1)
+
+    maybe_sqrt_pairs(pairs) = sqrt_scalars ? [(v, sqrt(Float64(s))) for (v, s) in pairs] : pairs
+    normalized_cardinalities_data = [maybe_sqrt_pairs(g) for g in normalized_cardinalities_data]
+    normalized_connectivity_data = [maybe_sqrt_pairs(g) for g in normalized_connectivity_data]
+    normalized_max_pathlen_data = [maybe_sqrt_pairs(g) for g in normalized_max_pathlen_data]
+    ev_sym_link_data = [maybe_sqrt_pairs(g) for g in data_loaded.ev_sym_link]
+
+    observable_groups = (
+        cardinalities = normalized_cardinalities_data,
+        ev_sym_link = ev_sym_link_data,
+        connectivity_link = normalized_connectivity_data,
+        max_pathlen = normalized_max_pathlen_data,
+    )
+    observable_refs = (
+        cardinalities = flatten_loaded_values(normalized_cardinalities_comp),
+        ev_sym_link = flatten_loaded_values(comp_loaded.ev_sym_link),
+        connectivity_link = flatten_loaded_values(normalized_connectivity_comp),
+        max_pathlen = flatten_loaded_values(normalized_max_pathlen_comp),
+    )
+
+    energy_series = (
+        cardinalities = scalar_bin_distinguishability(observable_groups.cardinalities, observable_refs.cardinalities; num_bins = num_bins, distance = energy_distance, verbose = verbose),
+        ev_sym_link = scalar_bin_distinguishability(observable_groups.ev_sym_link, observable_refs.ev_sym_link; num_bins = num_bins, distance = energy_distance, verbose = verbose),
+        connectivity_link = scalar_bin_distinguishability(observable_groups.connectivity_link, observable_refs.connectivity_link; num_bins = num_bins, distance = energy_distance, verbose = verbose),
+        max_pathlen = scalar_bin_distinguishability(observable_groups.max_pathlen, observable_refs.max_pathlen; num_bins = num_bins, distance = energy_distance, verbose = verbose),
+    )
+    mi_series = (
+        cardinalities = compute_mutual_information_scalar_series(observable_groups.cardinalities, observable_refs.cardinalities;
+            num_bins = num_bins, k = mutual_information_k, pca_mode = mutual_information_pca_mode,
+            pca_dim = mutual_information_pca_dim, explained_variance = mutual_information_explained_variance,
+            eigenvalue_rtol = mutual_information_eigenvalue_rtol, max_per_class = mutual_information_max_per_class,
+            rng = rng, verbose = verbose),
+        ev_sym_link = compute_mutual_information_scalar_series(observable_groups.ev_sym_link, observable_refs.ev_sym_link;
+            num_bins = num_bins, k = mutual_information_k, pca_mode = mutual_information_pca_mode,
+            pca_dim = mutual_information_pca_dim, explained_variance = mutual_information_explained_variance,
+            eigenvalue_rtol = mutual_information_eigenvalue_rtol, max_per_class = mutual_information_max_per_class,
+            rng = rng, verbose = verbose),
+        connectivity_link = compute_mutual_information_scalar_series(observable_groups.connectivity_link, observable_refs.connectivity_link;
+            num_bins = num_bins, k = mutual_information_k, pca_mode = mutual_information_pca_mode,
+            pca_dim = mutual_information_pca_dim, explained_variance = mutual_information_explained_variance,
+            eigenvalue_rtol = mutual_information_eigenvalue_rtol, max_per_class = mutual_information_max_per_class,
+            rng = rng, verbose = verbose),
+        max_pathlen = compute_mutual_information_scalar_series(observable_groups.max_pathlen, observable_refs.max_pathlen;
+            num_bins = num_bins, k = mutual_information_k, pca_mode = mutual_information_pca_mode,
+            pca_dim = mutual_information_pca_dim, explained_variance = mutual_information_explained_variance,
+            eigenvalue_rtol = mutual_information_eigenvalue_rtol, max_per_class = mutual_information_max_per_class,
+            rng = rng, verbose = verbose),
+    )
+    mahalanobis_series = (
+        cardinalities = compute_mahalanobis_scalar_series(observable_groups.cardinalities, observable_refs.cardinalities;
+            num_bins = num_bins, regulator = regulator, R = R, q = q, alpha = alpha, rng = rng,
+            projection_tolerance = projection_tolerance, to_regularize_rel = to_regularize_rel,
+            progress = progress, verbose = verbose),
+        ev_sym_link = compute_mahalanobis_scalar_series(observable_groups.ev_sym_link, observable_refs.ev_sym_link;
+            num_bins = num_bins, regulator = regulator, R = R, q = q, alpha = alpha, rng = rng,
+            projection_tolerance = projection_tolerance, to_regularize_rel = to_regularize_rel,
+            progress = progress, verbose = verbose),
+        connectivity_link = compute_mahalanobis_scalar_series(observable_groups.connectivity_link, observable_refs.connectivity_link;
+            num_bins = num_bins, regulator = regulator, R = R, q = q, alpha = alpha, rng = rng,
+            projection_tolerance = projection_tolerance, to_regularize_rel = to_regularize_rel,
+            progress = progress, verbose = verbose),
+        max_pathlen = compute_mahalanobis_scalar_series(observable_groups.max_pathlen, observable_refs.max_pathlen;
+            num_bins = num_bins, regulator = regulator, R = R, q = q, alpha = alpha, rng = rng,
+            projection_tolerance = projection_tolerance, to_regularize_rel = to_regularize_rel,
+            progress = progress, verbose = verbose),
+    )
+
+    base_size = apply_paper_theme!(double_column = true, magnification = magnification)
+    fig = CairoMakie.Figure(size = (1.35 * base_size[1], base_size[2]))
+    axs = [
+        CairoMakie.Axis(fig[1, 1]),
+        CairoMakie.Axis(fig[1, 2]),
+        CairoMakie.Axis(fig[1, 3]),
+    ]
+
+    metric_specs = [
+        (axs[1], energy_series, LaTeXStrings.L"D_{\mathrm{energy}}", ylim_energy, yticks_energy),
+        (axs[2], mi_series, LaTeXStrings.L"D_{\mathrm{MI}}", ylim_mutual_information, yticks_mutual_information),
+        (axs[3], mahalanobis_series, LaTeXStrings.L"D_{\mathrm{Mah}}", ylim_mahalanobis, yticks_mahalanobis),
+    ]
+    observable_labels = observable_distinguishability_symbol_labels()
+    observable_order = [:cardinalities, :ev_sym_link, :connectivity_link, :max_pathlen]
+
+    legend_handles = Any[]
+    legend_labels = Any[]
+    for (panel_idx, (ax, series_group, ylabel_i, ylim_i, yticks_i)) in enumerate(metric_specs)
+        ax.xlabel = string(scalar)
+        ax.ylabel = ylabel_i
+        xlim !== nothing && CairoMakie.xlims!(ax, xlim...)
+        ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
+        xticks !== nothing && (ax.xticks = xticks)
+        yticks_i !== nothing && (ax.yticks = yticks_i)
+        for observable in observable_order
+            series = getproperty(series_group, observable)
+            xs = Float64[row.scalar for row in series]
+            ys = Float64[row.D for row in series]
+            plt = CairoMakie.lines!(ax, xs, ys; label = panel_idx == 1 ? getproperty(observable_labels, observable) : nothing)
+            if panel_idx == 1
+                push!(legend_handles, plt)
+                push!(legend_labels, getproperty(observable_labels, observable))
             end
-        else
-            if colorbar_side == :left
-                cb.label = ""
-                lbl = CairoMakie.Label(
-                    fig[1:2, -1],
-                    colorbar_label;
-                    tellwidth = true,
-                    tellheight = false,
-                )
-                lbl.halign = 0.5
-                lbl.valign = 0.5
-            else
-                cb.label = colorbar_label
-            end
         end
     end
-    if colorbar_ticks !== nothing
-        cb.ticks = ([t[1] for t in colorbar_ticks], [t[2] for t in colorbar_ticks])
-    end
+
+    CairoMakie.colgap!(fig.layout, 16)
+    legend = CairoMakie.Legend(fig[1, 4], legend_handles, legend_labels)
+    legend.tellheight = false
 
     CairoMakie.save(fig_path, fig)
     return fig

@@ -68,8 +68,8 @@ function compute_statistics(
         throw(ArgumentError("unsupported kind=$kind; expected one of $(collect(supported_kinds))"))
     end
 
-    in_deg, out_deg  = CausalSetZoology.degrees(cset)
-    in_deg_link, out_deg_link = CausalSetZoology.degrees(links)
+    in_deg, out_deg, deg = CausalSetZoology.degrees(cset)
+    in_deg_link, out_deg_link, deg_link = CausalSetZoology.degrees(links)
 
     tdeg = begin
         StatsBase.countmap(in_deg), # Dict{Int,Int}: value → count
@@ -85,7 +85,14 @@ function compute_statistics(
         Statistics.mean(out_deg),
         Statistics.quantile(out_deg, 0.25),
         Statistics.quantile(out_deg, 0.75),
-        Statistics.quantile(out_deg, 0.5)
+        Statistics.quantile(out_deg, 0.5),
+        StatsBase.countmap(deg),
+        minimum(deg),
+        maximum(deg),
+        Statistics.mean(deg),
+        Statistics.quantile(deg, 0.25),
+        Statistics.quantile(deg, 0.75),
+        Statistics.quantile(deg, 0.5)
     end
 
     tdeg_link = begin
@@ -102,7 +109,14 @@ function compute_statistics(
         Statistics.mean(out_deg_link),
         Statistics.quantile(out_deg_link, 0.25),
         Statistics.quantile(out_deg_link, 0.75),
-        Statistics.quantile(out_deg_link, 0.5)
+        Statistics.quantile(out_deg_link, 0.5),
+        StatsBase.countmap(deg_link),
+        minimum(deg_link),
+        maximum(deg_link),
+        Statistics.mean(deg_link),
+        Statistics.quantile(deg_link, 0.25),
+        Statistics.quantile(deg_link, 0.75),
+        Statistics.quantile(deg_link, 0.5)
     end
 
     t_lap_link = begin
@@ -172,7 +186,14 @@ function compute_statistics(
     out_degree_mean,
     out_degree_q25,
     out_degree_q75,
-    out_degree_median = tdeg
+    out_degree_median,
+    degree_hist,
+    degree_min,
+    degree_max,
+    degree_mean,
+    degree_q25,
+    degree_q75,
+    degree_median = tdeg
     
     in_degree_hist_link,
     in_degree_min_link,
@@ -187,7 +208,14 @@ function compute_statistics(
     out_degree_mean_link,
     out_degree_q25_link,
     out_degree_q75_link,
-    out_degree_median_link = tdeg_link
+    out_degree_median_link,
+    degree_hist_link,
+    degree_min_link,
+    degree_max_link,
+    degree_mean_link,
+    degree_q25_link,
+    degree_q75_link,
+    degree_median_link = tdeg_link
 
     max_pathlen_hist,
     num_sources,
@@ -240,6 +268,14 @@ function compute_statistics(
         out_degree_q25 = out_degree_q25,
         out_degree_q75 = out_degree_q75,
         out_degree_median = out_degree_median,
+        # full degree
+        degree_hist = degree_hist,
+        degree_min = degree_min,
+        degree_max = degree_max,
+        degree_mean = degree_mean,
+        degree_q25 = degree_q25,
+        degree_q75 = degree_q75,
+        degree_median = degree_median,
 
         # in degree link
         in_degree_hist_link = in_degree_hist_link,
@@ -258,6 +294,14 @@ function compute_statistics(
         out_degree_q25_link = out_degree_q25_link,
         out_degree_q75_link = out_degree_q75_link,
         out_degree_median_link = out_degree_median_link,
+        # full degree link
+        degree_hist_link = degree_hist_link,
+        degree_min_link = degree_min_link,
+        degree_max_link = degree_max_link,
+        degree_mean_link = degree_mean_link,
+        degree_q25_link = degree_q25_link,
+        degree_q75_link = degree_q75_link,
+        degree_median_link = degree_median_link,
 
         # pathlens
         max_pathlen_hist = max_pathlen_hist,

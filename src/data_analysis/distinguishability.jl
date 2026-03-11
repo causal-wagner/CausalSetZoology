@@ -276,12 +276,42 @@ Returns a vector of `(s1, s2, rel_change, D)`.
 function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}};
     num_bins::Union{Nothing,Int} = nothing,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability"; num_bins = num_bins)
-    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
-        res = histogram_distinguishability(vals1, vals2)
-        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D)
+    bins = ctx.bins
+    n_bins = length(bins)
+    total = n_bins * (n_bins - 1) ÷ 2
+    tasks = Vector{Tuple{Int,Int}}(undef, total)
+    t = 1
+    for i in 1:n_bins
+        for j in (i + 1):n_bins
+            tasks[t] = (i, j)
+            t += 1
+        end
     end
+    out = Vector{NamedTuple}(undef, total)
+    compute_task = function (k::Int)
+        i, j = tasks[k]
+        s1, vals1 = bins[i]
+        s2, vals2 = bins[j]
+        res = energy_based_histogram_distinguishability(vals1, vals2; distance = distance, verbose = verbose)
+        return (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D)
+    end
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for tid in 1:n_threads
+            for k in tid:n_threads:total
+                @inbounds out[k] = compute_task(k)
+            end
+        end
+    else
+        for k in 1:total
+            @inbounds out[k] = compute_task(k)
+        end
+    end
+    return out
 end
 
 """
@@ -315,12 +345,44 @@ function scalar_bin_distinguishability(
     num_draws::Int;
     num_bins::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability"; num_bins = num_bins)
-    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
-        res = histogram_distinguishability(vals1, vals2, num_draws; rng = rng)
-        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D, std = res.std)
+    bins = ctx.bins
+    n_bins = length(bins)
+    total = n_bins * (n_bins - 1) ÷ 2
+    tasks = Vector{Tuple{Int,Int}}(undef, total)
+    t = 1
+    for i in 1:n_bins
+        for j in (i + 1):n_bins
+            tasks[t] = (i, j)
+            t += 1
+        end
     end
+    seeds = rand(rng, UInt64, total)
+    out = Vector{NamedTuple}(undef, total)
+    compute_task = function (k::Int)
+        i, j = tasks[k]
+        s1, vals1 = bins[i]
+        s2, vals2 = bins[j]
+        rng_k = Random.Xoshiro(seeds[k])
+        res = energy_based_histogram_distinguishability(vals1, vals2, num_draws; rng = rng_k, distance = distance, verbose = verbose)
+        return (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D = res.D, std = res.std)
+    end
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for tid in 1:n_threads
+            for k in tid:n_threads:total
+                @inbounds out[k] = compute_task(k)
+            end
+        end
+    else
+        for k in 1:total
+            @inbounds out[k] = compute_task(k)
+        end
+    end
+    return out
 end
 
 """
@@ -351,6 +413,8 @@ function scalar_bin_distinguishability(
     data::Vector{Vector{Tuple{T,Real}}},
     ref::AbstractVector;
     num_bins::Union{Nothing,Int} = nothing,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(
         data,
@@ -358,10 +422,27 @@ function scalar_bin_distinguishability(
         num_bins = num_bins,
         ref = ref,
     )
-    return _map_scalar_bin_reference(ctx.bins) do s, vals
-        res = histogram_distinguishability(vals, ref)
-        (scalar = s, D = res.D)
+    bins = ctx.bins
+    total = length(bins)
+    out = Vector{NamedTuple}(undef, total)
+    compute_idx = function (k::Int)
+        s, vals = bins[k]
+        res = energy_based_histogram_distinguishability(vals, ref; distance = distance, verbose = verbose)
+        return (scalar = s, D = res.D)
     end
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for tid in 1:n_threads
+            for k in tid:n_threads:total
+                @inbounds out[k] = compute_idx(k)
+            end
+        end
+    else
+        for k in 1:total
+            @inbounds out[k] = compute_idx(k)
+        end
+    end
+    return out
 end
 
 """
@@ -396,6 +477,8 @@ function scalar_bin_distinguishability(
     num_draws::Int;
     num_bins::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(
         data,
@@ -403,10 +486,29 @@ function scalar_bin_distinguishability(
         num_bins = num_bins,
         ref = ref,
     )
-    return _map_scalar_bin_reference(ctx.bins) do s, vals
-        res = histogram_distinguishability(vals, ref, num_draws; rng = rng)
-        (scalar = s, D = res.D, std = res.std)
+    bins = ctx.bins
+    total = length(bins)
+    seeds = rand(rng, UInt64, total)
+    out = Vector{NamedTuple}(undef, total)
+    compute_idx = function (k::Int)
+        s, vals = bins[k]
+        rng_k = Random.Xoshiro(seeds[k])
+        res = energy_based_histogram_distinguishability(vals, ref, num_draws; rng = rng_k, distance = distance, verbose = verbose)
+        return (scalar = s, D = res.D, std = res.std)
     end
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for tid in 1:n_threads
+            for k in tid:n_threads:total
+                @inbounds out[k] = compute_idx(k)
+            end
+        end
+    else
+        for k in 1:total
+            @inbounds out[k] = compute_idx(k)
+        end
+    end
+    return out
 end
 
 """
@@ -437,12 +539,27 @@ function scalar_bin_distinguishability_permutation(
     num_bins::Union{Nothing,Int} = nothing,
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability_permutation"; num_bins = num_bins)
-    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
-        res = histogram_distinguishability_permutation(vals1, vals2; n_perm = n_perm, rng = rng)
-        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+    n_bins = length(ctx.bins)
+    total = n_bins * (n_bins - 1) ÷ 2
+    out = Vector{NamedTuple}(undef, total)
+    k = 1
+    pm = progress ? ProgressMeter.Progress(total; desc = "perm scalar bins") : nothing
+    for i in 1:n_bins
+        s1, vals1 = ctx.bins[i]
+        for j in (i + 1):n_bins
+            s2, vals2 = ctx.bins[j]
+            res = histogram_distinguishability_permutation(vals1, vals2; n_perm = n_perm, rng = rng, progress = false, distance = distance, verbose = verbose)
+            out[k] = (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+            k += 1
+            progress && ProgressMeter.next!(pm)
+        end
     end
+    return out
 end
 
 """
@@ -477,12 +594,27 @@ function scalar_bin_distinguishability_permutation(
     num_bins::Union{Nothing,Int} = nothing,
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(data, "scalar_bin_distinguishability_permutation"; num_bins = num_bins)
-    return _map_scalar_bin_pairs(ctx.bins) do s1, vals1, s2, vals2
-        res = histogram_distinguishability_permutation(vals1, vals2, num_draws; n_perm = n_perm, rng = rng)
-        (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+    n_bins = length(ctx.bins)
+    total = n_bins * (n_bins - 1) ÷ 2
+    out = Vector{NamedTuple}(undef, total)
+    k = 1
+    pm = progress ? ProgressMeter.Progress(total; desc = "perm scalar bins") : nothing
+    for i in 1:n_bins
+        s1, vals1 = ctx.bins[i]
+        for j in (i + 1):n_bins
+            s2, vals2 = ctx.bins[j]
+            res = histogram_distinguishability_permutation(vals1, vals2, num_draws; n_perm = n_perm, rng = rng, progress = false, distance = distance, verbose = verbose)
+            out[k] = (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+            k += 1
+            progress && ProgressMeter.next!(pm)
+        end
     end
+    return out
 end
 
 """
@@ -517,6 +649,9 @@ function scalar_bin_distinguishability_permutation(
     num_bins::Union{Nothing,Int} = nothing,
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(
         data,
@@ -524,10 +659,14 @@ function scalar_bin_distinguishability_permutation(
         num_bins = num_bins,
         ref = ref,
     )
-    return _map_scalar_bin_reference(ctx.bins) do s, vals
-        res = histogram_distinguishability_permutation(vals, ref; n_perm = n_perm, rng = rng)
-        (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+    out = Vector{NamedTuple}(undef, length(ctx.bins))
+    pm = progress ? ProgressMeter.Progress(length(ctx.bins); desc = "perm scalar bins") : nothing
+    for (k, (s, vals)) in enumerate(ctx.bins)
+        res = histogram_distinguishability_permutation(vals, ref; n_perm = n_perm, rng = rng, progress = false, distance = distance, verbose = verbose)
+        out[k] = (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+        progress && ProgressMeter.next!(pm)
     end
+    return out
 end
 
 """
@@ -564,6 +703,9 @@ function scalar_bin_distinguishability_permutation(
     num_bins::Union{Nothing,Int} = nothing,
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 ) where {T}
     ctx = _prepare_scalar_bin_context(
         data,
@@ -571,10 +713,14 @@ function scalar_bin_distinguishability_permutation(
         num_bins = num_bins,
         ref = ref,
     )
-    return _map_scalar_bin_reference(ctx.bins) do s, vals
-        res = histogram_distinguishability_permutation(vals, ref, num_draws; n_perm = n_perm, rng = rng)
-        (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+    out = Vector{NamedTuple}(undef, length(ctx.bins))
+    pm = progress ? ProgressMeter.Progress(length(ctx.bins); desc = "perm scalar bins") : nothing
+    for (k, (s, vals)) in enumerate(ctx.bins)
+        res = histogram_distinguishability_permutation(vals, ref, num_draws; n_perm = n_perm, rng = rng, progress = false, distance = distance, verbose = verbose)
+        out[k] = (scalar = s, D_obs = res.D_obs, p_value = res.p_value, z_emp = res.z_emp, z_coll = res.z_coll, std_Ts = res.std_Ts)
+        progress && ProgressMeter.next!(pm)
     end
+    return out
 end
 
 """
@@ -608,6 +754,26 @@ function hellinger_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real}
     spq = LinearAlgebra.dot(sp, sq)
     d2 = (spp + sqq - 2 * spq) / 2
     return sqrt(max(d2, 0.0))
+end
+
+@inline function total_variation_distance(p::AbstractVector{<:Real}, q::AbstractVector{<:Real})::Float64
+    if !(length(p) == length(q))
+        throw(DimensionMismatch("Total variation distance requires equal-length vectors"))
+    end
+    s = 0.0
+    @inbounds @simd for i in eachindex(p, q)
+        s += abs(Float64(p[i]) - Float64(q[i]))
+    end
+    return 0.5 * s
+end
+
+@inline function _normalize_energy_distance(distance::Symbol)::Symbol
+    if distance in (:Hellinger, :hellinger)
+        return :hellinger
+    elseif distance in (:TV, :tv, :TotalVariation, :total_variation)
+        return :tv
+    end
+    throw(DomainError(distance, "distance must be one of :Hellinger or :TV"))
 end
 
 @inline function _sqrt_with_tolerance(x::Float64; tol::Float64 = 1e-12, name::AbstractString = "value")::Float64
@@ -686,6 +852,66 @@ function _prepare_vectors_for_distance(
     return A, B
 end
 
+@inline function _log_projection_info(
+    method::AbstractString,
+    projected_out::Integer,
+    total::Integer,
+    cutoff_rtol::Real,
+)::Nothing
+    @info "Distinguishability projection ($(method)): projected out $(projected_out) / $(total) directions (cutoff_rtol=$(Float64(cutoff_rtol)) * median_eig)"
+    return nothing
+end
+
+function _project_vectors_pooled_covariance_for_energy(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}};
+    covariance_cutoff_rel_median::Float64 = 1e-6,
+    method::Symbol = :energy,
+    verbose::Bool = false,
+)
+    if !(covariance_cutoff_rel_median >= 0.0)
+        throw(DomainError(covariance_cutoff_rel_median, "covariance_cutoff_rel_median must be nonnegative"))
+    end
+    A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
+    X = reduce(vcat, permutedims.(vcat(A, B)))
+    μ = vec(Statistics.mean(X; dims = 1))
+    Xc = X .- transpose(μ)
+
+    Σ = Statistics.cov(Xc; dims = 1)
+    eig = LinearAlgebra.eigen(LinearAlgebra.Symmetric(Matrix{Float64}(Σ)))
+    λ = eig.values
+    U = eig.vectors
+    λmed = Statistics.median(λ)
+    keep = findall(λi -> λi > covariance_cutoff_rel_median * λmed, λ)
+    if isempty(keep)
+        keep = [argmax(λ)]
+    end
+    if verbose
+        _log_projection_info(String(method), length(λ) - length(keep), length(λ), covariance_cutoff_rel_median)
+    end
+    Uk = U[:, keep]
+    Z = Xc * Uk
+
+    zmin = vec(minimum(Z; dims = 1))
+    shift = max.(-zmin, 0.0) .+ 1e-12
+
+    function row_to_nonnegative(zrow)
+        u = Vector{Float64}(zrow) .+ shift
+        if !(sum(u) > 0.0)
+            u .= 0.0
+            u[1] = 1.0
+            return u
+        end
+        return u
+    end
+
+    n1 = length(A)
+    n2 = length(B)
+    Aproj = [row_to_nonnegative(@view Z[i, :]) for i in 1:n1]
+    Bproj = [row_to_nonnegative(@view Z[n1 + j, :]) for j in 1:n2]
+    return Aproj, Bproj
+end
+
 """
     _distance_matrix_exact(vecs)
 
@@ -697,17 +923,29 @@ Build the exact pairwise Hellinger distance matrix for a vector dataset.
 # Returns
 - `result`: Dense symmetric matrix `D` with `D[i, j] = hellinger_distance(vecs[i], vecs[j])`.
 """
-function _distance_matrix_exact(vecs::Vector{<:AbstractVector{<:Real}})
+function _distance_matrix_exact(
+    vecs::Vector{<:AbstractVector{<:Real}};
+    distance::Symbol = :Hellinger,
+)
+    dist = _normalize_energy_distance(distance)
     n = length(vecs)
-    sq, norms = _sqrt_vectors_and_norms(vecs)
     D = Matrix{Float64}(undef, n, n)
     @inbounds for i in 1:n
         D[i, i] = 0.0
     end
-    @inbounds for i in 1:(n - 1), j in (i + 1):n
-        d = _hellinger_from_sqrt(sq[i], sq[j], norms[i], norms[j])
-        D[i, j] = d
-        D[j, i] = d
+    if dist == :hellinger
+        sq, norms = _sqrt_vectors_and_norms(vecs)
+        @inbounds for i in 1:(n - 1), j in (i + 1):n
+            d = _hellinger_from_sqrt(sq[i], sq[j], norms[i], norms[j])
+            D[i, j] = d
+            D[j, i] = d
+        end
+    else
+        @inbounds for i in 1:(n - 1), j in (i + 1):n
+            d = total_variation_distance(vecs[i], vecs[j])
+            D[i, j] = d
+            D[j, i] = d
+        end
     end
     return D
 end
@@ -776,7 +1014,7 @@ function _thread_seeds(rng, nt::Int)
 end
 
 """
-    histogram_distinguishability(hists_a, hists_b)
+    energy_based_histogram_distinguishability(hists_a, hists_b)
 
 Compute the normalized energy-distance distinguishability D ∈ [0,1] between
 two histogram/vector samples. Inputs can be:
@@ -798,9 +1036,13 @@ and then trimmed to the maximal nonzero bin of the union.
 - `DomainError`: Propagated for invalid `num_draws`.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
-function histogram_distinguishability(
+function energy_based_histogram_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
+    ;
+    covariance_cutoff_rel_median::Float64 = 1e-6,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -817,7 +1059,13 @@ function histogram_distinguishability(
     vecs_a = [Vector{Float64}(A[i, :]) for i in 1:size(A, 1)]
     vecs_b = [Vector{Float64}(B[i, :]) for i in 1:size(B, 1)]
 
-    return histogram_distinguishability(vecs_a, vecs_b)
+    return energy_based_histogram_distinguishability(
+        vecs_a,
+        vecs_b;
+        covariance_cutoff_rel_median = covariance_cutoff_rel_median,
+        distance = distance,
+        verbose = verbose,
+    )
 end
 
 """
@@ -840,15 +1088,26 @@ concatenation are handled by `concatenate_hists`.
 - `DimensionMismatch`: Propagated when class sample counts do not align across observables.
 - `DomainError`: Propagated for downstream numeric-domain violations.
 """
-function total_histogram_distinguishability(hists...)
+function total_histogram_distinguishability(
+    hists...;
+    covariance_cutoff_rel_median::Float64 = 1e-6,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
+)
     vecs_a, vecs_b = concatenate_hists(hists...)
-    return histogram_distinguishability(vecs_a, vecs_b)
+    return energy_based_histogram_distinguishability(
+        vecs_a,
+        vecs_b;
+        covariance_cutoff_rel_median = covariance_cutoff_rel_median,
+        distance = distance,
+        verbose = verbose,
+    )
 end
 
 """
-    histogram_distinguishability(hists_a, hists_b, num_draws; rng=...)
+    energy_based_histogram_distinguishability(hists_a, hists_b, num_draws; rng=...)
 
-See `histogram_distinguishability(hists_a, hists_b)`.
+See `energy_based_histogram_distinguishability(hists_a, hists_b)`.
 
 This overload uses Monte Carlo estimation with `num_draws` and returns
 `(D, std)` instead of only `(D,)`.
@@ -867,11 +1126,14 @@ This overload uses Monte Carlo estimation with `num_draws` and returns
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
-function histogram_distinguishability(
+function energy_based_histogram_distinguishability(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
     num_draws::Int;
     rng = Random.default_rng(),
+    covariance_cutoff_rel_median::Float64 = 1e-6,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -888,13 +1150,21 @@ function histogram_distinguishability(
     vecs_a = [Vector{Float64}(A[i, :]) for i in 1:size(A, 1)]
     vecs_b = [Vector{Float64}(B[i, :]) for i in 1:size(B, 1)]
 
-    return histogram_distinguishability(vecs_a, vecs_b, num_draws; rng = rng)
+    return energy_based_histogram_distinguishability(
+        vecs_a,
+        vecs_b,
+        num_draws;
+        rng = rng,
+        covariance_cutoff_rel_median = covariance_cutoff_rel_median,
+        distance = distance,
+        verbose = verbose,
+    )
 end
 
 """
-    histogram_distinguishability(vecs_a, vecs_b)
+    energy_based_histogram_distinguishability(vecs_a, vecs_b)
 
-See `histogram_distinguishability(hists_a, hists_b)`.
+See `energy_based_histogram_distinguishability(hists_a, hists_b)`.
 
 This is the exact vector-input implementation (no dict normalization stage).
 
@@ -908,27 +1178,41 @@ This is the exact vector-input implementation (no dict normalization stage).
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
-function histogram_distinguishability(
+function energy_based_histogram_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
+    ;
+    covariance_cutoff_rel_median::Float64 = 1e-6,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
     end
-    n1 = length(vecs_a)
-    n2 = length(vecs_b)
-    A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
-    sqA, normA = _sqrt_vectors_and_norms(A)
-    sqB, normB = _sqrt_vectors_and_norms(B)
-
-    sum_xy = _pairwise_hellinger_sum_sqrt(sqA, normA, sqB, normB)
-    exy = sum_xy / (n1 * n2)
-
-    sum_xx = _pairwise_hellinger_sum_sqrt(sqA, normA, sqA, normA)
-    exx = sum_xx / (n1 * n1)
-
-    sum_yy = _pairwise_hellinger_sum_sqrt(sqB, normB, sqB, normB)
-    eyy = sum_yy / (n2 * n2)
+    A, B = _project_vectors_pooled_covariance_for_energy(
+        vecs_a,
+        vecs_b;
+        covariance_cutoff_rel_median = covariance_cutoff_rel_median,
+        verbose = verbose,
+    )
+    dist = _normalize_energy_distance(distance)
+    n1 = length(A)
+    n2 = length(B)
+    exy = 0.0
+    exx = 0.0
+    eyy = 0.0
+    if dist == :hellinger
+        sqA, normA = _sqrt_vectors_and_norms(A)
+        sqB, normB = _sqrt_vectors_and_norms(B)
+        exy = _pairwise_hellinger_sum_sqrt(sqA, normA, sqB, normB) / (n1 * n2)
+        exx = _pairwise_hellinger_sum_sqrt(sqA, normA, sqA, normA) / (n1 * n1)
+        eyy = _pairwise_hellinger_sum_sqrt(sqB, normB, sqB, normB) / (n2 * n2)
+    else
+        Dmat = _distance_matrix_exact(vcat(A, B); distance = :TV)
+        exy = Statistics.mean(@view Dmat[1:n1, (n1 + 1):(n1 + n2)])
+        exx = Statistics.mean(@view Dmat[1:n1, 1:n1])
+        eyy = Statistics.mean(@view Dmat[(n1 + 1):(n1 + n2), (n1 + 1):(n1 + n2)])
+    end
 
     E = 2 * exy - exx - eyy
     W = 0.5 * (exx + eyy)
@@ -938,9 +1222,9 @@ function histogram_distinguishability(
 end
 
 """
-    histogram_distinguishability(vecs_a, vecs_b, num_draws; rng=...)
+    energy_based_histogram_distinguishability(vecs_a, vecs_b, num_draws; rng=...)
 
-See `histogram_distinguishability(vecs_a, vecs_b)`.
+See `energy_based_histogram_distinguishability(vecs_a, vecs_b)`.
 
 Monte Carlo variant using `num_draws`; returns `(D, std)`.
 
@@ -959,19 +1243,27 @@ Monte Carlo variant using `num_draws`; returns `(D, std)`.
 - `DomainError`: Raised for out-of-range numeric parameters.
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
 """
-function histogram_distinguishability(
+function energy_based_histogram_distinguishability(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
     num_draws::Int;
     rng = Random.default_rng(),
+    covariance_cutoff_rel_median::Float64 = 1e-6,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
     end
-    A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
+    A, B = _project_vectors_pooled_covariance_for_energy(
+        vecs_a,
+        vecs_b;
+        covariance_cutoff_rel_median = covariance_cutoff_rel_median,
+        verbose = verbose,
+    )
     n1 = length(A)
     n2 = length(B)
-    Dmat = _distance_matrix_exact(vcat(A, B))
+    Dmat = _distance_matrix_exact(vcat(A, B); distance = distance)
 
     if !(num_draws > 0)
         throw(DomainError(num_draws, "num_draws must be positive"))
@@ -1064,73 +1356,49 @@ function _subsample_class_indices(n::Int, max_per_class::Union{Nothing,Int}, rng
     return sort!(Random.randperm(rng, n)[1:max_per_class])
 end
 
-function _prepare_mi_embedding(
+function _prepare_mi_embedding_from_projected(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}};
     rng = Random.default_rng(),
-    max_per_class::Union{Nothing,Int} = 2_000,
+    max_per_class::Union{Nothing,Int} = nothing,
 )
     idx_a = _subsample_class_indices(length(vecs_a), max_per_class, rng)
     idx_b = _subsample_class_indices(length(vecs_b), max_per_class, rng)
     sel_a = vecs_a[idx_a]
     sel_b = vecs_b[idx_b]
 
-    norm_a = Vector{Vector{Float64}}(undef, length(sel_a))
-    norm_b = Vector{Vector{Float64}}(undef, length(sel_b))
-    @inbounds for i in eachindex(sel_a)
-        v = sel_a[i]
-        u = Vector{Float64}(undef, length(v))
-        _normalize_probability_vector(v, u)
-        norm_a[i] = u
-    end
-    @inbounds for i in eachindex(sel_b)
-        v = sel_b[i]
-        u = Vector{Float64}(undef, length(v))
-        _normalize_probability_vector(v, u)
-        norm_b[i] = u
-    end
-
-    A, B = _prepare_vectors_for_distance(norm_a, norm_b)
-    d = length(A[1])
-    Xa = Matrix{Float64}(undef, length(A), d)
-    Xb = Matrix{Float64}(undef, length(B), d)
+    d = length(sel_a[1])
+    Xa = Matrix{Float64}(undef, length(sel_a), d)
+    Xb = Matrix{Float64}(undef, length(sel_b), d)
     @inbounds for i in 1:size(Xa, 1), j in 1:d
-        Xa[i, j] = sqrt(A[i][j])
+        Xa[i, j] = Float64(sel_a[i][j])
     end
     @inbounds for i in 1:size(Xb, 1), j in 1:d
-        Xb[i, j] = sqrt(B[i][j])
+        Xb[i, j] = Float64(sel_b[i][j])
     end
     return Xa, Xb
 end
 
 function _pca_project(
     X::Matrix{Float64};
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
+    eigenvalue_rtol::Real = 1e-6,
+    verbose::Bool = false,
 )
-    if !(pca_mode in (:dim, :variance, :cutoff))
-        throw(DomainError(pca_mode, "pca_mode must be one of :dim, :variance, :cutoff"))
-    end
-    if !(pca_dim >= 1)
-        throw(DomainError(pca_dim, "pca_dim must be >= 1"))
-    end
-    if !(0 < explained_variance <= 1)
-        throw(DomainError(explained_variance, "explained_variance must satisfy 0 < explained_variance <= 1"))
-    end
-    if !(0 <= eigenvalue_rtol < 1)
-        throw(DomainError(eigenvalue_rtol, "eigenvalue_rtol must satisfy 0 <= eigenvalue_rtol < 1"))
-    end
+    _validate_mi_pca_parameters(pca_mode, pca_dim, explained_variance, eigenvalue_rtol)
     μ = vec(Statistics.mean(X; dims = 1))
     Xc = X .- transpose(μ)
     n, d = size(Xc)
     if n <= 2 || d == 0
+        verbose && _log_projection_info("mutual_information_additional", 0, d, eigenvalue_rtol)
         return Xc
     end
     F = LinearAlgebra.svd(Xc; full = false)
     s2 = F.S .^ 2
     if isempty(s2)
+        verbose && _log_projection_info("mutual_information_additional", 0, d, eigenvalue_rtol)
         return Xc
     end
     λmed = Statistics.median(s2)
@@ -1150,7 +1418,29 @@ function _pca_project(
             r = clamp(r, 1, r_cut)
         end
     end
+    verbose && _log_projection_info("mutual_information_additional", d - r, d, eigenvalue_rtol)
     return F.U[:, 1:r] * LinearAlgebra.Diagonal(F.S[1:r])
+end
+
+@inline function _validate_mi_pca_parameters(
+    pca_mode::Symbol,
+    pca_dim::Int,
+    explained_variance::Real,
+    eigenvalue_rtol::Real,
+)
+    if !(pca_mode in (:dim, :variance, :cutoff))
+        throw(DomainError(pca_mode, "pca_mode must be one of :dim, :variance, :cutoff"))
+    end
+    if !(pca_dim >= 1)
+        throw(DomainError(pca_dim, "pca_dim must be >= 1"))
+    end
+    if !(0 < explained_variance <= 1)
+        throw(DomainError(explained_variance, "explained_variance must satisfy 0 < explained_variance <= 1"))
+    end
+    if !(0 <= eigenvalue_rtol < 1)
+        throw(DomainError(eigenvalue_rtol, "eigenvalue_rtol must satisfy 0 <= eigenvalue_rtol < 1"))
+    end
+    return nothing
 end
 
 @inline function _sqeuclidean_row(X::Matrix{Float64}, i::Int, j::Int)::Float64
@@ -1228,19 +1518,26 @@ function _mi_knn_binary(
     Xa::Matrix{Float64},
     Xb::Matrix{Float64};
     k::Int = 5,
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
+    eigenvalue_rtol::Real = 1e-6,
+    verbose::Bool = false,
 )
+    _validate_mi_pca_parameters(pca_mode, pca_dim, explained_variance, eigenvalue_rtol)
     X = vcat(Xa, Xb)
-    Xp = _pca_project(
-        X;
-        pca_mode = pca_mode,
-        pca_dim = pca_dim,
-        explained_variance = explained_variance,
-        eigenvalue_rtol = eigenvalue_rtol,
-    )
+    Xp = if pca_mode == :cutoff
+        X
+    else
+        _pca_project(
+            X;
+            pca_mode = pca_mode,
+            pca_dim = pca_dim,
+            explained_variance = explained_variance,
+            eigenvalue_rtol = eigenvalue_rtol,
+            verbose = verbose,
+        )
+    end
     labels = vcat(fill(true, size(Xa, 1)), fill(false, size(Xb, 1)))
     return _mi_knn_binary_projected(Xp, labels, k)
 end
@@ -1257,7 +1554,7 @@ with `normalize_hists(...; normalization=:probability)` first.
 
 The estimator uses:
 1. Hellinger embedding `u = sqrt(p)` of normalized histogram vectors.
-2. Optional unsupervised PCA dimensionality reduction.
+2. Pooled-cutoff projection (`pca_mode = :cutoff`, default), with optional extra PCA reduction.
 3. Binary-label kNN MI estimation with normalization by class entropy `H(Y)`.
 
 # Arguments
@@ -1266,7 +1563,7 @@ The estimator uses:
 
 # Keyword Arguments
 - `k`: Neighbor count for kNN MI estimator.
-- `pca_mode`: PCA selection mode: `:dim`, `:variance`, or `:cutoff`.
+- `pca_mode`: PCA selection mode: `:cutoff` (default), `:dim`, or `:variance`.
 - `pca_dim`: PCA embedding dimension upper bound (used when `pca_mode = :dim`).
 - `explained_variance`: Target retained variance fraction (used when `pca_mode = :variance`).
 - `eigenvalue_rtol`: Relative eigenvalue cutoff for near-null components.
@@ -1278,19 +1575,20 @@ The estimator uses:
 
 # Throws
 - `ArgumentError`: Raised for empty inputs.
-- `DomainError`: Raised for invalid histogram/vector normalization.
+- `DomainError`: Raised for invalid estimator parameters or histogram/vector normalization.
 """
 function distinguishability_mutual_information(
     hists_a::Vector{<:AbstractDict},
     hists_b::Vector{<:AbstractDict},
     ;
     k::Int = 5,
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
-    max_per_class::Union{Nothing,Int} = 2_000,
+    eigenvalue_rtol::Real = 1e-6,
+    max_per_class::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
+    verbose::Bool = false,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1316,6 +1614,7 @@ function distinguishability_mutual_information(
         eigenvalue_rtol = eigenvalue_rtol,
         max_per_class = max_per_class,
         rng = rng,
+        verbose = verbose,
     )
 end
 
@@ -1336,20 +1635,29 @@ function distinguishability_mutual_information(
     vecs_b::Vector{<:AbstractVector{<:Real}},
     ;
     k::Int = 5,
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
-    max_per_class::Union{Nothing,Int} = 2_000,
+    eigenvalue_rtol::Real = 1e-6,
+    max_per_class::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
+    verbose::Bool = false,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
     end
+    _validate_mi_pca_parameters(pca_mode, pca_dim, explained_variance, eigenvalue_rtol)
     if max_per_class !== nothing && !(max_per_class >= 2)
         throw(DomainError(max_per_class, "max_per_class must be nothing or >= 2"))
     end
-    Xa, Xb = _prepare_mi_embedding(vecs_a, vecs_b; rng = rng, max_per_class = max_per_class)
+    Aproj, Bproj = _project_vectors_pooled_covariance_for_energy(
+        vecs_a,
+        vecs_b;
+        covariance_cutoff_rel_median = eigenvalue_rtol,
+        method = :mutual_information,
+        verbose = verbose,
+    )
+    Xa, Xb = _prepare_mi_embedding_from_projected(Aproj, Bproj; rng = rng, max_per_class = max_per_class)
     return (D_mi = _mi_knn_binary(
         Xa,
         Xb;
@@ -1358,6 +1666,7 @@ function distinguishability_mutual_information(
         pca_dim = pca_dim,
         explained_variance = explained_variance,
         eigenvalue_rtol = eigenvalue_rtol,
+        verbose = verbose,
     ),)
 end
 
@@ -1374,11 +1683,12 @@ function distinguishability_mutual_information(
     num_draws::Int;
     rng = Random.default_rng(),
     k::Int = 5,
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
-    max_per_class::Union{Nothing,Int} = 2_000,
+    eigenvalue_rtol::Real = 1e-6,
+    max_per_class::Union{Nothing,Int} = nothing,
+    verbose::Bool = false,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1405,6 +1715,7 @@ function distinguishability_mutual_information(
         explained_variance = explained_variance,
         eigenvalue_rtol = eigenvalue_rtol,
         max_per_class = max_per_class,
+        verbose = verbose,
     )
 end
 
@@ -1419,15 +1730,17 @@ function distinguishability_mutual_information(
     num_draws::Int;
     rng = Random.default_rng(),
     k::Int = 5,
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
-    max_per_class::Union{Nothing,Int} = 2_000,
+    eigenvalue_rtol::Real = 1e-6,
+    max_per_class::Union{Nothing,Int} = nothing,
+    verbose::Bool = false,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
     end
+    _validate_mi_pca_parameters(pca_mode, pca_dim, explained_variance, eigenvalue_rtol)
     if !(num_draws > 0)
         throw(DomainError(num_draws, "num_draws must be positive"))
     end
@@ -1435,7 +1748,14 @@ function distinguishability_mutual_information(
         throw(DomainError(max_per_class, "max_per_class must be nothing or >= 2"))
     end
 
-    Xa, Xb = _prepare_mi_embedding(vecs_a, vecs_b; rng = rng, max_per_class = max_per_class)
+    Aproj, Bproj = _project_vectors_pooled_covariance_for_energy(
+        vecs_a,
+        vecs_b;
+        covariance_cutoff_rel_median = eigenvalue_rtol,
+        method = :mutual_information,
+        verbose = verbose,
+    )
+    Xa, Xb = _prepare_mi_embedding_from_projected(Aproj, Bproj; rng = rng, max_per_class = max_per_class)
     na = size(Xa, 1)
     nb = size(Xb, 1)
     if na < 2 || nb < 2
@@ -1443,13 +1763,18 @@ function distinguishability_mutual_information(
     end
 
     X = vcat(Xa, Xb)
-    Xp = _pca_project(
-        X;
-        pca_mode = pca_mode,
-        pca_dim = pca_dim,
-        explained_variance = explained_variance,
-        eigenvalue_rtol = eigenvalue_rtol,
-    )
+    Xp = if pca_mode == :cutoff
+        X
+    else
+        _pca_project(
+            X;
+            pca_mode = pca_mode,
+            pca_dim = pca_dim,
+            explained_variance = explained_variance,
+            eigenvalue_rtol = eigenvalue_rtol,
+            verbose = verbose,
+        )
+    end
     Xpa = @view Xp[1:na, :]
     Xpb = @view Xp[(na + 1):(na + nb), :]
 
@@ -1482,11 +1807,12 @@ function total_histogram_mutual_information_distinguishability(
     num_draws::Union{Nothing,Int} = nothing,
     rng = Random.default_rng(),
     k::Int = 5,
-    pca_mode::Symbol = :dim,
+    pca_mode::Symbol = :cutoff,
     pca_dim::Int = 32,
     explained_variance::Real = 0.99,
-    eigenvalue_rtol::Real = 1e-10,
-    max_per_class::Union{Nothing,Int} = 2_000,
+    eigenvalue_rtol::Real = 1e-6,
+    max_per_class::Union{Nothing,Int} = nothing,
+    verbose::Bool = false,
 )
     vecs_a, vecs_b = concatenate_hists(hists...)
     if num_draws === nothing
@@ -1500,6 +1826,7 @@ function total_histogram_mutual_information_distinguishability(
             eigenvalue_rtol = eigenvalue_rtol,
             max_per_class = max_per_class,
             rng = rng,
+            verbose = verbose,
         )
     end
     return distinguishability_mutual_information(
@@ -1513,6 +1840,217 @@ function total_histogram_mutual_information_distinguishability(
         explained_variance = explained_variance,
         eigenvalue_rtol = eigenvalue_rtol,
         max_per_class = max_per_class,
+        verbose = verbose,
+    )
+end
+
+@inline function _tv_state_key(v::AbstractVector{Float64}, quant_scale::Float64)::String
+    io = IOBuffer()
+    @inbounds for i in eachindex(v)
+        i > 1 && write(io, UInt8(','))
+        q = round(Int64, max(v[i], 0.0) * quant_scale)
+        print(io, q)
+    end
+    return String(take!(io))
+end
+
+function _tv_counts(
+    vecs::Vector{<:AbstractVector{Float64}},
+    quant_scale::Float64,
+)::Dict{String,Int}
+    counts = Dict{String,Int}()
+    @inbounds for v in vecs
+        key = _tv_state_key(v, quant_scale)
+        counts[key] = get(counts, key, 0) + 1
+    end
+    return counts
+end
+
+function _tv_from_counts(
+    counts_a::Dict{String,Int},
+    n_a::Int,
+    counts_b::Dict{String,Int},
+    n_b::Int,
+)::Float64
+    keys_union = union(keys(counts_a), keys(counts_b))
+    s = 0.0
+    @inbounds for k in keys_union
+        p_a = get(counts_a, k, 0) / n_a
+        p_b = get(counts_b, k, 0) / n_b
+        s += abs(p_a - p_b)
+    end
+    return 0.5 * s
+end
+
+function _normalize_hist_vectors_for_tv(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}},
+)::Tuple{Vector{Vector{Float64}},Vector{Vector{Float64}}}
+    A, B = _prepare_vectors_for_distance(vecs_a, vecs_b)
+    norm_a = Vector{Vector{Float64}}(undef, length(A))
+    norm_b = Vector{Vector{Float64}}(undef, length(B))
+    @inbounds for i in eachindex(A)
+        out = Vector{Float64}(undef, length(A[i]))
+        _normalize_probability_vector(A[i], out)
+        norm_a[i] = out
+    end
+    @inbounds for i in eachindex(B)
+        out = Vector{Float64}(undef, length(B[i]))
+        _normalize_probability_vector(B[i], out)
+        norm_b[i] = out
+    end
+    return norm_a, norm_b
+end
+
+function _tv_core(
+    vecs_a::Vector{<:AbstractVector{Float64}},
+    vecs_b::Vector{<:AbstractVector{Float64}},
+    tv_quantization_digits::Int,
+)::Float64
+    quant_scale = 10.0^tv_quantization_digits
+    counts_a = _tv_counts(vecs_a, quant_scale)
+    counts_b = _tv_counts(vecs_b, quant_scale)
+    return _tv_from_counts(counts_a, length(vecs_a), counts_b, length(vecs_b))
+end
+
+function _tv_bias_split_half(
+    vecs::Vector{<:AbstractVector{Float64}},
+    tv_quantization_digits::Int,
+    bias_num_splits::Int,
+    rng,
+)::Vector{Float64}
+    n = length(vecs)
+    n2 = n ÷ 2
+    if n2 < 1
+        throw(DomainError(n, "need at least 2 samples in each class for TV bias check"))
+    end
+    out = Vector{Float64}(undef, bias_num_splits)
+    @inbounds for r in 1:bias_num_splits
+        perm = Random.randperm(rng, n)
+        v1 = vecs[perm[1:n2]]
+        v2 = vecs[perm[(n2 + 1):(2 * n2)]]
+        out[r] = _tv_core(v1, v2, tv_quantization_digits)
+    end
+    return out
+end
+
+"""
+    distinguishability_total_variation(vals_a, vals_b; tv_quantization_digits=8, check_bias=false, bias_num_splits=20, rng=..., verbose=false)
+
+Compute empirical total-variation distinguishability between two sets of
+discrete histogram samples and report corresponding Bayes accuracy estimate
+for equal priors: `bayes_accuracy = (1 + D_tv) / 2`.
+
+Inputs can be histogram dictionaries or vectors. Histogram vectors are first
+probability-normalized and aligned to shared support. TV is then computed on
+empirical distributions over full histogram states after quantization.
+
+If `check_bias=true`, split-half within-class TV baselines are estimated for A
+and B and summarized in the output.
+
+# Returns
+- Named tuple with `D_tv`, `bayes_accuracy`, and bias diagnostics.
+"""
+function distinguishability_total_variation(
+    hists_a::Vector{<:AbstractDict},
+    hists_b::Vector{<:AbstractDict};
+    tv_quantization_digits::Int = 8,
+    check_bias::Bool = false,
+    bias_num_splits::Int = 20,
+    rng = Random.default_rng(),
+    verbose::Bool = false,
+)
+    isempty(hists_a) && throw(ArgumentError("hists_a must be non-empty"))
+    isempty(hists_b) && throw(ArgumentError("hists_b must be non-empty"))
+    norm_a = normalize_hists([hists_a]; normalization = :probability)[1]
+    norm_b = normalize_hists([hists_b]; normalization = :probability)[1]
+    all_dense = densify_hists(vcat(norm_a, norm_b))
+    n1 = length(norm_a)
+    n2 = length(norm_b)
+    vecs_a = [Vector{Float64}(all_dense[i, :]) for i in 1:n1]
+    vecs_b = [Vector{Float64}(all_dense[n1 + i, :]) for i in 1:n2]
+    return distinguishability_total_variation(
+        vecs_a,
+        vecs_b;
+        tv_quantization_digits = tv_quantization_digits,
+        check_bias = check_bias,
+        bias_num_splits = bias_num_splits,
+        rng = rng,
+        verbose = verbose,
+    )
+end
+
+function distinguishability_total_variation(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}};
+    tv_quantization_digits::Int = 8,
+    check_bias::Bool = false,
+    bias_num_splits::Int = 20,
+    rng = Random.default_rng(),
+    verbose::Bool = false,
+)
+    isempty(vecs_a) && throw(ArgumentError("vecs_a must be non-empty"))
+    isempty(vecs_b) && throw(ArgumentError("vecs_b must be non-empty"))
+    if !(0 <= tv_quantization_digits <= 12)
+        throw(DomainError(tv_quantization_digits, "tv_quantization_digits must be in [0, 12]"))
+    end
+    if !(bias_num_splits > 0)
+        throw(DomainError(bias_num_splits, "bias_num_splits must be positive"))
+    end
+
+    norm_a, norm_b = _normalize_hist_vectors_for_tv(vecs_a, vecs_b)
+    D_tv = _tv_core(norm_a, norm_b, tv_quantization_digits)
+    bayes_accuracy = 0.5 * (1 + D_tv)
+
+    if !check_bias
+        verbose && @info "TV distinguishability: D_tv=$(D_tv), bayes_accuracy=$(bayes_accuracy), bias_check=false"
+        return (
+            D_tv = D_tv,
+            bayes_accuracy = bayes_accuracy,
+            tv_bias_mean = nothing,
+            tv_bias_std = nothing,
+            D_tv_debiased = nothing,
+            bayes_accuracy_debiased = nothing,
+        )
+    end
+
+    bias_a = _tv_bias_split_half(norm_a, tv_quantization_digits, bias_num_splits, rng)
+    bias_b = _tv_bias_split_half(norm_b, tv_quantization_digits, bias_num_splits, rng)
+    bias_all = vcat(bias_a, bias_b)
+    tv_bias_mean = Statistics.mean(bias_all)
+    tv_bias_std = Statistics.std(bias_all)
+    D_tv_debiased = clamp(D_tv - tv_bias_mean, 0.0, 1.0)
+    bayes_accuracy_debiased = 0.5 * (1 + D_tv_debiased)
+    if verbose
+        @info "TV distinguishability: D_tv=$(D_tv), bayes_accuracy=$(bayes_accuracy), tv_bias_mean=$(tv_bias_mean), tv_bias_std=$(tv_bias_std), D_tv_debiased=$(D_tv_debiased), bayes_accuracy_debiased=$(bayes_accuracy_debiased)"
+    end
+    return (
+        D_tv = D_tv,
+        bayes_accuracy = bayes_accuracy,
+        tv_bias_mean = tv_bias_mean,
+        tv_bias_std = tv_bias_std,
+        D_tv_debiased = D_tv_debiased,
+        bayes_accuracy_debiased = bayes_accuracy_debiased,
+    )
+end
+
+function total_histogram_total_variation_distinguishability(
+    hists...;
+    tv_quantization_digits::Int = 8,
+    check_bias::Bool = false,
+    bias_num_splits::Int = 20,
+    rng = Random.default_rng(),
+    verbose::Bool = false,
+)
+    vecs_a, vecs_b = concatenate_hists(hists...)
+    return distinguishability_total_variation(
+        vecs_a,
+        vecs_b;
+        tv_quantization_digits = tv_quantization_digits,
+        check_bias = check_bias,
+        bias_num_splits = bias_num_splits,
+        rng = rng,
+        verbose = verbose,
     )
 end
 
@@ -1543,6 +2081,9 @@ function histogram_distinguishability_permutation(
     hists_b::Vector{<:AbstractDict};
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1559,7 +2100,7 @@ function histogram_distinguishability_permutation(
     vecs_a = [Vector{Float64}(A[i, :]) for i in 1:size(A, 1)]
     vecs_b = [Vector{Float64}(B[i, :]) for i in 1:size(B, 1)]
 
-    return histogram_distinguishability_permutation(vecs_a, vecs_b; n_perm = n_perm, rng = rng)
+    return histogram_distinguishability_permutation(vecs_a, vecs_b; n_perm = n_perm, rng = rng, progress = progress, distance = distance, verbose = verbose)
 end
 
 """
@@ -1591,6 +2132,9 @@ function histogram_distinguishability_permutation(
     num_draws::Int;
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(hists_a) && !isempty(hists_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1607,7 +2151,7 @@ function histogram_distinguishability_permutation(
     vecs_a = [Vector{Float64}(A[i, :]) for i in 1:size(A, 1)]
     vecs_b = [Vector{Float64}(B[i, :]) for i in 1:size(B, 1)]
 
-    return histogram_distinguishability_permutation(vecs_a, vecs_b, num_draws; n_perm = n_perm, rng = rng)
+    return histogram_distinguishability_permutation(vecs_a, vecs_b, num_draws; n_perm = n_perm, rng = rng, progress = progress, distance = distance, verbose = verbose)
 end
 
 """
@@ -1636,6 +2180,9 @@ function histogram_distinguishability_permutation(
     vecs_b::Vector{<:AbstractVector{<:Real}};
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1679,7 +2226,7 @@ function histogram_distinguishability_permutation(
     n_total = length(C)
     n_per = n
 
-    Dmat = _distance_matrix_exact(C)
+    Dmat = _distance_matrix_exact(C; distance = distance)
     pairs_u = Vector{Int}()
     pairs_v = Vector{Int}()
     dists = Float64[]
@@ -1721,6 +2268,7 @@ function histogram_distinguishability_permutation(
     D_obs = compute_D(labels_obs)
 
     Ds = Vector{Float64}(undef, n_perm)
+    pm = progress ? ProgressMeter.Progress(n_perm; desc = "permute D") : nothing
     for p in 1:n_perm
         perm = Random.randperm(rng, n_total)
         labels = falses(n_total)
@@ -1728,6 +2276,7 @@ function histogram_distinguishability_permutation(
             labels[perm[i]] = true
         end
         Ds[p] = compute_D(labels)
+        progress && ProgressMeter.next!(pm)
     end
 
     p_value = (count(>=(D_obs), Ds) + 1) / (n_perm + 1)
@@ -1768,6 +2317,9 @@ function histogram_distinguishability_permutation(
     num_draws::Int;
     n_perm::Int = 1000,
     rng = Random.default_rng(),
+    progress::Bool = false,
+    distance::Symbol = :Hellinger,
+    verbose::Bool = false,
 )
     if !(!isempty(vecs_a) && !isempty(vecs_b))
         throw(ArgumentError("inputs must be non-empty"))
@@ -1786,7 +2338,7 @@ function histogram_distinguishability_permutation(
     C = vcat(Ap, Bp)
     n_total = length(C)
     n_per = n
-    Dmat = _distance_matrix_exact(C)
+    Dmat = _distance_matrix_exact(C; distance = distance)
 
     if !(num_draws > 0)
         throw(DomainError(num_draws, "num_draws must be positive"))
@@ -1838,6 +2390,7 @@ function histogram_distinguishability_permutation(
     D_obs = compute_D(labels_obs)
 
     Ds = Vector{Float64}(undef, n_perm)
+    pm = progress ? ProgressMeter.Progress(n_perm; desc = "permute D") : nothing
     for p in 1:n_perm
         perm = Random.randperm(rng, n_total)
         labels = falses(n_total)
@@ -1845,6 +2398,7 @@ function histogram_distinguishability_permutation(
             labels[perm[i]] = true
         end
         Ds[p] = compute_D(labels)
+        progress && ProgressMeter.next!(pm)
     end
 
     p_value = (count(>=(D_obs), Ds) + 1) / (n_perm + 1)
@@ -1856,7 +2410,7 @@ function histogram_distinguishability_permutation(
 end
 
 """
-    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
+    mahalanobis_gap_distinguishability(A, B; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-6, to_regularize_rel=0.01, progress=false)
 
 See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
 
@@ -1894,9 +2448,10 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    projection_tolerance::Float64 = 1e-10,
+    projection_tolerance::Float64 = 1e-6,
     to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
+    verbose::Bool = false,
 )
     isempty(hists_a) && throw(ArgumentError("hists_a must be non-empty"))
     isempty(hists_b) && throw(ArgumentError("hists_b must be non-empty"))
@@ -1924,11 +2479,12 @@ function mahalanobis_gap_distinguishability(
         projection_tolerance = projection_tolerance,
         to_regularize_rel = to_regularize_rel,
         progress = progress,
+        verbose = verbose,
     )
 end
 
 """
-    mahalanobis_gap_distinguishability(vals_a, vals_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
+    mahalanobis_gap_distinguishability(vals_a, vals_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-6, to_regularize_rel=0.01, progress=false)
 
 See `mahalanobis_gap_distinguishability(vecs_a, vecs_b; ...)`.
 
@@ -1967,9 +2523,10 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    projection_tolerance::Float64 = 1e-10,
+    projection_tolerance::Float64 = 1e-6,
     to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
+    verbose::Bool = false,
 )
     isempty(vals_a) && throw(ArgumentError("vals_a must be non-empty"))
     isempty(vals_b) && throw(ArgumentError("vals_b must be non-empty"))
@@ -1988,6 +2545,7 @@ function mahalanobis_gap_distinguishability(
             projection_tolerance = projection_tolerance,
             to_regularize_rel = to_regularize_rel,
             progress = progress,
+            verbose = verbose,
         )
     elseif all(v -> v isa AbstractVector, vals_a) && all(v -> v isa AbstractVector, vals_b)
         bad_a = findfirst(v -> any(x -> !(x isa Real), v), vals_a)
@@ -2014,6 +2572,7 @@ function mahalanobis_gap_distinguishability(
             projection_tolerance = projection_tolerance,
             to_regularize_rel = to_regularize_rel,
             progress = progress,
+            verbose = verbose,
         )
     else
         throw(ArgumentError("mahalanobis_gap_distinguishability expects vectors of dicts or vectors of numeric vectors"))
@@ -2071,7 +2630,7 @@ function _prepare_vectors_for_mahalanobis(
 end
 
 """
-    _fit_reference(B, regulator; stabilization_method=:regularization, projection_tolerance=1e-10, verbose=false, rank_tol=1e-12)
+    _fit_reference(B, regulator; stabilization_method=:regularization, projection_tolerance=1e-6, verbose=false, rank_tol=1e-12)
 
 Internal helper that fits the reference Gaussian model for Mahalanobis distance.
 
@@ -2104,7 +2663,7 @@ function _fit_reference(
     B::Vector{Vector{Float64}},
     regulator::Float64;
     stabilization_method::Symbol = :regularization,
-    projection_tolerance::Float64 = 1e-10,
+    projection_tolerance::Float64 = 1e-6,
     verbose::Bool = false,
     rank_tol::Float64 = 1e-12,
 )
@@ -2452,6 +3011,7 @@ function _pooled_project_nonzero(
     A::Matrix{Float64},
     B::Matrix{Float64},
     eps_rel::Float64,
+    verbose::Bool = false,
 )
     X = vcat(A, B)
     Σp = _safe_cov_matrix(X)
@@ -2463,6 +3023,9 @@ function _pooled_project_nonzero(
     keep = findall(>(cutoff), λ)
     if isempty(keep)
         keep = [argmax(λ)]
+    end
+    if verbose
+        _log_projection_info("mahalanobis", length(λ) - length(keep), length(λ), eps_rel)
     end
     Uk = U[:, keep]
     return A * Uk, B * Uk
@@ -2571,7 +3134,7 @@ function _build_regularized_model_and_baseline(
 end
 
 """
-    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
+    mahalanobis_gap_distinguishability(vecs_a, vecs_b; regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-6, to_regularize_rel=0.01, progress=false)
 
 Compute Mahalanobis-gap distinguishability for two vector-valued datasets.
 
@@ -2615,9 +3178,10 @@ function mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    projection_tolerance::Float64 = 1e-10,
+    projection_tolerance::Float64 = 1e-6,
     to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
+    verbose::Bool = false,
 )
     isempty(vecs_a) && throw(ArgumentError("vecs_a must be non-empty"))
     isempty(vecs_b) && throw(ArgumentError("vecs_b must be non-empty"))
@@ -2639,7 +3203,7 @@ function mahalanobis_gap_distinguishability(
     A, B = _prepare_vectors_for_mahalanobis(vecs_a, vecs_b)
     Am = _matrix_from_vecs(A)
     Bm = _matrix_from_vecs(B)
-    Ap, Bp = _pooled_project_nonzero(Am, Bm, projection_tolerance)
+    Ap, Bp = _pooled_project_nonzero(Am, Bm, projection_tolerance, verbose)
 
     seeds_b = rand(rng, UInt64, R)
     modelB = _build_regularized_model_and_baseline(
@@ -2705,7 +3269,7 @@ function mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-6, to_regularize_rel=0.01, progress=false)
 
 Bin-pair version: compare every bin to every other bin. Returns a vector of
 `(s1, s2, rel_change, M_obs, distinguishable, threshold, z_emp, M_obs_sym, M_obs_min, threshold_sym, threshold_max)`.
@@ -2743,9 +3307,10 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    projection_tolerance::Float64 = 1e-10,
+    projection_tolerance::Float64 = 1e-6,
     to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
+    verbose::Bool = false,
 )
     ctx = _prepare_scalar_bin_context(
         data,
@@ -2789,6 +3354,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             projection_tolerance = projection_tolerance,
             to_regularize_rel = to_regularize_rel,
             progress = progress,
+            verbose = verbose,
         )
         return (s1 = s1, s2 = s2, rel_change = relative_change(s1, s2), M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
     end
@@ -2823,7 +3389,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
 end
 
 """
-    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-10, to_regularize_rel=0.01, progress=false)
+    scalar_bin_mahalanobis_gap_distinguishability(data::AbstractVector{<:AbstractVector}, ref::AbstractVector; num_bins=nothing, regulator=0.0, R=1000, q=0.0, alpha=0.05, rng=..., symmetric=false, projection_tolerance=1e-6, to_regularize_rel=0.01, progress=false)
 
 See `scalar_bin_mahalanobis_gap_distinguishability(data; ...)`.
 
@@ -2865,9 +3431,10 @@ function scalar_bin_mahalanobis_gap_distinguishability(
     alpha::Float64 = 0.05,
     rng = Random.default_rng(),
     symmetric::Bool = false,
-    projection_tolerance::Float64 = 1e-10,
+    projection_tolerance::Float64 = 1e-6,
     to_regularize_rel::Float64 = 0.01,
     progress::Bool = false,
+    verbose::Bool = false,
 )
     ctx = _prepare_scalar_bin_context(
         data,
@@ -2901,6 +3468,7 @@ function scalar_bin_mahalanobis_gap_distinguishability(
             projection_tolerance = projection_tolerance,
             to_regularize_rel = to_regularize_rel,
             progress = progress,
+            verbose = verbose,
         )
         return (scalar = s, M_obs = res.M_obs, distinguishable = res.distinguishable, threshold = res.threshold, z_emp = res.z_emp, M_obs_sym = res.M_obs_sym, M_obs_min = res.M_obs_min, threshold_sym = res.threshold_sym, threshold_max = res.threshold_max)
     end
