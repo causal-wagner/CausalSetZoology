@@ -12,41 +12,17 @@ function data_paths(file_names::Vector{String})::Vector{String}
     return [joinpath(root_path, file_name) for file_name in file_names]
 end
 
-function write_distinguishability_csv(path::AbstractString, rows::Vector{NamedTuple}; mahalanobis::Bool = false)
+function write_distinguishability_csv(path::AbstractString, rows::Vector{NamedTuple})
     mkpath(dirname(path))
     open(path, "w") do io
-        if mahalanobis
-            println(io, "observable,D,D_mi,M_obs,distinguishable,threshold,z_emp,M_obs_sym,M_obs_min,threshold_sym,threshold_max")
-        else
-            println(io, "observable,D,D_mi")
+        if isempty(rows)
+            println(io, "observable")
+            return
         end
+        cols = collect(keys(first(rows)))
+        println(io, join(string.(cols), ","))
         for row in rows
-            println(
-                io,
-                if mahalanobis
-                    string(
-                        row.observable, ",",
-                        row.D, ",",
-                        row.D_mutual_information, ",",
-                        row.D_mahalanobis, ",",
-                        row.D_mahalanobis_sym, ",",
-                        row.M_obs, ",",
-                        row.distinguishable, ",",
-                        row.threshold, ",",
-                        row.z_emp, ",",
-                        row.M_obs_sym, ",",
-                        row.M_obs_min, ",",
-                        row.threshold_sym, ",",
-                        row.threshold_max,
-                    )
-                else
-                    string(
-                        row.observable, ",",
-                        row.D, ",",
-                        row.D_mutual_information,
-                    )
-                end
-            )
+            println(io, join((string(getproperty(row, col)) for col in cols), ","))
         end
     end
     return path
@@ -92,7 +68,10 @@ function compute_all_observables(
     ylim_max_pathlen = (1e-3, 12.0),
     legendpos_max_pathlen = :lt,
 
+    energy::Bool = true,
+    mutual_information::Bool = true,
     mahalanobis::Bool = false,
+    total_distinguishability::Bool = false,
     mahalanobis_alpha = 0.05,
     mahalanobis_q = 0.05,
     mahalanobis_symmetric = true,
@@ -274,21 +253,24 @@ function compute_all_observables(
 
     rows = NamedTuple[]
     for (name, data) in observables
-        D_res = energy_based_histogram_distinguishability(data[1], data[2]; distance = energy_distance, verbose = verbose)
-        D_mi_res = distinguishability_mutual_information(
-            data[1],
-            data[2];
-            k = mutual_information_k,
-            pca_mode = mutual_information_pca_mode,
-            pca_dim = mutual_information_pca_dim,
-            explained_variance = mutual_information_explained_variance,
-            eigenvalue_rtol = mutual_information_eigenvalue_rtol,
-            max_per_class = mutual_information_max_per_class,
-            verbose = verbose,
-        )
-
-        println("For observable $(name), D = $(D_res.D).")
-        println("For observable $(name), D_mi = $(D_mi_res.D_mi).")
+        if energy
+            D_res = energy_based_histogram_distinguishability(data[1], data[2]; distance = energy_distance, verbose = verbose)
+            println("For observable $(name), D = $(D_res.D).")
+        end
+        if mutual_information
+            D_mi_res = distinguishability_mutual_information(
+                data[1],
+                data[2];
+                k = mutual_information_k,
+                pca_mode = mutual_information_pca_mode,
+                pca_dim = mutual_information_pca_dim,
+                explained_variance = mutual_information_explained_variance,
+                eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                max_per_class = mutual_information_max_per_class,
+                verbose = verbose,
+            )
+            println("For observable $(name), D_mi = $(D_mi_res.D_mi).")
+        end
 
         if mahalanobis
             m_res = mahalanobis_gap_distinguishability(
@@ -303,99 +285,89 @@ function compute_all_observables(
             )
             println("For observable $(name), D_mahalanobis = $(m_res.D), $(mahalanobis_symmetric ? "D_mahalanobis_sym = $(m_res.D_sym)," : "") M_obs = $(m_res.M_obs), threshold = $(m_res.threshold).")
         end
+        row_entries = Pair{Symbol,Any}[:observable => name]
+        energy && push!(row_entries, :D => D_res.D)
+        mutual_information && push!(row_entries, :D_mutual_information => D_mi_res.D_mi)
         if mahalanobis
-            push!(
-                rows,
-                    (
-                        observable = name,
-                        D = D_res.D,
-                        D_mutual_information = D_mi_res.D_mi,
-                        D_mahalanobis = m_res.D,
-                        D_mahalanobis_sym = m_res.D_sym,
-                        M_obs = m_res.M_obs,
-                        distinguishable = m_res.distinguishable,
-                        threshold = m_res.threshold,
-                        z_emp = m_res.z_emp,
-                        M_obs_sym = m_res.M_obs_sym,
-                        M_obs_min = m_res.M_obs_min,
-                        threshold_sym = m_res.threshold_sym,
-                        threshold_max = m_res.threshold_max,
-                ),
+            append!(
+                row_entries,
+                [
+                    :D_mahalanobis => m_res.D,
+                    :D_mahalanobis_sym => m_res.D_sym,
+                    :M_obs => m_res.M_obs,
+                    :distinguishable => m_res.distinguishable,
+                    :threshold => m_res.threshold,
+                    :z_emp => m_res.z_emp,
+                    :M_obs_sym => m_res.M_obs_sym,
+                    :M_obs_min => m_res.M_obs_min,
+                    :threshold_sym => m_res.threshold_sym,
+                    :threshold_max => m_res.threshold_max,
+                ],
             )
-        else
-            push!(
-                rows,
-                    (
-                        observable = name,
-                        D = D_res.D,
-                        D_mutual_information = D_mi_res.D_mi,
-                    ),
-                )
         end
+        push!(rows, (; row_entries...))
     end
 
-    total_selected = (
-        normalized_cardinalities_hists,
-        normalized_connectivity_link_hists,
-        normalized_max_pathlen_hists,
-        ev_sym_link,
-    )
-    total_D_res = total_histogram_distinguishability(total_selected...; distance = energy_distance, verbose = verbose)
-    total_D_mi_res = total_histogram_mutual_information_distinguishability(
-        total_selected...;
-        k = mutual_information_k,
-        pca_mode = mutual_information_pca_mode,
-        pca_dim = mutual_information_pca_dim,
-        explained_variance = mutual_information_explained_variance,
-        eigenvalue_rtol = mutual_information_eigenvalue_rtol,
-        max_per_class = mutual_information_max_per_class,
-        verbose = verbose,
-    )
-    println("For observable total_selected, D = $(total_D_res.D).")
-    println("For observable total_selected, D_mi = $(total_D_mi_res.D_mi).")
-    if mahalanobis
-        total_vecs_a, total_vecs_b = concatenate_hists(total_selected...)
-        total_m_res = mahalanobis_gap_distinguishability(
-            total_vecs_a,
-            total_vecs_b;
-            alpha = mahalanobis_alpha,
-            q = mahalanobis_q,
-            symmetric = mahalanobis_symmetric,
-            R = mahalanobis_R,
-            progress = mahalanobis_progress,
-            verbose = verbose,
+    if total_distinguishability
+        total_selected = (
+            normalized_cardinalities_hists,
+            normalized_connectivity_link_hists,
+            normalized_max_pathlen_hists,
+            ev_sym_link,
         )
-        push!(
-            rows,
-            (
-                observable = "total_selected",
-                D = total_D_res.D,
-                D_mutual_information = total_D_mi_res.D_mi,
-                D_mahalanobis = total_m_res.D,
-                D_mahalanobis_sym = total_m_res.D_sym,
-                M_obs = total_m_res.M_obs,
-                distinguishable = total_m_res.distinguishable,
-                threshold = total_m_res.threshold,
-                z_emp = total_m_res.z_emp,
-                M_obs_sym = total_m_res.M_obs_sym,
-                M_obs_min = total_m_res.M_obs_min,
-                threshold_sym = total_m_res.threshold_sym,
-                threshold_max = total_m_res.threshold_max,
-            ),
-        )
-    else
-        push!(
-            rows,
-            (
-                observable = "total_selected",
-                D = total_D_res.D,
-                D_mutual_information = total_D_mi_res.D_mi,
-            ),
-        )
+        total_row_entries = Pair{Symbol,Any}[:observable => "total_selected"]
+        if energy
+            total_D_res = total_histogram_distinguishability(total_selected...; distance = energy_distance, verbose = verbose)
+            println("For observable total_selected, D = $(total_D_res.D).")
+            push!(total_row_entries, :D => total_D_res.D)
+        end
+        if mutual_information
+            total_D_mi_res = total_histogram_mutual_information_distinguishability(
+                total_selected...;
+                k = mutual_information_k,
+                pca_mode = mutual_information_pca_mode,
+                pca_dim = mutual_information_pca_dim,
+                explained_variance = mutual_information_explained_variance,
+                eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                max_per_class = mutual_information_max_per_class,
+                verbose = verbose,
+            )
+            println("For observable total_selected, D_mi = $(total_D_mi_res.D_mi).")
+            push!(total_row_entries, :D_mutual_information => total_D_mi_res.D_mi)
+        end
+        if mahalanobis
+            total_vecs_a, total_vecs_b = concatenate_hists(total_selected...)
+            total_m_res = mahalanobis_gap_distinguishability(
+                total_vecs_a,
+                total_vecs_b;
+                alpha = mahalanobis_alpha,
+                q = mahalanobis_q,
+                symmetric = mahalanobis_symmetric,
+                R = mahalanobis_R,
+                progress = mahalanobis_progress,
+                verbose = verbose,
+            )
+            append!(
+                total_row_entries,
+                [
+                    :D_mahalanobis => total_m_res.D,
+                    :D_mahalanobis_sym => total_m_res.D_sym,
+                    :M_obs => total_m_res.M_obs,
+                    :distinguishable => total_m_res.distinguishable,
+                    :threshold => total_m_res.threshold,
+                    :z_emp => total_m_res.z_emp,
+                    :M_obs_sym => total_m_res.M_obs_sym,
+                    :M_obs_min => total_m_res.M_obs_min,
+                    :threshold_sym => total_m_res.threshold_sym,
+                    :threshold_max => total_m_res.threshold_max,
+                ],
+            )
+        end
+        push!(rows, (; total_row_entries...))
     end
 
     csv_path = fig_path("graph_observables/$(kind)/distinguishability.csv")
     
-    write_distinguishability_csv(csv_path, rows; mahalanobis = mahalanobis)
+    write_distinguishability_csv(csv_path, rows)
     return rows
 end
