@@ -373,6 +373,26 @@ function normalize_panel_ticks(ticks, name::AbstractString)
     return normalized
 end
 
+function normalize_panel_bools(values::AbstractVector{Bool}, name::AbstractString)
+    normalized = collect(values)
+    if !(length(normalized) == 4)
+        throw(ArgumentError("$name must have length 4"))
+    end
+    return normalized
+end
+
+function apply_axis_scale_theme!(ax; logscale_x::Bool, logscale_y::Bool)
+    if logscale_x
+        ax.xticks = logticks
+        ax.xminorticks = logminorticks
+    end
+    if logscale_y
+        ax.yticks = logticks
+        ax.yminorticks = logminorticks
+    end
+    return nothing
+end
+
 function apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, yticks_i)
     xlabel_i !== nothing && (ax.xlabel = xlabel_i)
     ylabel_i !== nothing && (ax.ylabel = ylabel_i)
@@ -396,8 +416,8 @@ function apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, 
 end
 
 function create_plot_matrix_figure_and_axes(;
-    logscale_x::Bool,
-    logscale_y::Bool,
+    logscale_x::AbstractVector{Bool},
+    logscale_y::AbstractVector{Bool},
     double_column::Bool,
     magnification::Real,
     top_xaxis::Bool,
@@ -408,8 +428,8 @@ function create_plot_matrix_figure_and_axes(;
     figsize = 2 .* apply_paper_theme!(
         double_column = double_column,
         magnification = magnification,
-        logscale_x = logscale_x,
-        logscale_y = logscale_y,
+        logscale_x = false,
+        logscale_y = false,
     )
 
     fig = CairoMakie.Figure(size = figsize)
@@ -420,14 +440,15 @@ function create_plot_matrix_figure_and_axes(;
         fig.layout.default_colgap = CairoMakie.Fixed(colgap)
     end
 
-    xscale = logscale_x ? log10 : identity
-    yscale = logscale_y ? log10 : identity
     axs = [
-        CairoMakie.Axis(fig[1, 1]; xscale = xscale, yscale = yscale),
-        CairoMakie.Axis(fig[1, 2]; xscale = xscale, yscale = yscale),
-        CairoMakie.Axis(fig[2, 1]; xscale = xscale, yscale = yscale),
-        CairoMakie.Axis(fig[2, 2]; xscale = xscale, yscale = yscale),
+        CairoMakie.Axis(fig[1, 1]; xscale = logscale_x[1] ? log10 : identity, yscale = logscale_y[1] ? log10 : identity),
+        CairoMakie.Axis(fig[1, 2]; xscale = logscale_x[2] ? log10 : identity, yscale = logscale_y[2] ? log10 : identity),
+        CairoMakie.Axis(fig[2, 1]; xscale = logscale_x[3] ? log10 : identity, yscale = logscale_y[3] ? log10 : identity),
+        CairoMakie.Axis(fig[2, 2]; xscale = logscale_x[4] ? log10 : identity, yscale = logscale_y[4] ? log10 : identity),
     ]
+    for i in eachindex(axs)
+        apply_axis_scale_theme!(axs[i]; logscale_x = logscale_x[i], logscale_y = logscale_y[i])
+    end
 
     if top_xaxis
         for ax in (axs[1], axs[2])
@@ -443,8 +464,8 @@ function create_plot_matrix_figure_and_axes(;
         end
         for (ax, cell) in zip((axs[2], axs[4]), (fig[1, 2], fig[2, 2]))
             ax_left = CairoMakie.Axis(cell;
-                xscale = xscale,
-                yscale = yscale,
+                xscale = ax.xscale[],
+                yscale = ax.yscale[],
                 xlabelvisible = false,
                 xticksvisible = false,
                 xticklabelsvisible = false,
@@ -454,6 +475,11 @@ function create_plot_matrix_figure_and_axes(;
                 ygridvisible = false,
                 yminorgridvisible = false,
                 backgroundcolor = :transparent,
+            )
+            apply_axis_scale_theme!(
+                ax_left;
+                logscale_x = ax.xscale[] !== identity,
+                logscale_y = ax.yscale[] !== identity,
             )
             ax_left.yaxisposition = :left
             ax_left.rightspinevisible = false
@@ -654,8 +680,8 @@ function _observable_plot_matrix_from_data(
     comp_linewidth::Union{Nothing,Real} = 2,
     xticks::Union{Nothing,AbstractVector} = nothing,
     yticks::Union{Nothing,AbstractVector} = nothing,
-    logscale_x::Bool = true,
-    logscale_y::Bool = true,
+    logscale_x::AbstractVector{Bool} = fill(true, 4),
+    logscale_y::AbstractVector{Bool} = fill(true, 4),
     double_column::Bool = false,
     magnification::Real = 1.0,
     plot_std::Bool = true,
@@ -676,6 +702,8 @@ function _observable_plot_matrix_from_data(
         colgap = colgap,
         colorbar_size = colorbar_size,
     )
+    logscale_x_panel = normalize_panel_bools(logscale_x, "logscale_x")
+    logscale_y_panel = normalize_panel_bools(logscale_y, "logscale_y")
     h1, h2, v3, h4 = data
     scalar_bin_edges = compute_plot_matrix_scalar_bin_edges(
         data;
@@ -695,8 +723,8 @@ function _observable_plot_matrix_from_data(
 
     (; vmin, vmax, denom) = compute_color_scale([d1, d2, d3, d4]; log_color_scaling = log_binning)
     fig, axs = create_plot_matrix_figure_and_axes(;
-        logscale_x = logscale_x,
-        logscale_y = logscale_y,
+        logscale_x = logscale_x_panel,
+        logscale_y = logscale_y_panel,
         double_column = double_column,
         magnification = magnification,
         top_xaxis = top_xaxis,
@@ -723,16 +751,16 @@ function _observable_plot_matrix_from_data(
     xt = normalize_panel_ticks(xticks, "xticks")
     yt = normalize_panel_ticks(yticks, "yticks")
     plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[1], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[2], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[3], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[4], d4, comp4, xlim[4], ylim[4], xlabel[4], ylabel[4], xt[4], yt[4];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[4], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
     add_plot_matrix_colorbar!(
@@ -800,8 +828,8 @@ function observable_plot_matrix(
     comp_linewidth::Union{Nothing,Real} = 2,
     xticks::Union{Nothing,AbstractVector} = nothing,
     yticks::Union{Nothing,AbstractVector} = nothing,
-    logscale_x::Bool = true,
-    logscale_y::Bool = true,
+    logscale_x::AbstractVector{Bool} = fill(true, 4),
+    logscale_y::AbstractVector{Bool} = fill(true, 4),
     double_column::Bool = false,
     magnification::Real = 1.0,
     plot_std::Bool = true,
@@ -942,8 +970,8 @@ function observable_distinguishability_plotmatrix(
     comp_linewidth::Union{Nothing,Real} = 2,
     xticks::Union{Nothing,AbstractVector} = nothing,
     yticks::Union{Nothing,AbstractVector} = nothing,
-    logscale_x::Bool = true,
-    logscale_y::Bool = true,
+    logscale_x::AbstractVector{Bool} = fill(true, 4),
+    logscale_y::AbstractVector{Bool} = fill(true, 4),
     double_column::Bool = false,
     magnification::Real = 1.0,
     plot_std::Bool = true,
@@ -973,6 +1001,8 @@ function observable_distinguishability_plotmatrix(
     if !(n_perm >= 1)
         throw(DomainError(n_perm, "n_perm must be >= 1"))
     end
+    logscale_x_panel = normalize_panel_bools(logscale_x, "logscale_x")
+    logscale_y_panel = normalize_panel_bools(logscale_y, "logscale_y")
     if num_draws !== nothing && !(num_draws >= 1)
         throw(DomainError(num_draws, "num_draws must be >= 1 when provided"))
     end
@@ -1314,8 +1344,8 @@ function observable_distinguishability_plotmatrix(
 
     (; vmin, vmax, denom) = compute_color_scale([d1, d2, d3, panel4_data]; log_color_scaling = log_binning)
     fig, axs = create_plot_matrix_figure_and_axes(;
-        logscale_x = logscale_x,
-        logscale_y = logscale_y,
+        logscale_x = logscale_x_panel,
+        logscale_y = logscale_y_panel,
         double_column = double_column,
         magnification = magnification,
         top_xaxis = top_xaxis,
@@ -1327,13 +1357,13 @@ function observable_distinguishability_plotmatrix(
     xt = normalize_panel_ticks(xticks, "xticks")
     yt = normalize_panel_ticks(yticks, "yticks")
     plot_hist_or_vec_panel!(axs[1], d1, comp1, xlim[1], ylim[1], xlabel[1], ylabel[1], xt[1], yt[1];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[1], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[2], d2, comp2, xlim[2], ylim[2], xlabel[2], ylabel[2], xt[2], yt[2];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[2], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
     plot_hist_or_vec_panel!(axs[3], d3, comp3, xlim[3], ylim[3], xlabel[3], ylabel[3], xt[3], yt[3];
-        logscale_y = logscale_y, invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
+        logscale_y = logscale_y_panel[3], invert_color_scaling = invert_color_scaling, log_color_scaling = log_binning, plot_std = plot_std,
         vmin = vmin, denom = denom, colormap = colormap, comp_color = comp_color, comp_linewidth = comp_linewidth)
 
     ax4 = axs[4]
