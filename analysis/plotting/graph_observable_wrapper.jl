@@ -77,12 +77,12 @@ function compute_all_observables(
     mahalanobis_symmetric = true,
     mahalanobis_R = 1000,
     mahalanobis_progress = false,
+    pooled_projection_cutoff_rel_median::Real = 1e-6,
     
     mutual_information_k::Int = 5,
     mutual_information_pca_mode::Symbol = :cutoff,
     mutual_information_pca_dim::Int = 32,
     mutual_information_explained_variance::Real = 0.99,
-    mutual_information_eigenvalue_rtol::Real = 1e-6,
     mutual_information_max_per_class::Union{Nothing,Int} = nothing,
     energy_distance::Symbol = :Hellinger,
     verbose::Bool = false,
@@ -254,7 +254,13 @@ function compute_all_observables(
     rows = NamedTuple[]
     for (name, data) in observables
         if energy
-            D_res = energy_based_histogram_distinguishability(data[1], data[2]; distance = energy_distance, verbose = verbose)
+            D_res = energy_based_histogram_distinguishability(
+                data[1],
+                data[2];
+                covariance_cutoff_rel_median = pooled_projection_cutoff_rel_median,
+                distance = energy_distance,
+                verbose = verbose,
+            )
             println("For observable $(name), D = $(D_res.D).")
         end
         if mutual_information
@@ -265,7 +271,7 @@ function compute_all_observables(
                 pca_mode = mutual_information_pca_mode,
                 pca_dim = mutual_information_pca_dim,
                 explained_variance = mutual_information_explained_variance,
-                eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                eigenvalue_rtol = pooled_projection_cutoff_rel_median,
                 max_per_class = mutual_information_max_per_class,
                 verbose = verbose,
             )
@@ -280,6 +286,7 @@ function compute_all_observables(
                 q = mahalanobis_q,
                 symmetric = mahalanobis_symmetric,
                 R = mahalanobis_R,
+                projection_tolerance = pooled_projection_cutoff_rel_median,
                 progress = mahalanobis_progress,
                 verbose = verbose,
             )
@@ -317,7 +324,12 @@ function compute_all_observables(
         )
         total_row_entries = Pair{Symbol,Any}[:observable => "total_selected"]
         if energy
-            total_D_res = total_histogram_distinguishability(total_selected...; distance = energy_distance, verbose = verbose)
+            total_D_res = total_histogram_distinguishability(
+                total_selected...;
+                covariance_cutoff_rel_median = pooled_projection_cutoff_rel_median,
+                distance = energy_distance,
+                verbose = verbose,
+            )
             println("For observable total_selected, D = $(total_D_res.D).")
             push!(total_row_entries, :D => total_D_res.D)
         end
@@ -328,7 +340,7 @@ function compute_all_observables(
                 pca_mode = mutual_information_pca_mode,
                 pca_dim = mutual_information_pca_dim,
                 explained_variance = mutual_information_explained_variance,
-                eigenvalue_rtol = mutual_information_eigenvalue_rtol,
+                eigenvalue_rtol = pooled_projection_cutoff_rel_median,
                 max_per_class = mutual_information_max_per_class,
                 verbose = verbose,
             )
@@ -344,6 +356,7 @@ function compute_all_observables(
                 q = mahalanobis_q,
                 symmetric = mahalanobis_symmetric,
                 R = mahalanobis_R,
+                projection_tolerance = pooled_projection_cutoff_rel_median,
                 progress = mahalanobis_progress,
                 verbose = verbose,
             )
