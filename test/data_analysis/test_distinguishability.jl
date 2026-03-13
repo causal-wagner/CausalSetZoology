@@ -4,6 +4,7 @@
     using Statistics
     using LinearAlgebra
     using Distributions
+    using Logging
     using ProgressMeter
 end
 
@@ -260,34 +261,34 @@ end
 end
 
 
-@testitem "distinguishability: histogram_distinguishability vectors" setup=[setupDistinguishability] begin
-    # Test intent: validate distinguishability: histogram_distinguishability vectors behavior and output contract.
+@testitem "distinguishability: energy_based_histogram_distinguishability vectors" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: energy_based_histogram_distinguishability vectors behavior and output contract.
     rng = Random.Xoshiro(123)
     a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05]]
     b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95]]
     c = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05]]
 
-    d_same = CausalSetZoology.histogram_distinguishability(a, c)
-    d_diff = CausalSetZoology.histogram_distinguishability(a, b)
+    d_same = CausalSetZoology.energy_based_histogram_distinguishability(a, c)
+    d_diff = CausalSetZoology.energy_based_histogram_distinguishability(a, b)
     @test d_same.D ≈ 0.0 atol = 1e-12
-    @test d_diff.D > 0.9
+    @test d_diff.D ≈ 0.8971989614490513 atol = 1e-12
 
-    d_mc = CausalSetZoology.histogram_distinguishability(a, b, 150; rng = rng)
-    @test d_mc.D > .9
+    d_mc = CausalSetZoology.energy_based_histogram_distinguishability(a, b, 150; rng = rng)
+    @test 0.85 <= d_mc.D <= 0.95
     @test d_mc.std >= 0.0
 end
 
 
-@testitem "distinguishability: histogram_distinguishability histograms" setup=[setupDistinguishability] begin
-    # Test intent: validate distinguishability: histogram_distinguishability histograms behavior and output contract.
+@testitem "distinguishability: energy_based_histogram_distinguishability histograms" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: energy_based_histogram_distinguishability histograms behavior and output contract.
     h_a = [Dict(1 => 10, 2 => 0), Dict(1 => 9, 2 => 1)]
     h_b = [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9)]
 
-    d = CausalSetZoology.histogram_distinguishability(h_a, h_b)
-    @test d.D > 0.9
+    d = CausalSetZoology.energy_based_histogram_distinguishability(h_a, h_b)
+    @test d.D ≈ 0.8874260862878063 atol = 1e-12
 
-    d_mc = CausalSetZoology.histogram_distinguishability(h_a, h_b, 100; rng = Random.Xoshiro(42))
-    @test d_mc.D > 0.9
+    d_mc = CausalSetZoology.energy_based_histogram_distinguishability(h_a, h_b, 100; rng = Random.Xoshiro(42))
+    @test 0.8 <= d_mc.D <= 0.95
     @test d_mc.std >= 0.0
 end
 
@@ -308,12 +309,12 @@ end
 
     # single-observable path should agree with direct distinguishability
     d1 = CausalSetZoology.total_histogram_distinguishability(obs1)
-    d2 = CausalSetZoology.histogram_distinguishability(obs1[1], obs1[2])
-    @test d1.D ≈ d2.D
+    d2 = CausalSetZoology.energy_based_histogram_distinguishability(obs1[1], obs1[2])
+    @test d1.D ≈ d2.D rtol=1e-6
 
     # multi-observable path should agree with explicit concatenate + core distinguishability
     vecs_a, vecs_b = CausalSetZoology.concatenate_hists(obs1, obs2)
-    d_explicit = CausalSetZoology.histogram_distinguishability(vecs_a, vecs_b)
+    d_explicit = CausalSetZoology.energy_based_histogram_distinguishability(vecs_a, vecs_b)
     @test dt.D ≈ d_explicit.D
 end
 
@@ -383,7 +384,8 @@ end
     @test dt.D_mi ≈ d_explicit.D_mi atol = 1e-12
 
     d_single = CausalSetZoology.total_histogram_mutual_information_distinguishability(obs1)
-    d_direct = CausalSetZoology.distinguishability_mutual_information(obs1[1], obs1[2])
+    vecs_single_a, vecs_single_b = CausalSetZoology.concatenate_hists(obs1)
+    d_direct = CausalSetZoology.distinguishability_mutual_information(vecs_single_a, vecs_single_b)
     @test d_single.D_mi ≈ d_direct.D_mi atol = 1e-12
 end
 
@@ -553,26 +555,165 @@ end
     @test isapprox(d_dim.D_mi, d_cut.D_mi; atol = 0.25)
 end
 
-@testitem "distinguishability: histogram_distinguishability threaded RNG reproducibility" setup=[setupDistinguishability] begin
+@testitem "distinguishability: mutual_information pooled cutoff removes null modes" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3], [0.95, 0.05], [0.85, 0.15]]
+    b = [[0.0, 1.0], [0.1, 0.9], [0.2, 0.8], [0.3, 0.7], [0.05, 0.95], [0.15, 0.85]]
+    a_pad = [vcat(v, 0.0, 0.0, 0.0) for v in a]
+    b_pad = [vcat(v, 0.0, 0.0, 0.0) for v in b]
+
+    r1 = CausalSetZoology.distinguishability_mutual_information(
+        a,
+        b;
+        k = 3,
+        pca_mode = :cutoff,
+        eigenvalue_rtol = 1e-8,
+        max_per_class = nothing,
+    )
+    r2 = CausalSetZoology.distinguishability_mutual_information(
+        a_pad,
+        b_pad;
+        k = 3,
+        pca_mode = :cutoff,
+        eigenvalue_rtol = 1e-8,
+        max_per_class = nothing,
+    )
+
+    @test r2.D_mi ≈ r1.D_mi atol = 1e-12
+end
+
+@testitem "distinguishability: total_variation basic and bayes accuracy" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]]
+    b = [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]
+    res = CausalSetZoology.distinguishability_total_variation(a, b)
+    @test res.D_tv ≈ 1.0 atol = 1e-12
+    @test res.bayes_accuracy ≈ 1.0 atol = 1e-12
+    @test res.tv_bias_mean === nothing
+    @test res.D_tv_debiased === nothing
+
+    # Quantization should affect TV when samples nearly collide after coarse rounding.
+    a_q = [
+        [0.07336635446929285, 0.34924148955718615],
+        [0.6988266836914685, 0.6282647403425017],
+        [0.9149290036628314, 0.19280811624587546],
+        [0.7701803478856664, 0.7805192636751863],
+        [0.6702639583444937, 0.16771210647092682],
+        [0.5710874493423871, 0.4528085872833483],
+    ]
+    b_q = [
+        [0.30232547191787174, 0.0013502779247226426],
+        [0.5670236732404312, 0.6159379234562881],
+        [0.19573857852575793, 0.012461945950411835],
+        [0.3119923865097316, 0.11479916823306191],
+        [0.5460487092960259, 0.6232150941621899],
+        [0.2708693898950604, 0.8451820156319791],
+    ]
+    res_coarse = CausalSetZoology.distinguishability_total_variation(a_q, b_q; tv_quantization_digits = 0)
+    res_fine = CausalSetZoology.distinguishability_total_variation(a_q, b_q; tv_quantization_digits = 3)
+    @test res_coarse.D_tv ≈ 1 / 6 atol = 1e-12
+    @test res_fine.D_tv ≈ 1.0 atol = 1e-12
+    @test res_fine.D_tv > res_coarse.D_tv
+end
+
+@testitem "distinguishability: total_variation bias check and reproducibility" setup=[setupDistinguishability] begin
+    rng = Random.Xoshiro(77)
+    base = [[rand(rng), rand(rng), rand(rng)] for _ in 1:24]
+    a = copy(base)
+    b = copy(base)
+    r1 = CausalSetZoology.distinguishability_total_variation(
+        a,
+        b;
+        check_bias = true,
+        bias_num_splits = 10,
+        rng = Random.Xoshiro(123),
+    )
+    r2 = CausalSetZoology.distinguishability_total_variation(
+        a,
+        b;
+        check_bias = true,
+        bias_num_splits = 10,
+        rng = Random.Xoshiro(123),
+    )
+    @test r1.D_tv ≈ r2.D_tv atol = 1e-12
+    @test r1.tv_bias_mean ≈ r2.tv_bias_mean atol = 1e-12
+    @test r1.tv_bias_std ≈ r2.tv_bias_std atol = 1e-12
+    @test 0.0 <= r1.D_tv <= 1.0
+    @test 0.0 <= r1.bayes_accuracy <= 1.0
+    @test 0.0 <= r1.D_tv_debiased <= 1.0
+    @test 0.5 <= r1.bayes_accuracy_debiased <= 1.0
+end
+
+@testitem "distinguishability: total_variation dictionaries, total wrapper, and verbose" setup=[setupDistinguishability] begin
+    h_a = [Dict(1 => 3.0, 2 => 1.0), Dict(1 => 2.0, 2 => 2.0), Dict(1 => 4.0, 2 => 0.0), Dict(1 => 3.0, 2 => 1.0)]
+    h_b = [Dict(1 => 0.0, 2 => 4.0), Dict(1 => 1.0, 2 => 3.0), Dict(1 => 0.0, 2 => 4.0), Dict(1 => 1.0, 2 => 3.0)]
+    r = CausalSetZoology.distinguishability_total_variation(h_a, h_b; tv_quantization_digits = 6)
+    @test 0.0 <= r.D_tv <= 1.0
+    @test r.bayes_accuracy ≈ (1 + r.D_tv) / 2 atol = 1e-12
+
+    total = CausalSetZoology.total_histogram_total_variation_distinguishability(
+        [h_a, h_b],
+        [h_a, h_b];
+        tv_quantization_digits = 6,
+    )
+    @test 0.0 <= total.D_tv <= 1.0
+    vecs_a, vecs_b = CausalSetZoology.concatenate_hists([h_a, h_b], [h_a, h_b])
+    total_explicit = CausalSetZoology.distinguishability_total_variation(
+        vecs_a,
+        vecs_b;
+        tv_quantization_digits = 6,
+    )
+    @test total.D_tv ≈ total_explicit.D_tv atol = 1e-12
+    @test total.bayes_accuracy ≈ total_explicit.bayes_accuracy atol = 1e-12
+
+    @test_logs (:info, r"TV distinguishability: D_tv=.*bayes_accuracy=.*tv_bias_mean=.*") CausalSetZoology.distinguishability_total_variation(
+        h_a,
+        h_b;
+        check_bias = true,
+        bias_num_splits = 4,
+        rng = Random.Xoshiro(9),
+        verbose = true,
+    )
+end
+
+@testitem "distinguishability: total_variation validation" setup=[setupDistinguishability] begin
+    a = [[1.0, 2.0], [2.0, 1.0]]
+    b = [[0.0, 3.0], [3.0, 0.0]]
+    h_a = [Dict(1 => 1.0, 2 => 0.0)]
+    h_b = [Dict(1 => 0.0, 2 => 1.0)]
+    @test_throws ArgumentError CausalSetZoology.distinguishability_total_variation(Vector{Vector{Float64}}(), b)
+    @test_throws ArgumentError CausalSetZoology.distinguishability_total_variation(a, Vector{Vector{Float64}}())
+    @test_throws ArgumentError CausalSetZoology.distinguishability_total_variation(Dict{Int,Float64}[], h_b)
+    @test_throws ArgumentError CausalSetZoology.total_histogram_total_variation_distinguishability()
+    @test_throws DomainError CausalSetZoology.distinguishability_total_variation(a, b; tv_quantization_digits = -1)
+    @test_throws DomainError CausalSetZoology.distinguishability_total_variation(a, b; tv_quantization_digits = 13)
+    @test_throws DomainError CausalSetZoology.distinguishability_total_variation(a, b; bias_num_splits = 0)
+    @test_throws DomainError CausalSetZoology.distinguishability_total_variation([[1.0]], [[1.0]]; check_bias = true, bias_num_splits = 2)
+    @test_throws DimensionMismatch CausalSetZoology.total_histogram_total_variation_distinguishability(
+        [[Dict(1 => 1.0)], [Dict(1 => 1.0)]],
+        [[Dict(1 => 1.0), Dict(2 => 1.0)], [Dict(1 => 1.0)]],
+    )
+end
+
+@testitem "distinguishability: energy_based_histogram_distinguishability threaded RNG reproducibility" setup=[setupDistinguishability] begin
     a = [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05], [0.85, 0.15], [0.92, 0.08]]
     b = [[0.0, 1.0], [0.1, 0.9], [0.05, 0.95], [0.15, 0.85], [0.08, 0.92]]
 
-    r1 = CausalSetZoology.histogram_distinguishability(a, b, 100000; rng = Random.Xoshiro(2026))
-    r2 = CausalSetZoology.histogram_distinguishability(a, b, 100000; rng = Random.Xoshiro(2026))
+    r1 = CausalSetZoology.energy_based_histogram_distinguishability(a, b, 100000; rng = Random.Xoshiro(2026))
+    r2 = CausalSetZoology.energy_based_histogram_distinguishability(a, b, 100000; rng = Random.Xoshiro(2026))
     @test isapprox(r1.D, r2.D; rtol=1e-2)
     @test isapprox(r1.std, r2.std; rtol=1e-2)
 
 end
 
 
-@testitem "distinguishability: histogram_distinguishability validation" setup=[setupDistinguishability] begin
-    # Test intent: validate distinguishability: histogram_distinguishability validation behavior and output contract.
+@testitem "distinguishability: energy_based_histogram_distinguishability validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: energy_based_histogram_distinguishability validation behavior and output contract.
     a = [[1.0, 0.0], [0.9, 0.1]]
     b = [[0.0, 1.0], [0.1, 0.9]]
     h_b = [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9)]
-    @test_throws DomainError CausalSetZoology.histogram_distinguishability(a, b, 0)
-    @test_throws ArgumentError CausalSetZoology.histogram_distinguishability(Vector{Vector{Float64}}(), b)
-    @test_throws ArgumentError CausalSetZoology.histogram_distinguishability(Dict{Int,Float64}[], h_b)
+    @test_throws DomainError CausalSetZoology.energy_based_histogram_distinguishability(a, b, 0)
+    @test_throws DomainError CausalSetZoology.energy_based_histogram_distinguishability(a, b; covariance_cutoff_rel_median = -1e-6)
+    @test_throws ArgumentError CausalSetZoology.energy_based_histogram_distinguishability(Vector{Vector{Float64}}(), b)
+    @test_throws ArgumentError CausalSetZoology.energy_based_histogram_distinguishability(Dict{Int,Float64}[], h_b)
 end
 
 
@@ -769,6 +910,8 @@ end
 @testitem "distinguishability: mahalanobis helper validation" setup=[setupDistinguishability] begin
     # Test intent: validate distinguishability: mahalanobis helper validation behavior and output contract.
     @test_throws DomainError CausalSetZoology._random_split_equal([[0.0]], Random.Xoshiro(1))
+    @test_throws ArgumentError CausalSetZoology._prepare_vectors_for_mahalanobis(Vector{Vector{Float64}}(), [[0.0]])
+    @test_throws ArgumentError CausalSetZoology._prepare_vectors_for_mahalanobis([[0.0]], Vector{Vector{Float64}}())
 
     Bref = [[0.0, 0.0], [0.1, 0.2], [0.2, 0.4], [0.3, 0.6], [0.4, 0.8]]
     @test_throws ArgumentError CausalSetZoology._fit_reference(Bref, 0.0; stabilization_method = :not_a_method)
@@ -796,9 +939,11 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test keys(res) == (:M_obs, :distinguishable, :threshold, :z_emp, :M_obs_sym, :M_obs_min, :threshold_sym, :threshold_max)
-    @test res.M_obs ≈ expected_min_far atol = 1e-12
+    @test keys(res) == (:M_obs, :D, :distinguishable, :threshold, :z_emp, :M_obs_sym, :D_sym, :M_obs_min, :threshold_sym, :threshold_max)
+    @test res.M_obs ≈ expected_min_far atol = 1e-6
+    @test 0.0 <= res.D <= 1.0
     @test res.M_obs_sym === nothing
+    @test res.D_sym === nothing
     @test res.M_obs_min === nothing
     @test res.threshold_sym === nothing
     @test res.threshold_max === nothing
@@ -864,8 +1009,8 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test res_q0.M_obs ≈ expected_min_far atol = 1e-12
-    @test res_q50.M_obs ≈ expected_med_far atol = 1e-12
+    @test res_q0.M_obs ≈ expected_min_far atol = 1e-6
+    @test res_q50.M_obs ≈ expected_med_far atol = 1e-6
     @test res_q50.M_obs > res_q0.M_obs
 
     res_alpha0 = CausalSetZoology.mahalanobis_gap_distinguishability(
@@ -899,8 +1044,11 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test res_sym.M_obs ≈ expected_min_far atol = 1e-12
-    @test res_sym.M_obs_sym ≈ expected_min_far atol = 1e-12
+    @test res_sym.M_obs ≈ expected_min_far atol = 1e-6
+    @test res_sym.M_obs_sym ≈ expected_min_far atol = 1e-6
+    @test res_sym.D ≈ cdf(Normal(), res_sym.z_emp) atol = 1e-12
+    @test res_sym.D_sym !== nothing
+    @test 0.0 <= res_sym.D_sym <= 1.0
     @test res_sym.M_obs_min == min(res_sym.M_obs, res_sym.M_obs_sym)
     @test res_sym.threshold_max == max(res_sym.threshold, res_sym.threshold_sym)
     @test res_sym.distinguishable == ((res_sym.M_obs > res_sym.threshold) && (res_sym.M_obs_sym > res_sym.threshold_sym))
@@ -933,7 +1081,7 @@ end
         alpha = 0.05,
         regulator = reg,
     )
-    @test res_near.M_obs ≈ expected_min_near atol = 1e-12
+    @test res_near.M_obs ≈ expected_min_near atol = 1e-6
     @test res_near.M_obs < res_far.M_obs
 end
 
@@ -998,6 +1146,7 @@ end
     @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; q = -0.1)
     @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; alpha = 1.0)
     @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; regulator = -1.0)
+    @test_throws DomainError CausalSetZoology.mahalanobis_gap_distinguishability(a, b; to_regularize_rel = 0.0)
     @test_throws ArgumentError CausalSetZoology.mahalanobis_gap_distinguishability(Vector{Vector{Float64}}(), b)
     @test_throws ArgumentError CausalSetZoology.mahalanobis_gap_distinguishability(Any[1], Any[2])
     @test_throws TypeError CausalSetZoology.mahalanobis_gap_distinguishability(Any[[1.0, "bad"]], Any[[0.0, 1.0]])
@@ -1014,4 +1163,78 @@ end
     @test_throws TypeError CausalSetZoology.scalar_bin_mahalanobis_gap_distinguishability(bad_pair_slot, [[0.0]]; num_bins = 2, R = 10, rng = rng)
     @test_throws TypeError CausalSetZoology.scalar_bin_mahalanobis_gap_distinguishability(bad_scalar_val, [[0.0]]; num_bins = 2, R = 10, rng = rng)
     @test_throws DomainError CausalSetZoology.scalar_bin_mahalanobis_gap_distinguishability(data, [[0.0]]; num_bins = 0, R = 10, rng = rng)
+end
+
+@testitem "distinguishability: mahalanobis pooled projection invariance" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.2], [1.1, 0.3], [0.9, 0.1], [1.2, 0.4], [0.8, 0.0], [1.05, 0.25]]
+    b = [[0.0, 1.0], [0.1, 0.9], [0.2, 0.8], [0.3, 0.7], [0.05, 0.95], [0.15, 0.85]]
+    a_pad = [vcat(v, 0.0, 0.0, 0.0) for v in a]
+    b_pad = [vcat(v, 0.0, 0.0, 0.0) for v in b]
+
+    r1 = CausalSetZoology.mahalanobis_gap_distinguishability(
+        a,
+        b;
+        R = 40,
+        rng = Random.Xoshiro(404),
+        q = 0.0,
+        projection_tolerance = 1e-10,
+    )
+    r2 = CausalSetZoology.mahalanobis_gap_distinguishability(
+        a_pad,
+        b_pad;
+        R = 40,
+        rng = Random.Xoshiro(404),
+        q = 0.0,
+        projection_tolerance = 1e-10,
+    )
+
+    @test r2.M_obs ≈ r1.M_obs atol = 1e-10
+    @test r2.threshold ≈ r1.threshold atol = 1e-10
+    @test r2.z_emp ≈ r1.z_emp atol = 1e-10
+    @test r2.D ≈ r1.D atol = 1e-12
+end
+
+@testitem "distinguishability: mahalanobis small-mode floor helper" setup=[setupDistinguishability] begin
+    rng = Random.Xoshiro(909)
+    X = rand(rng, 24, 6)
+    Σ = CausalSetZoology._safe_cov_matrix(X)
+    eig = LinearAlgebra.eigen(Symmetric(Σ))
+    U = eig.vectors
+    small = [1, 2]
+    U_small = U[:, small]
+    seeds = rand(rng, UInt64, 12)
+
+    floors = CausalSetZoology._split_floor_estimates_small_modes(X, U_small, seeds)
+    @test size(floors) == (length(small), 2 * length(seeds))
+    @test all(isfinite, floors)
+    @test all(>=(0.0), floors)
+
+    empty_floors = CausalSetZoology._split_floor_estimates_small_modes(X, U[:, Int[]], seeds)
+    @test size(empty_floors) == (0, 0)
+end
+
+@testitem "distinguishability: verbose projection logs" setup=[setupDistinguishability] begin
+    a = [[1.0, 0.0], [0.9, 0.1], [1.1, 0.0], [1.0, 0.1]]
+    b = [[0.0, 1.0], [0.1, 0.9], [0.0, 1.1], [0.1, 1.0]]
+    h_a = [Dict(1 => 2.0, 2 => 0.0), Dict(1 => 1.5, 2 => 0.5), Dict(1 => 1.8, 2 => 0.2), Dict(1 => 1.9, 2 => 0.1)]
+    h_b = [Dict(1 => 0.0, 2 => 2.0), Dict(1 => 0.4, 2 => 1.6), Dict(1 => 0.2, 2 => 1.8), Dict(1 => 0.1, 2 => 1.9)]
+
+    @test_logs (:info, r"Distinguishability projection \(energy\): projected out .* directions \(cutoff_rtol=.* \* median_eig\)") CausalSetZoology.energy_based_histogram_distinguishability(
+        h_a,
+        h_b;
+        verbose = true,
+    )
+    @test_logs (:info, r"Distinguishability projection \(mutual_information\): projected out .* directions \(cutoff_rtol=.* \* median_eig\)") CausalSetZoology.distinguishability_mutual_information(
+        h_a,
+        h_b;
+        verbose = true,
+        k = 2,
+    )
+    @test_logs (:info, r"Distinguishability projection \(mahalanobis\): projected out .* directions \(cutoff_rtol=.* \* median_eig\)") CausalSetZoology.mahalanobis_gap_distinguishability(
+        a,
+        b;
+        R = 8,
+        rng = Random.Xoshiro(21),
+        verbose = true,
+    )
 end

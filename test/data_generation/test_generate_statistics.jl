@@ -127,8 +127,10 @@ end
     @test hasfield(typeof(rec), :connectivity)
     @test hasfield(typeof(rec), :in_degree_hist)
     @test hasfield(typeof(rec), :out_degree_hist)
+    @test hasfield(typeof(rec), :degree_hist)
     @test hasfield(typeof(rec), :in_degree_hist_link)
     @test hasfield(typeof(rec), :out_degree_hist_link)
+    @test hasfield(typeof(rec), :degree_hist_link)
     @test hasfield(typeof(rec), :max_pathlen_hist)
     @test hasfield(typeof(rec), :ev_sym_link)
 
@@ -136,6 +138,8 @@ end
     @test rec.connectivity > 0
     @test rec.num_sources >= 1
     @test rec.num_sinks >= 1
+    @test sum(values(rec.degree_hist)) == rec.n
+    @test sum(values(rec.degree_hist_link)) == rec.n
 end
 
 # Verifies kind-specific augmentation fields are attached for representative kinds.

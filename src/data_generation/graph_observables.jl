@@ -112,7 +112,7 @@ end
 """
     degrees(cset::CausalSets.BitArrayCauset)
 
-Compute in/out degrees from closure relations of a `BitArrayCauset`.
+Compute in/out degrees and full degree from closure relations of a `BitArrayCauset`.
 
 # Arguments
 - `cset`: Input causal set.
@@ -120,22 +120,25 @@ Compute in/out degrees from closure relations of a `BitArrayCauset`.
 # Returns
 - `in_deg::Vector{Int}`: In-degree per node.
 - `out_deg::Vector{Int}`: Out-degree per node.
+- `deg::Vector{Int}`: Full degree per node, computed as `in_deg + out_deg`.
 """
-function degrees(cset::CausalSets.BitArrayCauset)::Tuple{Vector{Int}, Vector{Int}}
+function degrees(cset::CausalSets.BitArrayCauset)::Tuple{Vector{Int}, Vector{Int}, Vector{Int}}
     n = cset.atom_count
     in_deg  = Vector{Int}(undef, n)
     out_deg = Vector{Int}(undef, n)
+    deg = Vector{Int}(undef, n)
     @inbounds for i in 1:n
         in_deg[i]  = CausalSets.bitvector_count_ones(cset.past_relations[i])
         out_deg[i] = CausalSets.bitvector_count_ones(cset.future_relations[i])
+        deg[i] = in_deg[i] + out_deg[i]
     end
-    return in_deg, out_deg
+    return in_deg, out_deg, deg
 end
 
 """
     degrees(links::SparseLinksCauset)
 
-Compute in/out degrees from sparse link adjacency lists.
+Compute in/out degrees and full degree from sparse link adjacency lists.
 
 # Arguments
 - `links`: Sparse-links causal set.
@@ -143,16 +146,19 @@ Compute in/out degrees from sparse link adjacency lists.
 # Returns
 - `in_deg::Vector{Int}`: In-degree per node.
 - `out_deg::Vector{Int}`: Out-degree per node.
+- `deg::Vector{Int}`: Full degree per node, computed as `in_deg + out_deg`.
 """
-function degrees(links::SparseLinksCauset)::Tuple{Vector{Int}, Vector{Int}}
+function degrees(links::SparseLinksCauset)::Tuple{Vector{Int}, Vector{Int}, Vector{Int}}
     n = links.atom_count
     in_deg  = Vector{Int}(undef, n)
     out_deg = Vector{Int}(undef, n)
+    deg = Vector{Int}(undef, n)
     @inbounds for i in 1:n
         in_deg[i]  = length(links.past_links[i])
         out_deg[i] = length(links.future_links[i])
+        deg[i] = in_deg[i] + out_deg[i]
     end
-    return in_deg, out_deg
+    return in_deg, out_deg, deg
 end
 
 """

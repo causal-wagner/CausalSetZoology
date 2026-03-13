@@ -264,7 +264,16 @@ lattice_distr = Distributions.DiscreteUniform(1, 1)
 segment_ratio_distr = Distributions.Uniform(.1, 10.)
 rotate_angle_distr = Distributions.Uniform(0., 180.)
 oblique_angle_distr = Distributions.Uniform(1., 59.)
-non_manifoldlikeness_distr = Distributions.Uniform(0.01, .2)
+non_manifoldlikeness_distr = Distributions.DiscreteNonParametric(5*10 .^range(-3,-1,30),fill(1/30,30))
+ # Distributions.truncated(
+    #Distributions.LocationScale(
+    #    0.0001,
+    #    1.0,
+    #    Distributions.Exponential((0.5 - 0.0001) / log(100)),
+    #),
+    #0.0001,
+    #0.1,
+#)
 
 lattices = ["oblique"]
 

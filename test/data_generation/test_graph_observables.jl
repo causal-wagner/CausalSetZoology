@@ -74,16 +74,18 @@ end
 
 # Verifies degree counts for closure-based BitArrayCauset path.
 @testitem "graph_observables: degrees bitarray" setup=[setupDataGenerationGraphObservables] begin
-    in_deg, out_deg = CausalSetZoology.degrees(_chain3_bitarray())
+    in_deg, out_deg, deg = CausalSetZoology.degrees(_chain3_bitarray())
     @test in_deg == Int32[0, 1, 2]
     @test out_deg == Int32[2, 1, 0]
+    @test deg == Int32[2, 2, 2]
 end
 
 # Verifies degree counts for sparse-link path.
 @testitem "graph_observables: degrees sparse links" setup=[setupDataGenerationGraphObservables] begin
-    in_deg, out_deg = CausalSetZoology.degrees(_chain3_sparse_links())
+    in_deg, out_deg, deg = CausalSetZoology.degrees(_chain3_sparse_links())
     @test in_deg == Int32[0, 1, 1]
     @test out_deg == Int32[1, 1, 0]
+    @test deg == Int32[1, 2, 1]
 end
 
 # Verifies relation-density scalar on fully related and empty-relation cases.
