@@ -1335,7 +1335,7 @@ function observable_distinguishability_plotmatrix(
     panel4_key =
         distinguishability == :permutation ? :p_value :
         distinguishability == :tv ? :bayes_accuracy :
-        distinguishability == :energy ? :E :
+        distinguishability == :energy ? :D :
         :D
     panel4_data = [
         (row.scalar, [getproperty(row, panel4_key)], zeros(1))
