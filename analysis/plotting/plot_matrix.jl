@@ -1309,6 +1309,7 @@ function observable_distinguishability_plotmatrix(
                         "observable_distinguishability_plotmatrix ",
                         observable,
                         " scalar=", row.scalar,
+                        " E=", row.E,
                         " D=", row.D,
                         isnothing(num_draws) ? "" : " std=$(row.std)",
                     )
@@ -1334,6 +1335,7 @@ function observable_distinguishability_plotmatrix(
     panel4_key =
         distinguishability == :permutation ? :p_value :
         distinguishability == :tv ? :bayes_accuracy :
+        distinguishability == :energy ? :E :
         :D
     panel4_data = [
         (row.scalar, [getproperty(row, panel4_key)], zeros(1))
@@ -1521,7 +1523,7 @@ function compute_energy_scalar_series(
         res = isnothing(num_draws) ?
             energy_based_histogram_distinguishability(vals, ref_values; distance = distance, verbose = verbose) :
             energy_based_histogram_distinguishability(vals, ref_values, num_draws; rng = rng, distance = distance, verbose = verbose)
-        out[k] = isnothing(num_draws) ? (scalar = s, D = res.D) : (scalar = s, D = res.D, std = res.std)
+        out[k] = isnothing(num_draws) ? (scalar = s, D = res.D, E = res.E) : (scalar = s, D = res.D, E = res.E, std = res.std)
         progress && ProgressMeter.next!(pm)
     end
     return out

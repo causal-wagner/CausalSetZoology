@@ -1,6 +1,7 @@
 [deps]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+CausalSetZoology = "36d45fff-e05b-4641-b450-928651c06a3d"
 CausalSets = "2cd3ca5d-4cd6-4e37-88b9-1a897f702e70"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
@@ -24,5 +25,6 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [sources]
+CausalSetZoology = {path = ".."}
 CausalSets = {url = "https://codeberg.org/cyclopentane/CausalSets.jl"}
 QuantumGrav = {rev = "spacetime_quasicrystals", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}

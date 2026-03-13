@@ -271,10 +271,10 @@ end
     d_same = CausalSetZoology.energy_based_histogram_distinguishability(a, c)
     d_diff = CausalSetZoology.energy_based_histogram_distinguishability(a, b)
     @test d_same.D ≈ 0.0 atol = 1e-12
-    @test d_diff.D > 0.9
+    @test d_diff.D ≈ 0.8971989614490513 atol = 1e-12
 
     d_mc = CausalSetZoology.energy_based_histogram_distinguishability(a, b, 150; rng = rng)
-    @test d_mc.D > .9
+    @test 0.85 <= d_mc.D <= 0.95
     @test d_mc.std >= 0.0
 end
 
@@ -285,10 +285,10 @@ end
     h_b = [Dict(1 => 0, 2 => 10), Dict(1 => 1, 2 => 9)]
 
     d = CausalSetZoology.energy_based_histogram_distinguishability(h_a, h_b)
-    @test d.D > 0.9
+    @test d.D ≈ 0.8874260862878063 atol = 1e-12
 
     d_mc = CausalSetZoology.energy_based_histogram_distinguishability(h_a, h_b, 100; rng = Random.Xoshiro(42))
-    @test d_mc.D > 0.9
+    @test 0.8 <= d_mc.D <= 0.95
     @test d_mc.std >= 0.0
 end
 

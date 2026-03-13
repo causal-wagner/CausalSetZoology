@@ -935,16 +935,20 @@ function _distance_matrix_exact(
     end
     if dist == :hellinger
         sq, norms = _sqrt_vectors_and_norms(vecs)
-        @inbounds for i in 1:(n - 1), j in (i + 1):n
-            d = _hellinger_from_sqrt(sq[i], sq[j], norms[i], norms[j])
-            D[i, j] = d
-            D[j, i] = d
+        Threads.@threads for i in 1:(n - 1)
+            @inbounds for j in (i + 1):n
+                d = _hellinger_from_sqrt(sq[i], sq[j], norms[i], norms[j])
+                D[i, j] = d
+                D[j, i] = d
+            end
         end
     else
-        @inbounds for i in 1:(n - 1), j in (i + 1):n
-            d = total_variation_distance(vecs[i], vecs[j])
-            D[i, j] = d
-            D[j, i] = d
+        Threads.@threads for i in 1:(n - 1)
+            @inbounds for j in (i + 1):n
+                d = total_variation_distance(vecs[i], vecs[j])
+                D[i, j] = d
+                D[j, i] = d
+            end
         end
     end
     return D
@@ -966,6 +970,25 @@ function _pairwise_hellinger_sum_sqrt(
         s = 0.0
         @inbounds for j in 1:n2
             s += _hellinger_from_sqrt(ai, sqB[j], ai2, normB[j])
+        end
+        partial[tid] += s
+    end
+    return sum(partial)
+end
+
+function _pairwise_total_variation_sum(
+    A::Vector{<:AbstractVector{<:Real}},
+    B::Vector{<:AbstractVector{<:Real}},
+)::Float64
+    n1 = length(A)
+    n2 = length(B)
+    partial = zeros(Float64, Threads.maxthreadid())
+    Threads.@threads for i in 1:n1
+        tid = Threads.threadid()
+        ai = A[i]
+        s = 0.0
+        @inbounds for j in 1:n2
+            s += total_variation_distance(ai, B[j])
         end
         partial[tid] += s
     end
@@ -1021,7 +1044,8 @@ two histogram/vector samples. Inputs can be:
 - `Vector{<:AbstractDict}` histograms (will be normalized to probabilities),
 - `Vector{<:AbstractVector{<:Real}}` already-normalized vectors.
 
-Returns a named tuple `(D = value)`.
+Returns a named tuple `(D = value, E = value)`, where `E` is the unnormalized
+energy distance and `D` is the normalized paper-style distinguishability.
 For histogram inputs, both sets are normalized with `normalize_hists(..., :probability)`
 and then trimmed to the maximal nonzero bin of the union.
 
@@ -1030,7 +1054,8 @@ and then trimmed to the maximal nonzero bin of the union.
 - `hists_b`: Histogram input data.
 
 # Returns
-- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
+- `result`: Named tuple containing distinguishability `D`, raw energy distance `E`,
+  and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `DomainError`: Propagated for invalid `num_draws`.
@@ -1121,7 +1146,8 @@ This overload uses Monte Carlo estimation with `num_draws` and returns
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
+- `result`: Named tuple containing distinguishability `D`, raw energy distance `E`,
+  and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `ArgumentError`: Raised for invalid/empty inputs or unsupported combinations.
@@ -1208,17 +1234,15 @@ function energy_based_histogram_distinguishability(
         exx = _pairwise_hellinger_sum_sqrt(sqA, normA, sqA, normA) / (n1 * n1)
         eyy = _pairwise_hellinger_sum_sqrt(sqB, normB, sqB, normB) / (n2 * n2)
     else
-        Dmat = _distance_matrix_exact(vcat(A, B); distance = :TV)
-        exy = Statistics.mean(@view Dmat[1:n1, (n1 + 1):(n1 + n2)])
-        exx = Statistics.mean(@view Dmat[1:n1, 1:n1])
-        eyy = Statistics.mean(@view Dmat[(n1 + 1):(n1 + n2), (n1 + 1):(n1 + n2)])
+        exy = _pairwise_total_variation_sum(A, B) / (n1 * n2)
+        exx = _pairwise_total_variation_sum(A, A) / (n1 * n1)
+        eyy = _pairwise_total_variation_sum(B, B) / (n2 * n2)
     end
 
     E = 2 * exy - exx - eyy
-    W = 0.5 * (exx + eyy)
-    denom = E + W
+    denom = 2 * exy
     D = denom == 0 ? 0.0 : E / denom
-    return (D = D,)
+    return (D = D, E = E)
 end
 
 """
@@ -1226,7 +1250,7 @@ end
 
 See `energy_based_histogram_distinguishability(vecs_a, vecs_b)`.
 
-Monte Carlo variant using `num_draws`; returns `(D, std)`.
+Monte Carlo variant using `num_draws`; returns `(D, E, std)`.
 
 # Arguments
 - `vecs_a`: Vector-valued input data.
@@ -1237,7 +1261,8 @@ Monte Carlo variant using `num_draws`; returns `(D, std)`.
 - `rng`: Random number generator used for stochastic steps.
 
 # Returns
-- `result`: Named tuple containing distinguishability `D` and, for Monte Carlo overloads, `std`.
+- `result`: Named tuple containing distinguishability `D`, raw energy distance `E`,
+  and, for Monte Carlo overloads, `std`.
 
 # Throws
 - `DomainError`: Raised for out-of-range numeric parameters.
@@ -1314,18 +1339,17 @@ function energy_based_histogram_distinguishability(
     var_eyy = _sample_var_from_sums(sum_yy, sumsq_yy, m) / m
 
     E = 2 * exy - exx - eyy
-    W = 0.5 * (exx + eyy)
-    denom = E + W
+    denom = 2 * exy
     if denom == 0
-        return (D = 0.0, std = 0.0)
+        return (D = 0.0, E = E, std = 0.0)
     end
 
     var_E = 4 * var_exy + var_exx + var_eyy
-    var_W = 0.25 * (var_exx + var_eyy)
-    cov_EW = -0.5 * (var_exx + var_eyy)
-    var_D = (W^2 * var_E + E^2 * var_W - 2 * E * W * cov_EW) / denom^4
+    var_denom = 4 * var_exy
+    cov_Edenom = 4 * var_exy
+    var_D = (var_E / denom^2) + (E^2 * var_denom / denom^4) - (2 * E * cov_Edenom / denom^3)
     std_D = sqrt(max(var_D, 0.0))
-    return (D = E / denom, std = std_D)
+    return (D = E / denom, E = E, std = std_D)
 end
 
 @inline function _normalize_probability_vector(v::AbstractVector{<:Real}, out::Vector{Float64})::Nothing
@@ -2260,8 +2284,7 @@ function histogram_distinguishability_permutation(
         m_bb = cnt_bb == 0 ? 0.0 : sum_bb / cnt_bb
         m_ab = cnt_ab == 0 ? 0.0 : sum_ab / cnt_ab
         E = 2 * m_ab - m_aa - m_bb
-        W = 0.5 * (m_aa + m_bb)
-        denom = E + W
+        denom = 2 * m_ab
         return denom == 0 ? 0.0 : E / denom
     end
 
@@ -2382,8 +2405,7 @@ function histogram_distinguishability_permutation(
         m_bb = cnt_bb == 0 ? 0.0 : sum_bb / cnt_bb
         m_ab = cnt_ab == 0 ? 0.0 : sum_ab / cnt_ab
         E = 2 * m_ab - m_aa - m_bb
-        W = 0.5 * (m_aa + m_bb)
-        denom = E + W
+        denom = 2 * m_ab
         return denom == 0 ? 0.0 : E / denom
     end
 

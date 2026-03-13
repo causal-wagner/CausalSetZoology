@@ -13,14 +13,45 @@ function validate_series_meta_lengths(n::Int, hist_labels, plot_types)
     return nothing
 end
 
+function apply_ylabelpos!(ax, ylabelpos::Symbol)
+    if ylabelpos == :left
+        ax.yaxisposition = :left
+        ax.yticklabelalign = (:right, :center)
+        ax.flip_ylabel = false
+    elseif ylabelpos == :right
+        ax.yaxisposition = :right
+        ax.yticklabelalign = (:left, :center)
+        ax.flip_ylabel = true
+    else
+        throw(ArgumentError("ylabelpos must be :left or :right"))
+    end
+    return nothing
+end
+
+function normalize_axis_ticks(ticks)
+    ticks === nothing && return nothing
+    ticks isa Tuple && return ticks
+    ticks isa AbstractVector || return ticks
+    isempty(ticks) && return ticks
+
+    first_tick = first(ticks)
+    if first_tick isa Tuple
+        return ([tick[1] for tick in ticks], [tick[2] for tick in ticks])
+    end
+    return ticks
+end
+
 function create_hist_axis(;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     double_column::Bool = false,
     magnification::Real = 1.0,
     legendpos = :rt,
@@ -46,9 +77,14 @@ function create_hist_axis(;
     )
     ax.ylabel = ylabel === nothing ? "count" : ylabel
     ax.xlabel = xlabel === nothing ? LaTeXStrings.L"n" : xlabel
+    apply_ylabelpos!(ax, ylabelpos)
     plotlabel !== nothing && (ax.title = plotlabel)
     xlim !== nothing && CairoMakie.xlims!(ax, xlim...)
     ylim !== nothing && CairoMakie.ylims!(ax, ylim...)
+    xticks_norm = normalize_axis_ticks(xticks)
+    yticks_norm = normalize_axis_ticks(yticks)
+    xticks_norm !== nothing && (ax.xticks = xticks_norm)
+    yticks_norm !== nothing && (ax.yticks = yticks_norm)
     return fig, ax
 end
 
@@ -242,11 +278,14 @@ function plot_mean_histograms_with_std(
     data::Vector{Tuple{Vector{Float64},Vector{Float64}}};
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -265,11 +304,14 @@ function plot_mean_histograms_with_std(
     fig, ax = create_hist_axis(
         xlim = xlim,
         ylim = ylim,
+        xticks = xticks,
+        yticks = yticks,
         logscale_x = logscale_x,
         logscale_y = logscale_y,
         plotlabel = plotlabel,
         xlabel = xlabel,
         ylabel = ylabel,
+        ylabelpos = ylabelpos,
         double_column = double_column,
         magnification = magnification,
         legendpos = legendpos,
@@ -324,11 +366,14 @@ function plot_mean_histograms_with_std(
     data::AbstractVector{<:Tuple};
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -363,11 +408,14 @@ function plot_mean_histograms_with_std(
     fig, ax = create_hist_axis(
         xlim = xlim,
         ylim = ylim,
+        xticks = xticks,
+        yticks = yticks,
         logscale_x = logscale_x,
         logscale_y = logscale_y,
         plotlabel = plotlabel,
         xlabel = xlabel,
         ylabel = ylabel,
+        ylabelpos = ylabelpos,
         double_column = double_column,
         magnification = magnification,
         legendpos = legendpos,
@@ -467,11 +515,14 @@ function plot_and_save_hists(
     fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = true,
     logscale_y::Bool = true,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -494,6 +545,7 @@ function plot_and_save_hists(
         plotlabel = plotlabel,
         xlabel = xlabel,
         ylabel = ylabel,
+        ylabelpos = ylabelpos,
         hist_labels = hist_labels,
         double_column = double_column,
         magnification = magnification,
@@ -542,6 +594,7 @@ function plot_and_save_hists(
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -632,11 +685,14 @@ function plot_and_save_vectors(
     fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = true,
     logscale_y::Bool = true,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -667,11 +723,14 @@ function plot_and_save_vectors(
             fig_path;
             xlim = xlim,
             ylim = ylim,
+            xticks = xticks,
+            yticks = yticks,
             logscale_x = logscale_x,
             logscale_y = logscale_y,
             plotlabel = plotlabel,
             xlabel = xlabel,
             ylabel = ylabel,
+            ylabelpos = ylabelpos,
             hist_labels = hist_labels,
             double_column = double_column,
             magnification = magnification,
@@ -706,11 +765,14 @@ function plot_and_save_vectors(
             fig_path;
             xlim = xlim,
             ylim = ylim,
+            xticks = xticks,
+            yticks = yticks,
             logscale_x = logscale_x,
             logscale_y = logscale_y,
             plotlabel = plotlabel,
             xlabel = xlabel,
             ylabel = ylabel,
+            ylabelpos = ylabelpos,
             hist_labels = hist_labels,
             double_column = double_column,
             magnification = magnification,
@@ -733,11 +795,14 @@ function plot_and_save_vectors_plain(
     fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = true,
     logscale_y::Bool = true,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -755,11 +820,14 @@ function plot_and_save_vectors_plain(
         average_std;
         xlim = xlim,
         ylim = ylim,
+        xticks = xticks,
+        yticks = yticks,
         logscale_x = logscale_x,
         logscale_y = logscale_y,
         plotlabel = plotlabel,
         xlabel = xlabel,
         ylabel = ylabel,
+        ylabelpos = ylabelpos,
         hist_labels = hist_labels,
         double_column = double_column,
         magnification = magnification,
@@ -781,11 +849,14 @@ function plot_and_save_vectors_scalar(
     fig_path::String;
     xlim::Union{Tuple{Float64,Float64},Nothing} = nothing,
     ylim::Union{Tuple{Float64,Float64},Nothing} = nothing,
+    xticks = nothing,
+    yticks = nothing,
     logscale_x::Bool = true,
     logscale_y::Bool = true,
     plotlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     xlabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
     ylabel::Union{AbstractString,LaTeXStrings.LaTeXString,Nothing} = nothing,
+    ylabelpos::Symbol = :left,
     hist_labels::Union{Nothing,Vector{<:AbstractString}} = nothing,
     double_column::Bool = false,
     magnification::Real = 1.0,
@@ -820,11 +891,14 @@ function plot_and_save_vectors_scalar(
         data;
         xlim = xlim,
         ylim = ylim,
+        xticks = xticks,
+        yticks = yticks,
         logscale_x = logscale_x,
         logscale_y = logscale_y,
         plotlabel = plotlabel,
         xlabel = xlabel,
         ylabel = ylabel,
+        ylabelpos = ylabelpos,
         hist_labels = hist_labels,
         double_column = double_column,
         magnification = magnification,
