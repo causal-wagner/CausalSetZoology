@@ -346,3 +346,79 @@ end
 
     @test_throws DomainError CausalSetZoology.replace_zeros([0.0, 1.0]; ϵ = 0.0)
 end
+
+# mc_pairwise_apply
+@testitem "utils: mc_pairwise_apply basic" setup=[setupUtils] begin
+    A = [[1.0, 2.0], [3.0, 4.0]]
+    B = [[10.0, 20.0]]
+
+    vals = CausalSetZoology.mc_pairwise_apply(A, B, (a, b) -> sum(a) + sum(b), 32; rng = Xoshiro(1))
+
+    @test length(vals) == 32
+    @test all(v -> v == 33.0 || v == 37.0, vals)
+end
+
+@testitem "utils: mc_pairwise_apply reproducibility and sampling contract" setup=[setupUtils] begin
+    A = [[1.0], [2.0]]
+    B = [[10.0], [20.0]]
+
+    vals1 = CausalSetZoology.mc_pairwise_apply(A, B, (a, b) -> a[1] + b[1], 32; rng = Xoshiro(11))
+    vals2 = CausalSetZoology.mc_pairwise_apply(A, B, (a, b) -> a[1] + b[1], 32; rng = Xoshiro(11))
+    @test vals1 == vals2
+
+    # Reproduce the seeded sampling path explicitly.
+    rng = Xoshiro(11)
+    draw_seeds = rand(rng, UInt64, 32)
+    expected = Vector{Float64}(undef, 32)
+    for t in 1:32
+        rng_t = Xoshiro(draw_seeds[t])
+        a = A[rand(rng_t, 1:length(A))]
+        b = B[rand(rng_t, 1:length(B))]
+        expected[t] = a[1] + b[1]
+    end
+    @test vals1 == expected
+
+    # Both input sets should affect the sampled outcomes.
+    @test Set(vals1) == Set([11.0, 12.0, 21.0, 22.0])
+end
+
+@testitem "utils: mc_pairwise_apply conversion and function errors" setup=[setupUtils] begin
+    vals_int = CausalSetZoology.mc_pairwise_apply([[1], [2]], [[10], [20]], (a, b) -> a[1] + b[1], 8; rng = Xoshiro(3))
+    @test eltype(vals_int) == Any
+    @test all(v -> v isa Int, vals_int)
+
+    vals_vec = CausalSetZoology.mc_pairwise_apply([[1, 2]], [[2, 1]], (a, b) -> a .< b, 4; rng = Xoshiro(4))
+    @test length(vals_vec) == 4
+    @test all(v -> v == [true, false], vals_vec)
+
+    @test_throws Exception CausalSetZoology.mc_pairwise_apply([[1.0]], [[1.0]], (a, b) -> error("boom"), 4; rng = Xoshiro(2))
+end
+
+@testitem "utils: mc_pairwise_apply validation" setup=[setupUtils] begin
+    @test_throws ArgumentError CausalSetZoology.mc_pairwise_apply(Any[], [[1.0]], (a, b) -> 0.0, 10)
+    @test_throws ArgumentError CausalSetZoology.mc_pairwise_apply([[1.0]], Any[], (a, b) -> 0.0, 10)
+    @test_throws DomainError CausalSetZoology.mc_pairwise_apply([[1.0]], [[1.0]], (a, b) -> 0.0, 0)
+    vals = CausalSetZoology.mc_pairwise_apply([[1.0]], [[1.0]], (a, b) -> NaN, 10)
+    @test length(vals) == 10
+    @test all(isnan, vals)
+end
+
+@testitem "utils: pooled pair distance helpers" setup=[setupUtils] begin
+    rng = Xoshiro(5)
+
+    i, j = CausalSetZoology._sample_distinct_unordered_pair(rng, 4)
+    @test 1 <= i < j <= 4
+    @test_throws DomainError CausalSetZoology._sample_distinct_unordered_pair(rng, 1)
+
+    pairs_u = zeros(Int, 3)
+    pairs_v = zeros(Int, 3)
+    dists = zeros(3)
+    Dmat = [0.0 1.0 2.0; 1.0 0.0 3.0; 2.0 3.0 0.0]
+    CausalSetZoology._sample_pooled_pair_distances!(pairs_u, pairs_v, dists, Dmat, Xoshiro(6))
+    @test all(1 .<= pairs_u .< pairs_v .<= 3)
+    @test all(dists[k] == Dmat[pairs_u[k], pairs_v[k]] for k in eachindex(dists))
+
+    @test_throws DimensionMismatch CausalSetZoology._sample_pooled_pair_distances!(zeros(Int, 2), zeros(Int, 3), zeros(2), Dmat, rng)
+    @test_throws DimensionMismatch CausalSetZoology._sample_pooled_pair_distances!(zeros(Int, 2), zeros(Int, 2), zeros(2), ones(2, 3), rng)
+    @test_throws DomainError CausalSetZoology._sample_pooled_pair_distances!(zeros(Int, 1), zeros(Int, 1), zeros(1), zeros(1, 1), rng)
+end

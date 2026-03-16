@@ -2369,17 +2369,7 @@ function histogram_distinguishability_permutation(
     pairs_u = Vector{Int}(undef, num_draws)
     pairs_v = Vector{Int}(undef, num_draws)
     dists = Vector{Float64}(undef, num_draws)
-    @inbounds for k in 1:num_draws
-        i = rand(rng, 1:n_total)
-        j = rand(rng, 1:(n_total - 1))
-        j = j >= i ? j + 1 : j
-        if i > j
-            i, j = j, i
-        end
-        pairs_u[k] = i
-        pairs_v[k] = j
-        dists[k] = Dmat[i, j]
-    end
+    _sample_pooled_pair_distances!(pairs_u, pairs_v, dists, Dmat, rng)
 
     labels_obs = vcat(fill(true, n_per), fill(false, n_per))
 
