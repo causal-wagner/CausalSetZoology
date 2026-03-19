@@ -125,11 +125,13 @@ function degrees(cset::CausalSets.BitArrayCauset)::Tuple{Vector{Int}, Vector{Int
     n = cset.atom_count
     in_deg  = Vector{Int}(undef, n)
     out_deg = Vector{Int}(undef, n)
+    deg     = Vector{Int}(undef, n)
     @inbounds for i in 1:n
         in_deg[i]  = CausalSets.bitvector_count_ones(cset.past_relations[i])
         out_deg[i] = CausalSets.bitvector_count_ones(cset.future_relations[i])
+        deg[i]     = in_deg[i] + out_deg[i]
     end
-    return in_deg, out_deg
+    return in_deg, out_deg, deg
 end
 
 """
@@ -148,11 +150,13 @@ function degrees(links::SparseLinksCauset)::Tuple{Vector{Int}, Vector{Int}}
     n = links.atom_count
     in_deg  = Vector{Int}(undef, n)
     out_deg = Vector{Int}(undef, n)
+    deg     = Vector{Int}(undef, n)
     @inbounds for i in 1:n
         in_deg[i]  = length(links.past_links[i])
         out_deg[i] = length(links.future_links[i])
+        deg[i]     = in_deg[i] + out_deg[i] 
     end
-    return in_deg, out_deg
+    return in_deg, out_deg, deg
 end
 
 """
