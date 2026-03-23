@@ -203,6 +203,7 @@ end
 """
     apply_paper_theme!(;
         double_column::Bool = false,
+        third_line_size::Bool = false,
         magnification::Real = 1.0,
         logscale_x::Bool = false,
         logscale_y::Bool = false,
@@ -226,6 +227,7 @@ recommended figure size in pixels.
 
 # Notes
 - `double_column` controls target paper width.
+- `third_line_size` reduces the target width to one third of the selected paper line width.
 - `magnification` scales both figure size and visual element sizes.
 - When `logscale_x` and/or `logscale_y` are enabled, this theme uses
   `logticks` and `logminorticks`.
@@ -235,6 +237,7 @@ recommended figure size in pixels.
 
 # Keyword Arguments
 - `double_column`: Use double-column paper width when `true`.
+- `third_line_size`: Use one third of the selected line width while keeping the usual height.
 - `magnification`: Global scale factor for figure and style sizes (`> 0`).
 - `logscale_x`, `logscale_y`: Enable logarithmic tick helpers for axes.
 - `xticks`, `yticks`: Optional explicit tick specs that override automatic log ticks.
@@ -247,6 +250,7 @@ recommended figure size in pixels.
 - `DomainError`: Raised when numeric option domains are invalid."""
 function apply_paper_theme!(;
     double_column::Bool = false,
+    third_line_size::Bool = false,
     magnification::Real = 1.0,
     logscale_x::Bool = false,
     logscale_y::Bool = false,
@@ -273,6 +277,7 @@ function apply_paper_theme!(;
     dpi = 96
     pt = 4/3
     width_cm = double_column ? 17.8 : 8.6
+    third_line_size && (width_cm /= 3)
     # keep height tied to single-column width to avoid doubling overall size
     height_cm = 0.75 * 8.6
 
