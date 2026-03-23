@@ -44,6 +44,7 @@ end
 ################################################################################
 import Pkg
 Pkg.activate(@__DIR__)
+Pkg.instantiate()
 
 if !@isdefined(num_processes)
     num_processes = 1
