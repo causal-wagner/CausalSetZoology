@@ -1649,7 +1649,7 @@ function graph_observable_scalar_label(scalar::Symbol)
     elseif scalar == :rel_size_KR
         return LaTeXStrings.L"\delta_{\mathrm{KR}}"
     elseif scalar == :rel_num_flips
-        return LaTeXStrings.L"\delta"
+        return LaTeXStrings.L"\delta_{\mathrm{flips}}"
     elseif scalar == :num_boundary_cuts
         return LaTeXStrings.L"n_{\mathrm{pants}}"
     elseif scalar == :genus
@@ -2597,25 +2597,73 @@ function plot_labeled_average_std_panel!(
     return nothing
 end
 
+function normalize_size_boundary_dimension_num_csets(
+    sizes::AbstractVector{<:Integer},
+    num_csets::Union{Integer,AbstractVector{<:Integer}},
+)
+    nsizes = length(sizes)
+    if num_csets isa Integer
+        size_num_csets = fill(Int(num_csets), nsizes)
+        shared = Int(num_csets)
+        return (;
+            size_num_csets,
+            boundary_manifold_num_csets = shared,
+            boundary_sprinkling_num_csets = shared,
+            dimension_2d_num_csets = shared,
+            dimension_3d_num_csets = shared,
+        )
+    end
+
+    vals = Int.(collect(num_csets))
+    expected = nsizes + 4
+    if length(vals) != expected
+        throw(ArgumentError("vector num_csets must have length $(expected): $(nsizes) size entries plus 4 comparison entries"))
+    end
+    return (;
+        size_num_csets = vals[1:nsizes],
+        boundary_manifold_num_csets = vals[nsizes + 1],
+        boundary_sprinkling_num_csets = vals[nsizes + 2],
+        dimension_2d_num_csets = vals[nsizes + 3],
+        dimension_3d_num_csets = vals[nsizes + 4],
+    )
+end
+
 function load_graph_observable_size_boundary_dimension_plot_matrix_data(
     observable::Symbol;
     sizes::AbstractVector{<:Integer} = [256, 300, 400, 512, 600, 700, 800, 900, 1024, 1200, 1500, 1800, 2048],
-    num_csets::Int = 10000,
+    num_csets::Union{Integer,AbstractVector{<:Integer}} = 10000,
     size_kind::String = "manifoldlike_simply_connected",
-    size_paths = [data_paths(["$(size_kind)_$(s)_$(num_csets)/statistics.jld2"]) for s in sizes],
+    size_paths = nothing,
     boundary_manifold_kind::String = "manifoldlike_simply_connected",
     boundary_sprinkling_kind::String = "minkowski_sprinkling",
     boundary_size::Int = 2048,
-    boundary_manifold_paths = data_paths(["$(boundary_manifold_kind)_$(boundary_size)_$(num_csets)/statistics.jld2"]),
-    boundary_sprinkling_paths = data_paths(["$(boundary_sprinkling_kind)_$(boundary_size)_$(num_csets)/statistics.jld2"]),
+    boundary_manifold_paths = nothing,
+    boundary_sprinkling_paths = nothing,
     dimension_2d_kind::String = "manifoldlike_simply_connected",
     dimension_3d_kind::String = "manifoldlike_simply_connected_3D",
     dimension_size::Int = 2048,
-    dimension_2d_paths = data_paths(["$(dimension_2d_kind)_$(dimension_size)_$(num_csets)/statistics.jld2"]),
-    dimension_3d_paths = data_paths(["$(dimension_3d_kind)_$(dimension_size)_$(num_csets)/statistics.jld2"]),
+    dimension_2d_paths = nothing,
+    dimension_3d_paths = nothing,
     verbose::Bool = false,
 )
     isempty(sizes) && throw(ArgumentError("sizes must be non-empty"))
+    counts = normalize_size_boundary_dimension_num_csets(sizes, num_csets)
+    size_paths === nothing && (size_paths = [
+        data_paths(["$(size_kind)_$(s)_$(counts.size_num_csets[i])/statistics.jld2"])
+        for (i, s) in enumerate(sizes)
+    ])
+    boundary_manifold_paths === nothing && (boundary_manifold_paths = data_paths([
+        "$(boundary_manifold_kind)_$(boundary_size)_$(counts.boundary_manifold_num_csets)/statistics.jld2"
+    ]))
+    boundary_sprinkling_paths === nothing && (boundary_sprinkling_paths = data_paths([
+        "$(boundary_sprinkling_kind)_$(boundary_size)_$(counts.boundary_sprinkling_num_csets)/statistics.jld2"
+    ]))
+    dimension_2d_paths === nothing && (dimension_2d_paths = data_paths([
+        "$(dimension_2d_kind)_$(dimension_size)_$(counts.dimension_2d_num_csets)/statistics.jld2"
+    ]))
+    dimension_3d_paths === nothing && (dimension_3d_paths = data_paths([
+        "$(dimension_3d_kind)_$(dimension_size)_$(counts.dimension_3d_num_csets)/statistics.jld2"
+    ]))
 
     size_labels = ["n=$(s)" for s in sizes]
     size_series = [
@@ -2647,19 +2695,19 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     observable::Symbol,
     fig_path::String;
     sizes::AbstractVector{<:Integer} = [256, 300, 400, 512, 600, 700, 800, 900, 1024, 1200, 1500, 1800, 2048],
-    num_csets::Int = 10000,
+    num_csets::Union{Integer,AbstractVector{<:Integer}} = 10000,
     size_kind::String = "manifoldlike_simply_connected",
-    size_paths = [data_paths(["$(size_kind)_$(s)_$(num_csets)/statistics.jld2"]) for s in sizes],
+    size_paths = nothing,
     boundary_manifold_kind::String = "manifoldlike_simply_connected",
     boundary_sprinkling_kind::String = "minkowski_sprinkling",
     boundary_size::Int = 2048,
-    boundary_manifold_paths = data_paths(["$(boundary_manifold_kind)_$(boundary_size)_$(num_csets)/statistics.jld2"]),
-    boundary_sprinkling_paths = data_paths(["$(boundary_sprinkling_kind)_$(boundary_size)_$(num_csets)/statistics.jld2"]),
+    boundary_manifold_paths = nothing,
+    boundary_sprinkling_paths = nothing,
     dimension_2d_kind::String = "manifoldlike_simply_connected",
     dimension_3d_kind::String = "manifoldlike_simply_connected_3D",
     dimension_size::Int = 2048,
-    dimension_2d_paths = data_paths(["$(dimension_2d_kind)_$(dimension_size)_$(num_csets)/statistics.jld2"]),
-    dimension_3d_paths = data_paths(["$(dimension_3d_kind)_$(dimension_size)_$(num_csets)/statistics.jld2"]),
+    dimension_2d_paths = nothing,
+    dimension_3d_paths = nothing,
     title_size = nothing,
     title_boundary = nothing,
     title_dimension = nothing,
