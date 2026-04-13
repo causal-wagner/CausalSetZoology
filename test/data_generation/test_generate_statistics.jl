@@ -133,6 +133,8 @@ end
     @test hasfield(typeof(rec), :degree_hist_link)
     @test hasfield(typeof(rec), :max_pathlen_hist)
     @test hasfield(typeof(rec), :ev_sym_link)
+    @test hasfield(typeof(rec), :communicability_link)
+    @test hasfield(typeof(rec), :communicability_mean_link)
 
     @test rec.n == cset.atom_count
     @test rec.connectivity > 0
@@ -140,6 +142,7 @@ end
     @test rec.num_sinks >= 1
     @test sum(values(rec.degree_hist)) == rec.n
     @test sum(values(rec.degree_hist_link)) == rec.n
+    @test length(rec.communicability_link) == rec.n
 end
 
 # Verifies kind-specific augmentation fields are attached for representative kinds.

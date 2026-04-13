@@ -79,8 +79,12 @@ Compute normalized-Laplacian eigenvalues from the undirected link graph of `cset
 
 # Returns
 - `λ::Vector{Float64}`: Eigenvalues of the normalized Laplacian of the symmetrized links.
+
+# Throws
+- `DomainError`: If `cset.atom_count < 1`.
 """
 function normalized_lap_eigs_symmetrized_links(cset::CausalSets.BitArrayCauset)::Vector{Float64}
+    cset.atom_count >= 1 || throw(DomainError(cset.atom_count, "normalized_lap_eigs_symmetrized_links requires atom_count >= 1"))
     # Build the transitive-reduction link graph directly from closure relations.
     # This avoids relying on an external BitArrayCauset->ToposortedDAG method.
     links = CausalSets.empty_graph(cset.atom_count)
@@ -107,6 +111,297 @@ function normalized_lap_eigs_symmetrized_links(cset::CausalSets.BitArrayCauset):
     W_sym = Float64.(transpose(reduce(hcat, links.edges)))
     symmetrize_strictly_upper_triangular!(W_sym)
     return sym_norm_lap_eigs!(W_sym)
+end
+
+"""
+    imag_antisym_out_lap_eigs(cset)
+
+Compute the eigenvalues of `im` times the antisymmetric part of the directed
+normalized out-Laplacian
+`L_out = I - A D_out^{-1}`.
+
+The identity term drops out of the antisymmetric part, so the spectrum is real
+because `im * (L_out - L_out') / 2` is Hermitian.
+
+# Arguments
+- `cset`: Input causal set in closure (BitArrayCauset) or link (SparseLinksCauset) representation.
+
+# Returns
+- `λ::Vector{Float64}`: Eigenvalues of `im * (L_out - L_out') / 2`.
+"""
+function imag_antisym_out_lap_eigs(cset::Union{CausalSets.BitArrayCauset,SparseLinksCauset})::Vector{Float64}
+    return Float64.(LinearAlgebra.eigvals(LinearAlgebra.Hermitian(imag_antisym_out_lap(cset))))
+end
+
+"""
+    imag_antisym_in_lap_eigs(cset)
+
+Compute the eigenvalues of `im` times the antisymmetric part of the directed
+normalized in-Laplacian
+`L_in = I - D_in^{-1} A'`.
+
+# Arguments
+- `cset`: Input causal set in closure (BitArrayCauset) or link (SparseLinksCauset) representation.
+
+# Returns
+- `λ::Vector{Float64}`: Eigenvalues of `im * (L_in - L_in') / 2`.
+"""
+function imag_antisym_in_lap_eigs(cset::Union{CausalSets.BitArrayCauset,SparseLinksCauset})::Vector{Float64}
+    return Float64.(LinearAlgebra.eigvals(LinearAlgebra.Hermitian(imag_antisym_in_lap(cset))))
+end
+
+"""
+    imag_antisym_out_lap(cset)
+
+Construct `im` times the antisymmetric part of the directed normalized
+out-Laplacian
+`L_out = I - A D_out^{-1}`.
+
+The returned matrix is Hermitian by construction and can be diagonalized with
+`eigvals(Hermitian(...))`.
+
+# Arguments
+- `cset`: Input causal set in closure (`BitArrayCauset`) representation.
+
+# Returns
+- `H::Matrix{ComplexF64}`: Hermitian matrix
+  `im * (L_out - L_out') / 2`.
+"""
+function imag_antisym_out_lap(cset::CausalSets.BitArrayCauset)::Matrix{ComplexF64}
+    n = cset.atom_count
+    dout = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        dout[i] = CausalSets.bitvector_count_ones(cset.future_relations[i])
+    end
+
+    H = zeros(ComplexF64, n, n)
+    @inbounds for i in 1:n
+        fi = cset.future_relations[i]
+        for j in (i + 1):n
+            fi[j] || continue
+            hij = -0.5im * (dout[j] > 0.0 ? inv(dout[j]) : 0.0)
+            H[i, j] = hij
+            H[j, i] = conj(hij)
+        end
+    end
+    return H
+end
+
+"""
+    imag_antisym_out_lap(links)
+
+Construct `im` times the antisymmetric part of the directed normalized
+out-Laplacian for a sparse-links causal set.
+
+# Arguments
+- `links`: Input causal set in link (`SparseLinksCauset`) representation.
+
+# Returns
+- `H::Matrix{ComplexF64}`: Hermitian matrix
+  `im * (L_out - L_out') / 2`.
+"""
+function imag_antisym_out_lap(links::SparseLinksCauset)::Matrix{ComplexF64}
+    n = links.atom_count
+    dout = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        dout[i] = length(links.future_links[i])
+    end
+
+    H = zeros(ComplexF64, n, n)
+    @inbounds for i in 1:n
+        for j in links.future_links[i]
+            hij = -0.5im * (dout[j] > 0.0 ? inv(dout[j]) : 0.0)
+            H[i, j] = hij
+            H[j, i] = conj(hij)
+        end
+    end
+    return H
+end
+
+"""
+    imag_antisym_in_lap(cset)
+
+Construct `im` times the antisymmetric part of the directed normalized
+in-Laplacian
+`L_in = I - D_in^{-1} A'`.
+
+The returned matrix is Hermitian by construction and can be diagonalized with
+`eigvals(Hermitian(...))`.
+
+# Arguments
+- `cset`: Input causal set in closure (`BitArrayCauset`) representation.
+
+# Returns
+- `H::Matrix{ComplexF64}`: Hermitian matrix
+  `im * (L_in - L_in') / 2`.
+"""
+function imag_antisym_in_lap(cset::CausalSets.BitArrayCauset)::Matrix{ComplexF64}
+    n = cset.atom_count
+    din = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        din[i] = CausalSets.bitvector_count_ones(cset.past_relations[i])
+    end
+
+    H = zeros(ComplexF64, n, n)
+    @inbounds for i in 1:n
+        fi = cset.future_relations[i]
+        pi = cset.past_relations[i]
+        scale_i = din[i] > 0.0 ? inv(din[i]) : 0.0
+        for j in (i + 1):n
+            hij = 0.0im
+            pi[j] && (hij -= 0.5im * scale_i)
+            fi[j] && (hij += 0.5im * (din[j] > 0.0 ? inv(din[j]) : 0.0))
+            H[i, j] = hij
+            H[j, i] = conj(hij)
+        end
+    end
+    return H
+end
+
+"""
+    imag_antisym_in_lap(links)
+
+Construct `im` times the antisymmetric part of the directed normalized
+in-Laplacian for a sparse-links causal set.
+
+# Arguments
+- `links`: Input causal set in link
+  (`SparseLinksCauset`) representation.
+
+# Returns
+- `H::Matrix{ComplexF64}`: Hermitian matrix
+  `im * (L_in - L_in') / 2`.
+"""
+function imag_antisym_in_lap(links::SparseLinksCauset)::Matrix{ComplexF64}
+    n = links.atom_count
+    din = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        din[i] = length(links.past_links[i])
+    end
+
+    H = zeros(ComplexF64, n, n)
+    @inbounds for i in 1:n
+        scale_i = din[i] > 0.0 ? inv(din[i]) : 0.0
+        for j in links.past_links[i]
+            hij = -0.5im * scale_i
+            H[i, j] = hij
+            H[j, i] = conj(hij)
+        end
+    end
+    return H
+end
+
+"""
+    communicability_row_sums(cset)
+
+Compute the row sums of the communicability matrix `exp(A)` for the adjacency
+representation induced by `cset`.
+
+For topologically sorted causal sets the adjacency is strictly upper triangular,
+so `exp(A) * 1` reduces to a finite Taylor series. The implementation follows
+the matrix-function-action viewpoint from the communicability literature and
+uses repeated adjacency-vector products rather than materializing `exp(A)`.
+
+# Arguments
+- `cset`: Input causal set in closure or sparse-link representation.
+
+# Returns
+- `tc::Vector{Float64}`: Row sums of `exp(A)`, i.e. `exp(A) * ones(n)`.
+
+# Throws
+- `DomainError`: If `atom_count < 1`.
+"""
+function communicability_row_sums(cset::Union{CausalSets.BitArrayCauset,SparseLinksCauset})::Vector{Float64}
+    n = cset.atom_count
+    n >= 1 || throw(DomainError(n, "communicability_row_sums is undefined for atom_count < 1"))
+
+    tc = ones(Float64, n)
+    term = ones(Float64, n)
+    next_term = zeros(Float64, n)
+
+    @inbounds for k in 1:(n - 1)
+        _adjacency_mul!(next_term, cset, term)
+        next_term ./= k
+        tc .+= next_term
+        all(iszero, next_term) && break
+        term, next_term = next_term, term
+    end
+
+    return tc
+end
+
+"""
+    _adjacency_mul!(y, cset, x)
+
+Apply the directed adjacency operator of `cset` to `x` and store the result in `y`.
+
+# Arguments
+- `y`: Output buffer of length `cset.atom_count`.
+- `cset`: Input causal set in closure representation.
+- `x`: Input vector of length `cset.atom_count`.
+
+# Returns
+- `y::AbstractVector{Float64}`: Updated output buffer.
+
+# Throws
+- `DimensionMismatch`: If `x` or `y` has length different from `cset.atom_count`.
+"""
+function _adjacency_mul!(
+    y::AbstractVector{Float64},
+    cset::CausalSets.BitArrayCauset,
+    x::AbstractVector{Float64},
+)
+    n = cset.atom_count
+    length(x) == n || throw(DimensionMismatch("x has length $(length(x)) but atom_count=$n"))
+    length(y) == n || throw(DimensionMismatch("y has length $(length(y)) but atom_count=$n"))
+
+    fill!(y, 0.0)
+    @inbounds for i in 1:n
+        fi = cset.future_relations[i]
+        acc = 0.0
+        for j in (i + 1):n
+            fi[j] || continue
+            acc += x[j]
+        end
+        y[i] = acc
+    end
+    return y
+end
+
+"""
+    _adjacency_mul!(y, links, x)
+
+Apply the directed adjacency operator of `links` to `x` and store the result in `y`.
+
+# Arguments
+- `y`: Output buffer of length `links.atom_count`.
+- `links`: Input sparse-links causal set.
+- `x`: Input vector of length `links.atom_count`.
+
+# Returns
+- `y::AbstractVector{Float64}`: Updated output buffer.
+
+# Throws
+- `DimensionMismatch`: If `x` or `y` has length different from `links.atom_count`.
+"""
+function _adjacency_mul!(
+    y::AbstractVector{Float64},
+    links::SparseLinksCauset,
+    x::AbstractVector{Float64},
+)
+    n = links.atom_count
+    length(x) == n || throw(DimensionMismatch("x has length $(length(x)) but atom_count=$n"))
+    length(y) == n || throw(DimensionMismatch("y has length $(length(y)) but atom_count=$n"))
+
+    fill!(y, 0.0)
+    @inbounds for i in 1:n
+        acc = 0.0
+        for j32 in links.future_links[i]
+            acc += x[Int(j32)]
+        end
+        y[i] = acc
+    end
+    return y
 end
 
 """

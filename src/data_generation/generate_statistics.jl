@@ -134,6 +134,19 @@ function compute_statistics(
         )
     end
 
+    t_comm_link = begin
+        comm = CausalSetZoology.communicability_row_sums(links)
+        (
+            StatsBase.countmap(comm),
+            minimum(comm),
+            maximum(comm),
+            Statistics.mean(comm),
+            Statistics.quantile(comm, 0.25),
+            Statistics.quantile(comm, 0.75),
+            Statistics.quantile(comm, 0.5),
+        )
+    end
+
 
     t_c = begin
         cardinalities = CausalSets.cardinality_abundances(cset)
@@ -237,6 +250,14 @@ function compute_statistics(
     ev_sym_q75_link,
     ev_sym_median_link = t_lap_link
 
+    communicability_hist_link,
+    communicability_min_link,
+    communicability_max_link,
+    communicability_mean_link,
+    communicability_q25_link,
+    communicability_q75_link,
+    communicability_median_link = t_comm_link
+
     @debug "fetching results rn, cn, d"
     connectivity = t_rn
 
@@ -330,6 +351,15 @@ function compute_statistics(
         ev_sym_q25_link = ev_sym_q25_link,
         ev_sym_q75_link = ev_sym_q75_link,
         ev_sym_median_link = ev_sym_median_link,
+
+        # row sums of exp(A_link)
+        communicability_hist_link = communicability_hist_link,
+        communicability_min_link = communicability_min_link,
+        communicability_max_link = communicability_max_link,
+        communicability_mean_link = communicability_mean_link,
+        communicability_q25_link = communicability_q25_link,
+        communicability_q75_link = communicability_q75_link,
+        communicability_median_link = communicability_median_link,
 
         #
         connectivity = connectivity,
