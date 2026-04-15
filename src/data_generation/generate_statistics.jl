@@ -134,10 +134,17 @@ function compute_statistics(
         )
     end
 
+    t_imag_antisym_in_lap_link = begin
+        ev_imag_antisym_in = CausalSetZoology.imag_antisym_in_lap_eigs(links)
+        (
+            ev_summary(ev_imag_antisym_in)...,
+        )
+    end
+
     t_comm_link = begin
         comm = CausalSetZoology.communicability_row_sums(links)
         (
-            StatsBase.countmap(comm),
+            comm,
             minimum(comm),
             maximum(comm),
             Statistics.mean(comm),
@@ -250,7 +257,17 @@ function compute_statistics(
     ev_sym_q75_link,
     ev_sym_median_link = t_lap_link
 
-    communicability_hist_link,
+    ev_imag_antisym_in_link,
+    ev_imag_antisym_in_num_zero_link,
+    ev_imag_antisym_in_min_abs_nonzero_link,
+    ev_imag_antisym_in_min_link,
+    ev_imag_antisym_in_max_link,
+    ev_imag_antisym_in_mean_link,
+    ev_imag_antisym_in_q25_link,
+    ev_imag_antisym_in_q75_link,
+    ev_imag_antisym_in_median_link = t_imag_antisym_in_lap_link
+
+    communicability_link,
     communicability_min_link,
     communicability_max_link,
     communicability_mean_link,
@@ -352,8 +369,19 @@ function compute_statistics(
         ev_sym_q75_link = ev_sym_q75_link,
         ev_sym_median_link = ev_sym_median_link,
 
+        # eigenvalues of imag times antisymmetric part of normalized in-Laplacian
+        ev_imag_antisym_in_link = ev_imag_antisym_in_link,
+        ev_imag_antisym_in_num_zero_link = ev_imag_antisym_in_num_zero_link,
+        ev_imag_antisym_in_min_abs_nonzero_link = ev_imag_antisym_in_min_abs_nonzero_link,
+        ev_imag_antisym_in_min_link = ev_imag_antisym_in_min_link,
+        ev_imag_antisym_in_max_link = ev_imag_antisym_in_max_link,
+        ev_imag_antisym_in_mean_link = ev_imag_antisym_in_mean_link,
+        ev_imag_antisym_in_q25_link = ev_imag_antisym_in_q25_link,
+        ev_imag_antisym_in_q75_link = ev_imag_antisym_in_q75_link,
+        ev_imag_antisym_in_median_link = ev_imag_antisym_in_median_link,
+
         # row sums of exp(A_link)
-        communicability_hist_link = communicability_hist_link,
+        communicability_link = communicability_link,
         communicability_min_link = communicability_min_link,
         communicability_max_link = communicability_max_link,
         communicability_mean_link = communicability_mean_link,
