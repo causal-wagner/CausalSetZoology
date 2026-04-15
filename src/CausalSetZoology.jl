@@ -45,7 +45,13 @@ export average_histogram_with_std,
     minkowski_cardinality_abundance_2D,
     minkowski_cardinality_abundances_2D_asymptotic,
     normalize_hists,
+    mc_pairwise_apply,
     histogram_to_dense_pair,
+    weighted_hist_mean,
+    weighted_hist_std,
+    weighted_hist_skew,
+    weighted_hist_exkurt,
+    aggregate_hist_moment,
     relative_change,
     replace_zeros,
     scalar_bin_distinguishability,
@@ -77,6 +83,7 @@ export average_histogram_with_std,
 include("./data_analysis/minkowski_abundance_analytical.jl")
 include("./data_analysis/dataloading.jl")
 include("./data_analysis/utils.jl")
+include("./data_analysis/moments_of_distributions.jl")
 include("./data_generation/SparseLinksCauset.jl")
 include("./data_generation/utils.jl")
 

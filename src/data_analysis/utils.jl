@@ -1,4 +1,116 @@
 """
+    mc_pairwise_apply(vecs_a, vecs_b, f, num_draws; rng=...)
+
+Apply `f(a, b)` to Monte Carlo sampled pairs `(a, b)` drawn with replacement
+from `vecs_a` and `vecs_b`.
+
+# Arguments
+- `vecs_a`: First sample set.
+- `vecs_b`: Second sample set.
+- `f`: Function applied to each sampled pair.
+- `num_draws`: Number of Monte Carlo draws.
+
+# Keyword Arguments
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `values::Vector{Any}`: One sampled result per draw, in draw order.
+
+# Throws
+- `ArgumentError`: If `vecs_a` or `vecs_b` is empty.
+- `DomainError`: If `num_draws <= 0`.
+- Exceptions thrown while evaluating `f(a, b)` are propagated.
+"""
+function mc_pairwise_apply(
+    vecs_a::AbstractVector,
+    vecs_b::AbstractVector,
+    f::Function,
+    num_draws::Int;
+    rng = Random.default_rng(),
+)
+    isempty(vecs_a) && throw(ArgumentError("vecs_a must be non-empty"))
+    isempty(vecs_b) && throw(ArgumentError("vecs_b must be non-empty"))
+    if !(num_draws > 0)
+        throw(DomainError(num_draws, "num_draws must be positive"))
+    end
+
+    vals = Vector{Any}(undef, num_draws)
+    draw_seeds = rand(rng, UInt64, num_draws)
+
+    Threads.@threads for t in 1:num_draws
+        rng_t = Random.Xoshiro(draw_seeds[t])
+        a = vecs_a[rand(rng_t, 1:length(vecs_a))]
+        b = vecs_b[rand(rng_t, 1:length(vecs_b))]
+        vals[t] = f(a, b)
+    end
+
+    return vals
+end
+
+"""
+    _sample_distinct_unordered_pair(rng, n)
+
+Sample one unordered pair of distinct indices from `1:n`.
+
+# Arguments
+- `rng`: Random number generator used for stochastic steps.
+- `n`: Number of available items.
+
+# Returns
+- `result::Tuple{Int,Int}`: Pair `(i, j)` with `1 <= i < j <= n`.
+
+# Throws
+- `DomainError`: If `n < 2`.
+"""
+@inline function _sample_distinct_unordered_pair(rng, n::Int)::Tuple{Int,Int}
+    n >= 2 || throw(DomainError(n, "n must be >= 2"))
+    i = rand(rng, 1:n)
+    j = rand(rng, 1:(n - 1))
+    j = j >= i ? j + 1 : j
+    return i < j ? (i, j) : (j, i)
+end
+
+"""
+    _sample_pooled_pair_distances!(pairs_u, pairs_v, dists, Dmat, rng)
+
+Fill preallocated buffers with sampled pooled-pair distances from a distance matrix.
+
+# Arguments
+- `pairs_u`: Output buffer for first indices.
+- `pairs_v`: Output buffer for second indices.
+- `dists`: Output buffer for sampled distances.
+- `Dmat`: Square pairwise-distance matrix.
+- `rng`: Random number generator used for stochastic steps.
+
+# Returns
+- `nothing`: Buffers are updated in place.
+
+# Throws
+- `DimensionMismatch`: If output buffers do not have equal length or if `Dmat`
+  is not square.
+- `DomainError`: If `size(Dmat, 1) < 2`.
+"""
+function _sample_pooled_pair_distances!(
+    pairs_u::Vector{Int},
+    pairs_v::Vector{Int},
+    dists::Vector{Float64},
+    Dmat::AbstractMatrix{<:Real},
+    rng,
+)
+    size(Dmat, 1) == size(Dmat, 2) || throw(DimensionMismatch("Dmat must be square"))
+    n_total = size(Dmat, 1)
+    n_total >= 2 || throw(DomainError(n_total, "Dmat must contain at least 2 samples"))
+    length(pairs_u) == length(pairs_v) == length(dists) || throw(DimensionMismatch("output buffers must have equal length"))
+    @inbounds for k in eachindex(dists)
+        i, j = _sample_distinct_unordered_pair(rng, n_total)
+        pairs_u[k] = i
+        pairs_v[k] = j
+        dists[k] = Dmat[i, j]
+    end
+    return nothing
+end
+
+"""
     normalize_hists(
         hists::AbstractVector{<:AbstractVector{<:AbstractDict}};
         normalization::Union{Symbol,Real} = :probability,
@@ -199,6 +311,21 @@ end
 
 Bridge method for nested vectors with non-concrete element types (e.g. `Vector{Vector}`).
 Infers histogram payload shape at runtime and forwards to the typed implementations.
+
+# Arguments
+- `hists`: Nested histogram payloads consisting either of dictionaries or
+  `(dictionary, scalar)` tuples.
+
+# Keyword Arguments
+- `normalization`: `:max`, `:probability`, or a nonzero finite real constant.
+- `num_bins`: Optional scalar bin count for `(hist, scalar)` payloads.
+
+# Returns
+- `result`: Output of the matching typed `normalize_hists` method.
+
+# Throws
+- `ArgumentError`: If the runtime payload shape is unsupported or internally inconsistent.
+- `DomainError`: Propagated from the typed normalization methods for invalid numeric settings.
 """
 function normalize_hists(
     hists::AbstractVector{<:AbstractVector};
