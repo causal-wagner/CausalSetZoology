@@ -85,8 +85,9 @@ const kind = JLD2.jldopen(in_path, "r") do f
     f["meta/config"]["kind"]
 end
 
+observables_label = isnothing(observables) ? "all" : join(String.(observables), ",")
 
-@info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes), observables=$(isnothing(observables) ? \"all\" : observables)"
+@info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes), observables=$(observables_label)"
 
 @everywhere import LinearAlgebra
 

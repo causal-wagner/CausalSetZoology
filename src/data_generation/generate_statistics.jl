@@ -867,6 +867,10 @@ function create_statistics_dataset_and_save(
     if !(kind in supported_kinds)
         throw(ArgumentError("unsupported kind=$kind; expected one of $(collect(supported_kinds))"))
     end
+    links_only_dataset = JLD2.jldopen(in_path, "r") do fin
+        config = fin["meta/config"]
+        get(config, "links_only", false)
+    end
 
     prog = ProgressMeter.Progress(nbatches; desc = "Computing statistics")
 
@@ -879,12 +883,18 @@ function create_statistics_dataset_and_save(
     for b = 1:nbatches
             # Eagerly load all batch arrays into memory
             JLD2.jldopen(in_path, "r") do fin
-                csets_b = fin["batches/$b/csets"]
                 links_b = fin["batches/$b/links"]
-                if !(length(csets_b) == length(links_b))
+                batch_group = fin["batches/$b"]
+                has_csets = haskey(batch_group, "csets")
+                if links_only_dataset && has_csets
+                    @warn "Input dataset metadata marks links_only=true, but batch $b contains csets. Using stored csets."
+                end
+                csets_b = has_csets ? fin["batches/$b/csets"] : nothing
+                batch_len = length(links_b)
+                if !isnothing(csets_b) && !(length(csets_b) == batch_len)
                     throw(
                         DimensionMismatch(
-                            "batch $b has inconsistent lengths: csets=$(length(csets_b)), links=$(length(links_b))",
+                            "batch $b has inconsistent lengths: csets=$(length(csets_b)), links=$(batch_len)",
                         ),
                     )
                 end
@@ -898,8 +908,8 @@ function create_statistics_dataset_and_save(
                 if kind == "manifoldlike_simply_connected"
                     r_b     = fin["batches/$b/r"]
                     order_b = fin["batches/$b/order"]
-                    if !(length(r_b) == length(csets_b) == length(order_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(r_b) == batch_len == length(order_b))
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
 
                 elseif kind == "manifoldlike_non_simply_connected"
@@ -907,16 +917,16 @@ function create_statistics_dataset_and_save(
                     order_b = fin["batches/$b/order"]
                     num_boundary_cuts_b = fin["batches/$b/num_boundary_cuts"]
                     genus_b     = fin["batches/$b/genus"]
-                    if !(length(r_b) == length(order_b) == length(num_boundary_cuts_b) == length(genus_b) == length(csets_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(r_b) == length(order_b) == length(num_boundary_cuts_b) == length(genus_b) == batch_len)
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
 
                 elseif kind == "destroyed"
                     r_b             = fin["batches/$b/r"]
                     order_b         = fin["batches/$b/order"]
                     rel_num_flips_b = fin["batches/$b/rel_num_flips"]
-                    if !(length(r_b) == length(order_b) == length(rel_num_flips_b) == length(csets_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(r_b) == length(order_b) == length(rel_num_flips_b) == batch_len)
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
 
                 elseif kind == "merged"
@@ -924,8 +934,8 @@ function create_statistics_dataset_and_save(
                     order_b       = fin["batches/$b/order"]
                     rel_size_KR_b = fin["batches/$b/rel_size_KR"]
                     link_probability_b = fin["batches/$b/link_probability"]
-                    if !(length(r_b) == length(order_b) == length(rel_size_KR_b) == length(link_probability_b) == length(csets_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(r_b) == length(order_b) == length(rel_size_KR_b) == length(link_probability_b) == batch_len)
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
 
                 elseif kind == "grid"
@@ -933,28 +943,105 @@ function create_statistics_dataset_and_save(
                     segment_angle_b = fin["batches/$b/segment_angle"]
                     rotation_angle_b = fin["batches/$b/rotation_angle"]
                     lattice_b       = fin["batches/$b/lattice"]
-                    if !(length(segment_ratio_b) == length(segment_angle_b) == length(rotation_angle_b) == length(lattice_b) == length(csets_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(segment_ratio_b) == length(segment_angle_b) == length(rotation_angle_b) == length(lattice_b) == batch_len)
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
 
                 elseif kind == "layered"
                     num_layers_b = fin["batches/$b/num_layers"]
                     std_b        = fin["batches/$b/std"]
-                    if !(length(num_layers_b) == length(std_b) == length(csets_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(num_layers_b) == length(std_b) == batch_len)
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
 
                 elseif kind == "minkowski_quasicrystal"
                     trans_in_b  = fin["batches/$b/trans_in"]
                     trans_out_b = fin["batches/$b/trans_out"]
-                    if !(length(trans_in_b) == length(trans_out_b) == length(csets_b))
-                        throw(DimensionMismatch("batch $b metadata lengths must match csets length $(length(csets_b))"))
+                    if !(length(trans_in_b) == length(trans_out_b) == batch_len)
+                        throw(DimensionMismatch("batch $b metadata lengths must match batch length $(batch_len)"))
                     end
                 end
 
 
-                tmp = Distributed.pmap(1:length(csets_b)) do i
-                    if kind == "manifoldlike_simply_connected"
+                tmp = Distributed.pmap(1:batch_len) do i
+                    if isnothing(csets_b)
+                        if kind == "manifoldlike_simply_connected"
+                            compute_statistics(
+                                links_b[i];
+                                kind  = kind,
+                                r     = r_b !== nothing         ? r_b[i]         : 0,
+                                order = order_b !== nothing     ? order_b[i]     : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "manifoldlike_non_simply_connected"
+                            compute_statistics(
+                                links_b[i];
+                                kind  = kind,
+                                r     = r_b !== nothing         ? r_b[i]         : 0,
+                                order = order_b !== nothing     ? order_b[i]     : 0,
+                                num_boundary_cuts = num_boundary_cuts_b !== nothing ? num_boundary_cuts_b[i] : 0,
+                                genus = genus_b !== nothing     ? genus_b[i]     : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "destroyed"
+                            compute_statistics(
+                                links_b[i];
+                                kind          = kind,
+                                r             = r_b !== nothing               ? r_b[i]               : 0,
+                                order         = order_b !== nothing           ? order_b[i]           : 0,
+                                rel_num_flips = rel_num_flips_b !== nothing   ? rel_num_flips_b[i]   : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "merged"
+                            compute_statistics(
+                                links_b[i];
+                                kind        = kind,
+                                r           = r_b !== nothing             ? r_b[i]             : 0,
+                                order       = order_b !== nothing         ? order_b[i]         : 0,
+                                rel_size_KR = rel_size_KR_b !== nothing   ? rel_size_KR_b[i]   : 0,
+                                link_probability = link_probability_b !== nothing ? link_probability_b[i] : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "grid"
+                            compute_statistics(
+                                links_b[i];
+                                kind           = kind,
+                                segment_ratio  = segment_ratio_b !== nothing   ? segment_ratio_b[i]   : 0,
+                                segment_angle  = segment_angle_b !== nothing   ? segment_angle_b[i]   : 0,
+                                rotation_angle = rotation_angle_b !== nothing ? rotation_angle_b[i]  : 0,
+                                lattice        = lattice_b !== nothing         ? lattice_b[i]         : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "layered"
+                            compute_statistics(
+                                links_b[i];
+                                kind       = kind,
+                                num_layers = num_layers_b !== nothing ? num_layers_b[i] : 0,
+                                std        = std_b !== nothing        ? std_b[i]        : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "random"
+                            compute_statistics(
+                                links_b[i];
+                                kind = kind,
+                                observables = observables,
+                            )
+                        elseif kind == "minkowski_quasicrystal"
+                            compute_statistics(
+                                links_b[i];
+                                kind      = kind,
+                                trans_in  = trans_in_b !== nothing  ? trans_in_b[i]  : 0,
+                                trans_out = trans_out_b !== nothing ? trans_out_b[i] : 0,
+                                observables = observables,
+                            )
+                        elseif kind == "minkowski_sprinkling"
+                            compute_statistics(
+                                links_b[i];
+                                kind = kind,
+                                observables = observables,
+                            )
+                        end
+                    elseif kind == "manifoldlike_simply_connected"
                         compute_statistics(
                             csets_b[i],
                             links_b[i];

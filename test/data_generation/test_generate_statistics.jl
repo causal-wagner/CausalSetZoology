@@ -363,6 +363,51 @@ end
     end
 end
 
+# Verifies statistics writer can consume links-only datasets when only link observables are requested.
+@testitem "generate_statistics: create_statistics_dataset_and_save links-only dataset" setup=[setupGenerateStatistics] begin
+    tmp = mktempdir()
+    in_path = joinpath(tmp, "dataset_links_only.jld2")
+    out_path = joinpath(tmp, "stats_links_only.jld2")
+
+    config = Dict("kind" => "grid", "num_csets" => 1, "cset_size" => 16, "links_only" => true)
+    CausalSetZoology.create_dataset_and_save(
+        in_path,
+        "grid",
+        1,
+        1,
+        1,
+        1,
+        config,
+        42;
+        cset_size = 16,
+        lattice_distr = Distributions.DiscreteUniform(1, 1),
+        lattices = ["quadratic"],
+        segment_ratio_distr = Distributions.Uniform(1.0, 1.01),
+        rotate_angle_distr = Distributions.Uniform(0.0, 0.01),
+        oblique_angle_distr = Distributions.Uniform(10.0, 10.01),
+        links_only = true,
+    )
+
+    CausalSetZoology.create_statistics_dataset_and_save(
+        in_path,
+        out_path,
+        "grid",
+        1,
+        1,
+        1;
+        observables = [:link_degree],
+    )
+
+    @test isfile(out_path)
+    JLD2.jldopen(out_path, "r") do f
+        rec = f["batches/1"][1]
+        @test hasfield(typeof(rec), :degree_hist_link)
+        @test !hasfield(typeof(rec), :degree_hist)
+        @test !hasfield(typeof(rec), :connectivity)
+        @test hasfield(typeof(rec), :segment_ratio)
+    end
+end
+
 # Verifies writer argument and kind validation.
 @testitem "generate_statistics: create_statistics_dataset_and_save validation" setup=[setupGenerateStatistics] begin
     tmp = mktempdir()
