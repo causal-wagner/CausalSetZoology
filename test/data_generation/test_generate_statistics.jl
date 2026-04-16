@@ -165,11 +165,69 @@ end
     @test hasfield(typeof(rec_merged), :link_probability)
 end
 
+# Verifies observable filtering computes and returns only the requested statistic groups.
+@testitem "generate_statistics: compute_statistics observables filter" setup=[setupGenerateStatistics] begin
+    cset, links = _generated_fixture(kind = "grid")
+
+    rec = CausalSetZoology.compute_statistics(
+        cset,
+        links;
+        kind = "grid",
+        observables = [:degree, :ev_sym, :communicability],
+    )
+
+    @test hasfield(typeof(rec), :n)
+    @test hasfield(typeof(rec), :in_degree_hist)
+    @test hasfield(typeof(rec), :degree_hist)
+    @test hasfield(typeof(rec), :ev_sym_link)
+    @test hasfield(typeof(rec), :communicability_link)
+
+    @test !hasfield(typeof(rec), :in_degree_hist_link)
+    @test !hasfield(typeof(rec), :max_pathlen_hist)
+    @test !hasfield(typeof(rec), :cardinalities_hist)
+    @test !hasfield(typeof(rec), :ev_imag_antisym_in_link)
+
+    @test hasfield(typeof(rec), :segment_ratio)
+    @test hasfield(typeof(rec), :segment_angle)
+    @test hasfield(typeof(rec), :rotation_angle)
+    @test hasfield(typeof(rec), :lattice)
+end
+
+# Verifies each supported observable group can be requested individually.
+@testitem "generate_statistics: compute_statistics observables one-by-one" setup=[setupGenerateStatistics] begin
+    cset, links = _generated_fixture(kind = "grid")
+    expected = Dict(
+        :degree => (:degree_hist, [:in_degree_hist_link, :ev_sym_link, :cardinalities_hist]),
+        :link_degree => (:degree_hist_link, [:degree_hist, :ev_sym_link, :cardinalities_hist]),
+        :ev_sym => (:ev_sym_link, [:degree_hist, :degree_hist_link, :ev_imag_antisym_in_link]),
+        :ev_antisym => (:ev_imag_antisym_in_link, [:degree_hist, :degree_hist_link, :ev_sym_link]),
+        :cardinalities => (:cardinalities_hist, [:degree_hist, :degree_hist_link, :ev_sym_link]),
+        :max_pathlen => (:max_pathlen_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist]),
+        :communicability => (:communicability_link, [:degree_hist, :degree_hist_link, :cardinalities_hist]),
+    )
+
+    for (obs, (present_field, absent_fields)) in expected
+        rec = CausalSetZoology.compute_statistics(cset, links; kind = "grid", observables = [obs])
+        @test hasfield(typeof(rec), :n)
+        @test hasfield(typeof(rec), :connectivity)
+        @test hasfield(typeof(rec), present_field)
+        for fld in absent_fields
+            @test !hasfield(typeof(rec), fld)
+        end
+    end
+end
+
 # Verifies compute_statistics validation guards for kind/domain/shape.
 @testitem "generate_statistics: compute_statistics validation" setup=[setupGenerateStatistics] begin
     cset, links = _generated_fixture(kind = "grid")
 
     @test_throws ArgumentError CausalSetZoology.compute_statistics(cset, links; kind = "bad_kind")
+    @test_throws ArgumentError CausalSetZoology.compute_statistics(
+        cset,
+        links;
+        kind = "grid",
+        observables = [:degree, :not_real],
+    )
 
     links_bad = CausalSetZoology.SparseLinksCauset(
         Int64(2),
@@ -177,6 +235,92 @@ end
         [Int32[], Int32[1]],
     )
     @test_throws DimensionMismatch CausalSetZoology.compute_statistics(cset, links_bad; kind = "grid")
+end
+
+# Verifies links-only overload computes only link-supported observable groups.
+@testitem "generate_statistics: compute_statistics links-only" setup=[setupGenerateStatistics] begin
+    links = _chain4_sparse_links()
+
+    rec = CausalSetZoology.compute_statistics(
+        links;
+        kind = "grid",
+        observables = [:link_degree, :max_pathlen, :ev_sym, :ev_antisym, :communicability],
+    )
+
+    @test hasfield(typeof(rec), :n)
+    @test hasfield(typeof(rec), :degree_hist_link)
+    @test hasfield(typeof(rec), :max_pathlen_hist)
+    @test hasfield(typeof(rec), :ev_sym_link)
+    @test hasfield(typeof(rec), :ev_imag_antisym_in_link)
+    @test hasfield(typeof(rec), :communicability_link)
+
+    @test !hasfield(typeof(rec), :degree_hist)
+    @test !hasfield(typeof(rec), :cardinalities_hist)
+    @test !hasfield(typeof(rec), :connectivity)
+
+    @test rec.n == 4
+    @test rec.num_sources == 1
+    @test rec.num_sinks == 1
+    @test sum(values(rec.degree_hist_link)) == rec.n
+end
+
+# Verifies links-only overload defaults to all supported observables and matches common fields from the two-argument method.
+@testitem "generate_statistics: compute_statistics links-only equivalence" setup=[setupGenerateStatistics] begin
+    cset, links = _generated_fixture(kind = "grid")
+    obs = [:link_degree, :max_pathlen, :ev_sym, :ev_antisym, :communicability]
+
+    rec_full = CausalSetZoology.compute_statistics(cset, links; kind = "grid", observables = obs)
+    rec_links = CausalSetZoology.compute_statistics(links; kind = "grid")
+
+    common_fields = (
+        :n,
+        :degree_hist_link,
+        :degree_mean_link,
+        :num_sources,
+        :num_sinks,
+        :num_sources_link,
+        :num_sinks_link,
+        :max_pathlen_hist,
+        :max_pathlen_mean,
+        :ev_sym_link,
+        :ev_sym_mean_link,
+        :ev_imag_antisym_in_link,
+        :ev_imag_antisym_in_mean_link,
+        :communicability_link,
+        :communicability_mean_link,
+        :segment_ratio,
+        :segment_angle,
+        :rotation_angle,
+        :lattice,
+    )
+    for fld in common_fields
+        @test getproperty(rec_links, fld) == getproperty(rec_full, fld)
+    end
+end
+
+# Verifies links-only overload rejects closure-dependent observables.
+@testitem "generate_statistics: compute_statistics links-only validation" setup=[setupGenerateStatistics] begin
+    links = _chain4_sparse_links()
+
+    @test_throws ArgumentError CausalSetZoology.compute_statistics(
+        links;
+        kind = "grid",
+        observables = [:degree],
+    )
+    @test_throws ArgumentError CausalSetZoology.compute_statistics(
+        links;
+        kind = "grid",
+        observables = [:cardinalities],
+    )
+    @test_throws ArgumentError CausalSetZoology.compute_statistics(
+        links;
+        kind = "bad_kind",
+    )
+    empty_links = CausalSetZoology.SparseLinksCauset(Int64(0), Vector{Vector{Int32}}(), Vector{Vector{Int32}}())
+    @test_throws DomainError CausalSetZoology.compute_statistics(
+        empty_links;
+        kind = "grid",
+    )
 end
 
 # Verifies writer computes and stores one full batch of statistics from a tiny dataset.
