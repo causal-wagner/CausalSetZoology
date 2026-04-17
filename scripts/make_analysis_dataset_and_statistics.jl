@@ -33,6 +33,16 @@ s = ArgParseSettings()
         arg_type = Float64
         required = false
 
+    "--links_only"
+        help = "Store only sparse links for supported kinds"
+        arg_type = Bool
+        default = false
+
+    "--observables"
+        help = "Statistics observables as comma-separated names, e.g. degree,link_degree,ev_sym, or 'all'"
+        arg_type = String
+        default = "all"
+
     "--size"
         help = "Causal set size"
         arg_type = Int
@@ -82,6 +92,16 @@ if args["link_probability"] !== nothing
         @warn "--link_probability is only used for kind=merged; ignoring for kind=$(args["kind"])"
     end
 end
+
+function _parse_observables_arg(value::AbstractString)::Union{Vector{Symbol},Nothing}
+    stripped = strip(value)
+    if isempty(stripped) || lowercase(stripped) == "all"
+        return nothing
+    end
+    return [Symbol(strip(part)) for part in split(stripped, ",") if !isempty(strip(part))]
+end
+
+observables = _parse_observables_arg(args["observables"])
 
 dataset_out = joinpath(outdir, "dataset.jld2")
 stats_out   = joinpath(outdir, "statistics.jld2")
@@ -152,6 +172,8 @@ config = Dict(
     "batchsize"         => args["batchsize"],
     "num_processes"     => args["num_processes"],
     "dataset_multiprocessing" => args["dataset_multiprocessing"],
+    "links_only"        => args["links_only"],
+    "observables"       => isnothing(observables) ? "all" : String.(observables),
     "dataset_out"       => dataset_out,
     "stats_out"         => stats_out,
     "julia_version"     => string(VERSION),
@@ -206,6 +228,8 @@ open(readme_out, "w") do io
     if args["link_probability"] !== nothing
         println(io, "         --link_probability ", args["link_probability"], " \\")
     end
+    println(io, "         --links_only ", args["links_only"], " \\")
+    println(io, "         --observables ", args["observables"], " \\")
     println(io, "         --size ", args["size"], " \\")
     println(io, "         --num_csets ", args["num_csets"], " \\")
     println(io, "         --batchsize ", args["batchsize"], " \\")
@@ -230,6 +254,7 @@ cmd = `julia -O3 $dataset_script_copy
     --seed $(args["seed"])
     --batchsize $(args["batchsize"])
     --out $dataset_out
+    --links_only $(args["links_only"])
 `
 args["dataset_multiprocessing"] && (cmd = `$cmd --num_processes $(args["num_processes"])`)
 args["D"] !== nothing && (cmd = `$cmd --D $(args["D"])`)
@@ -251,6 +276,7 @@ run(`julia -O3 $stats_script_copy
     --in $dataset_out
     --out $stats_out
     --num_processes $(args["num_processes"])
+    --observables $(args["observables"])
 `)
 
 isfile(stats_out) || error("Statistics computation failed; output not found.")

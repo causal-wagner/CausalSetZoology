@@ -1,13 +1,23 @@
+function _parse_observables_arg(value::AbstractString)::Union{Vector{Symbol},Nothing}
+    stripped = strip(value)
+    if isempty(stripped) || lowercase(stripped) == "all"
+        return nothing
+    end
+    return [Symbol(strip(part)) for part in split(stripped, ",") if !isempty(strip(part))]
+end
+
 args = ARGS
 for (i, arg) in enumerate(args)
     if arg == "--help" || arg == "-h"
         println(
-            "Usage: julia make_analysis_statistics.jl [--kind <kind>] [--in <input_path>] [--out <output_path>] [--num_processes <number>] [--batchsize <number>]",
+            "Usage: julia make_analysis_statistics.jl [--kind <kind>] [--in <input_path>] [--out <output_path>] [--num_processes <number>] [--batchsize <number>] [--observables <list>]",
         )
         println("Options:")
         println("  --in <input_path>                Path to the input .jld2 file containing dataset information.")
         println("  --out <output_path>              Path to save the resulting .csv file with computed statistics.")
         println("  --num_processes <number>         Number of parallel processes to use for computation.")
+        println("  --observables <list>             Observable groups as a comma-separated list, e.g.")
+        println("                                   degree,link_degree,ev_sym or all (default: all).")
         println("  --help, -h                       Show this help message.")
         exit(0)
     end
@@ -39,6 +49,15 @@ for (i, arg) in enumerate(args)
         end
     end
 
+    if arg == "--observables"
+        if i + 1 <= length(args)
+            global observables = _parse_observables_arg(args[i+1])
+        else
+            println("Error: --observables requires a comma-separated argument.")
+            exit(1)
+        end
+    end
+
 end
 
 ################################################################################
@@ -48,6 +67,9 @@ Pkg.instantiate()
 
 if !@isdefined(num_processes)
     num_processes = 1
+end
+if !@isdefined(observables)
+    observables = nothing
 end
 
 using Distributed
@@ -63,8 +85,9 @@ const kind = JLD2.jldopen(in_path, "r") do f
     f["meta/config"]["kind"]
 end
 
+observables_label = isnothing(observables) ? "all" : join(String.(observables), ",")
 
-@info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes)"
+@info "Running statistics computation with kind=$(kind), in path=$(in_path), output path=$(out_path), number of processes=$(num_processes), observables=$(observables_label)"
 
 @everywhere import LinearAlgebra
 
@@ -97,6 +120,8 @@ CausalSetZoology.create_statistics_dataset_and_save(
     batchsize_in,
     nbatches,
     N,
+    ;
+    observables = observables,
 )
 
 Distributed.rmprocs(workers())
