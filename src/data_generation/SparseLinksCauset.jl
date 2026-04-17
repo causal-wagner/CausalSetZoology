@@ -87,7 +87,7 @@ function _causet_from_manifold_and_sprinkling(
     manifold::CausalSets.AbstractManifold{N},
     sprinkling::Vector{CausalSets.Coordinates{N}};
     links::Bool = false,
-) where {N}
+)::Union{CausalSets.BitArrayCauset,SparseLinksCauset} where {N}
     if links
         return SparseLinksCauset(manifold, sprinkling)
     end
@@ -112,7 +112,7 @@ function create_Minkowski_quasicrystal_cset(
     deviation_from_mean_size::Float64 = 0.1,
     max_iter::Int64 = 100,
     links::Bool = false,
-)
+)::Union{CausalSets.BitArrayCauset,SparseLinksCauset}
     if ρ === nothing && crystal === nothing
         error("Either ρ or crystal must be provided")
     end
@@ -157,7 +157,11 @@ function make_polynomial_manifold_cset(
     d::Int64 = 2,
     type::Type{T} = Float32,
     links::Bool = false,
-) where {T<:Number}
+)::Tuple{
+    Union{CausalSets.BitArrayCauset,SparseLinksCauset},
+    Vector{CausalSets.Coordinates{d}},
+    Array{T,d},
+} where {T<:Number}
     if npoints <= 0
         throw(ArgumentError("npoints must be greater than 0, got $npoints"))
     end
@@ -212,7 +216,15 @@ function make_polynomial_manifold_cset_with_nontrivial_topology(
     tolerance::Float64 = 1e-12,
     type::Type{T} = Float32,
     links::Bool = false,
-) where {T<:Number}
+)::Tuple{
+    Union{CausalSets.BitArrayCauset,SparseLinksCauset},
+    Vector{CausalSets.Coordinates{d}},
+    Tuple{
+        Vector{CausalSets.Coordinates{d}},
+        Vector{Tuple{CausalSets.Coordinates{d},CausalSets.Coordinates{d}}},
+    },
+    Matrix{T},
+} where {T<:Number}
     if npoints <= 0
         throw(ArgumentError("npoints must be greater than 0, got $npoints"))
     end
@@ -251,7 +263,7 @@ function make_polynomial_manifold_cset_with_nontrivial_topology(
     squaretaylorcoefs = CausalSets.polynomial_pow(taylorcoefs, 2)
     polym = CausalSets.PolynomialManifold{d}(squaretaylorcoefs)
     boundary = CausalSets.BoxBoundary{d}(((-1.0, -1.0), (1.0, 1.0)))
-    sprinkling = CausalSets.generate_sprinkling(polym, boundary, npoints)
+    sprinkling = CausalSets.generate_sprinkling(polym, boundary, npoints; rng = rng)
     branch_point_info =
         QuantumGrav.generate_random_branch_points(n_vertical_cuts; genus = genus, tolerance = tolerance)
     branched_sprinkling =

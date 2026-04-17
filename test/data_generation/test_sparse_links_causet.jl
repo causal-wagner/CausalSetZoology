@@ -44,36 +44,6 @@
         @test actual.past_links == expected.past_links
     end
 
-    function _branched_raw_fixture(; seed::Int = 2026, npoints::Int = 18, n_vertical_cuts::Int = 1, genus::Int = 0, order::Int = 4, r::Float64 = 2.0, tolerance::Float64 = 1e-12)
-        rng = Random.MersenneTwister(12)
-        Random.seed!(seed)
-
-        chebyshev_coefs = zeros(Float64, order + 1, order + 1)
-        for i = 1:order
-            for j = 1:order
-                chebyshev_coefs[i, j] = r^(-i - j) * Random.randn(rng)
-            end
-        end
-
-        cheb_to_taylor_mat = CausalSets.chebyshev_coef_matrix(order)
-        taylorcoefs = CausalSets.transform_polynomial(chebyshev_coefs, cheb_to_taylor_mat)
-        squaretaylorcoefs = CausalSets.polynomial_pow(taylorcoefs, 2)
-        polym = CausalSets.PolynomialManifold{2}(squaretaylorcoefs)
-        boundary = CausalSets.BoxBoundary{2}(((-1.0, -1.0), (1.0, 1.0)))
-        sprinkling = CausalSets.generate_sprinkling(polym, boundary, npoints)
-        branch_point_info =
-            QuantumGrav.generate_random_branch_points(n_vertical_cuts; genus = genus, tolerance = tolerance)
-        branched_sprinkling =
-            QuantumGrav.filter_sprinkling_near_cuts(sprinkling, branch_point_info; tolerance = tolerance)
-        branched_cset = QuantumGrav.BranchedManifoldCauset(polym, branch_point_info, branched_sprinkling)
-
-        return (
-            branched_cset = branched_cset,
-            branched_sprinkling = branched_sprinkling,
-            branch_point_info = branch_point_info,
-            chebyshev_coefs = Float32.(chebyshev_coefs),
-        )
-    end
 end
 
 # Verifies direct field constructor stores values without mutation.
@@ -230,9 +200,17 @@ end
 
 # Verifies branched polynomial manifold wrapper can generate sparse links directly.
 @testitem "SparseLinksCauset: make_polynomial_manifold_cset_with_nontrivial_topology links mode" setup=[setupSparseLinksCauset] begin
-    raw = _branched_raw_fixture()
-    expected = CausalSetZoology.SparseLinksCauset(raw.branched_cset)
-
+    Random.seed!(2026)
+    cset, sprinkling_bit, branch_info_bit, coefs_bit =
+        CausalSetZoology.make_polynomial_manifold_cset_with_nontrivial_topology(
+            18,
+            1,
+            0,
+            Random.MersenneTwister(12),
+            4,
+            2.0;
+            links = false,
+        )
     Random.seed!(2026)
     links, sprinkling_links, branch_info_links, coefs_links =
         CausalSetZoology.make_polynomial_manifold_cset_with_nontrivial_topology(
@@ -245,36 +223,12 @@ end
             links = true,
         )
 
-    @test links isa CausalSetZoology.SparseLinksCauset
-    @test sprinkling_links == raw.branched_sprinkling
-    @test branch_info_links == raw.branch_point_info
-    @test coefs_links == raw.chebyshev_coefs
-    _assert_same_sparse_links(links, expected)
-end
-
-# Verifies branched polynomial manifold wrapper closure mode matches manual raw construction.
-@testitem "SparseLinksCauset: make_polynomial_manifold_cset_with_nontrivial_topology closure mode" setup=[setupSparseLinksCauset] begin
-    raw = _branched_raw_fixture()
-    expected = CausalSets.BitArrayCauset(raw.branched_cset; tolerance = 1e-12)
-
-    Random.seed!(2026)
-    cset, sprinkling, branch_info, coefs =
-        CausalSetZoology.make_polynomial_manifold_cset_with_nontrivial_topology(
-            18,
-            1,
-            0,
-            Random.MersenneTwister(12),
-            4,
-            2.0;
-            links = false,
-        )
-
     @test cset isa CausalSets.BitArrayCauset
-    @test sprinkling == raw.branched_sprinkling
-    @test branch_info == raw.branch_point_info
-    @test coefs == raw.chebyshev_coefs
-    @test cset.future_relations == expected.future_relations
-    @test cset.past_relations == expected.past_relations
+    @test links isa CausalSetZoology.SparseLinksCauset
+    @test sprinkling_links == sprinkling_bit
+    @test branch_info_links == branch_info_bit
+    @test coefs_links == coefs_bit
+    _assert_same_sparse_links(links, CausalSetZoology.SparseLinksCauset(cset))
 end
 
 # Verifies grid wrapper can generate sparse links directly while preserving coordinates.

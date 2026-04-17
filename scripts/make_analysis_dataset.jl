@@ -125,7 +125,7 @@ for (i, arg) in enumerate(args)
         println("  --D <number>                     Dimensionality of the spacetime (default: 2) -- only supported for Minkowski sprinklings and manifoldlike_simply_connected kinds.")
         println("  --cut_restriction <restriction>  Restricts allowed topological cuts (for kind manifoldlike_non_simply_connected). Can be \"boundary_cuts\" or \"free_cuts\".")
         println("  --link_probability <number>      Fix link probability for merged creation (0.0 to 1.0).")
-        println("  --links_only <bool>              Store only sparse links for supported kinds (default: false).")
+        println("  --links_only <bool>              Generate and store only sparse links for supported kinds (default: false).")
         println("  --help, -h                       Show this help message.")
         exit(0)
     end
