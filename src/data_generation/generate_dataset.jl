@@ -1,3 +1,17 @@
+function _validate_links_only(kind::AbstractString, links_only::Bool)::Nothing
+    supported_kinds = (
+        "grid",
+        "manifoldlike_simply_connected",
+        "manifoldlike_non_simply_connected",
+        "minkowski_quasicrystal",
+        "minkowski_sprinkling",
+    )
+    if links_only && !(kind in supported_kinds)
+        throw(ArgumentError("links_only=true is only supported for grid, manifoldlike_simply_connected, manifoldlike_non_simply_connected, minkowski_quasicrystal, and minkowski_sprinkling"))
+    end
+    return nothing
+end
+
 function generate_batch(
     b::Int,
     batchsize::Int,
@@ -33,7 +47,10 @@ function generate_batch(
     link_probability_distr::Union{Nothing, Distributions.Distribution}=nothing,
 
     connectivity_distr::Union{Nothing, Distributions.Distribution}=nothing,
+    links_only::Bool=false,
 )::NamedTuple
+
+    _validate_links_only(kind, links_only)
 
     start_i = (b - 1) * batchsize + 1
     end_i = min(b * batchsize, N)
@@ -69,8 +86,8 @@ function generate_batch(
         end
 
         if kind == "minkowski_sprinkling"
-            sprinkling = CausalSets.generate_sprinkling(mink, causal_diamond_boundary, cset_size_i)
-            cset = CausalSets.BitArrayCauset(mink, sprinkling)
+            sprinkling = CausalSets.generate_sprinkling(mink, causal_diamond_boundary, cset_size_i; rng = rng)
+            causet = links_only ? SparseLinksCauset(mink, sprinkling) : CausalSets.BitArrayCauset(mink, sprinkling)
 
         elseif kind == "minkowski_quasicrystal"
             if big_crystal === nothing
@@ -80,13 +97,14 @@ function generate_batch(
             trans_distr = Distributions.Uniform(ϵ, 1 - ϵ)
             αin = rand(rng, trans_distr)
             αout = rand(rng, trans_distr)
-            cset = QuantumGrav.create_Minkowski_quasicrystal_cset(
+            causet = create_Minkowski_quasicrystal_cset(
                 cset_size_i,
                 (αin, αout);
                 crystal = big_crystal,
                 exact_size = true,
                 deviation_from_mean_size = .1,
                 max_iter = 100,
+                links = links_only,
             )
             push!(trans_in_b, αin)
             push!(trans_out_b, αout)
@@ -94,7 +112,14 @@ function generate_batch(
         elseif kind == "manifoldlike_simply_connected"
             r = rand(rng, rdistr)
             order = Int(ceil(2 * log(cset_size_i) / log(r) + 1))
-            cset, _, __ = QuantumGrav.make_polynomial_manifold_cset(cset_size_i, rng, order, Float64(r); d = D === nothing ? 2 : D)
+            causet, _, __ = make_polynomial_manifold_cset(
+                cset_size_i,
+                rng,
+                order,
+                Float64(r);
+                d = D === nothing ? 2 : D,
+                links = links_only,
+            )
             push!(r_b, r)
             push!(order_b, order)
 
@@ -103,7 +128,15 @@ function generate_batch(
             order = Int(ceil(2 * log(cset_size_i) / log(r) + 1))
             num_boundary_cuts = cut_restriction == "free_cuts" ? 0 : rand(rng, num_boundary_cuts_distr)
             genus = cut_restriction == "boundary_cuts" ? 0 : rand(rng, genus_distr)
-            cset, _, _, _  = QuantumGrav.make_polynomial_manifold_cset_with_nontrivial_topology(cset_size_i, num_boundary_cuts, genus, rng, order, r)
+            causet, _, _, _ = make_polynomial_manifold_cset_with_nontrivial_topology(
+                cset_size_i,
+                num_boundary_cuts,
+                genus,
+                rng,
+                order,
+                r;
+                links = links_only,
+            )
             push!(r_b, r)
             push!(order_b, order)
             push!(num_boundary_cuts_b, num_boundary_cuts)
@@ -113,7 +146,7 @@ function generate_batch(
             r = rand(rng, rdistr)
             order = Int(ceil(2 * log(cset_size_i) / log(r) + 1))
             num_flips = Int64(ceil(cset_size_i * (cset_size_i - 1) /2 * rand(rng, non_manifoldlikeness_distr)))
-            cset, _, _ = QuantumGrav.destroy_manifold_cset(cset_size_i, num_flips, rng, order, r)
+            causet, _, _ = QuantumGrav.destroy_manifold_cset(cset_size_i, num_flips, rng, order, r)
             push!(r_b, r)
             push!(order_b, order)
             push!(rel_num_flips_b, num_flips / (cset_size_i * (cset_size_i - 1) / 2 ))
@@ -123,7 +156,7 @@ function generate_batch(
             order = Int(ceil(2 * log(cset_size_i) / log(r) + 1))
             link_probability_value = link_probability === nothing ? rand(rng, link_probability_distr) : link_probability
             n2_rel = rand(rng, non_manifoldlikeness_distr)
-            cset, _, _ = QuantumGrav.insert_KR_into_manifoldlike(cset_size_i, order, r, link_probability_value; rng = rng, n2_rel = n2_rel)
+            causet, _, _ = QuantumGrav.insert_KR_into_manifoldlike(cset_size_i, order, r, link_probability_value; rng = rng, n2_rel = n2_rel)
             push!(r_b, r)
             push!(order_b, order)
             push!(rel_size_KR_b, n2_rel)
@@ -142,14 +175,15 @@ function generate_batch(
                 rotate_angle = rand(rng, rotate_angle_distr)
                 oblique_angle = rand(rng, oblique_angle_distr)
                 try
-                    cset, _, _ = QuantumGrav.create_grid_causet_in_boundary_2D(
+                    causet, _, _ = create_grid_causet_in_boundary_2D(
                         cset_size_i,
                         lattice,
                         CausalSets.BoxBoundary{2}(((0.0, -0.5), (1.0, 0.5))),
                         CausalSets.MinkowskiManifold{2}();
                         b = segment_ratio,
                         gamma_deg = oblique_angle,
-                        rotate_deg = rotate_angle
+                        rotate_deg = rotate_angle,
+                        links = links_only,
                     )
                     grid_ok = true
                     break
@@ -197,21 +231,28 @@ function generate_batch(
                     error("Did not converge 5 times after 100 failed attempts. Maybe change connectivity_distr")
                 end
             end
-            cset = cset_try
+            causet = cset_try
 
         elseif kind == "layered"
             num_layers = rand(rng, layers_distr)
             link_probability = rand(rng, link_probability_distr)
             std_distr = Distributions.Uniform(0., Float64(cset_size_i / (2 * num_layers)))
             std = rand(rng, std_distr)
-            cset, n_per_layer = QuantumGrav.create_random_layered_causet(cset_size_i, num_layers; p = link_probability, rng = rng, standard_deviation = std)
+            causet, _ = QuantumGrav.create_random_layered_causet(cset_size_i, num_layers; p = link_probability, rng = rng, standard_deviation = std)
             push!(num_layers_b, num_layers)
             push!(std_b, std)
         end
 
-        links = SparseLinksCauset(cset)
+        if links_only
+            links = causet
+        else
+            cset = causet
+            links = SparseLinksCauset(cset)
+        end
 
-        push!(csets_b, cset)
+        if !links_only
+            push!(csets_b, cset)
+        end
         push!(links_b, links)
     end
 
@@ -274,8 +315,11 @@ function create_dataset_and_save(
 
     mink::Union{Nothing, CausalSets.MinkowskiManifold}=nothing,
     causal_diamond_boundary::Union{Nothing, CausalSets.CausalDiamondBoundary}=nothing,
+    links_only::Bool=false,
 
 )::Nothing
+
+    _validate_links_only(kind, links_only)
 
     JLD2.jldopen(out_path, "w") do fout
         fout["meta/batchsize"] = batchsize
@@ -324,6 +368,7 @@ function create_dataset_and_save(
                     link_probability_distr = link_probability_distr,
                 
                     connectivity_distr = connectivity_distr,
+                    links_only = links_only,
                 )
                 pending[b] = data
                 while haskey(pending, next_b)
@@ -332,7 +377,9 @@ function create_dataset_and_save(
                     delete!(pending, next_b)
                     next_b += 1
 
-                    fout["batches/$b/csets"] = data.csets_b
+                    if !links_only
+                        fout["batches/$b/csets"] = data.csets_b
+                    end
                     fout["batches/$b/links"] = data.links_b
 
                     if kind == "minkowski_quasicrystal"
@@ -377,7 +424,7 @@ function create_dataset_and_save(
                         fout["batches/$b/std"] = data.std_b
                     end
 
-                    ProgressMeter.next!(p; step=length(data.csets_b))
+                    ProgressMeter.next!(p; step=length(data.links_b))
                 end
             end
         else
@@ -434,6 +481,7 @@ function create_dataset_and_save(
                                     link_probability_distr = link_probability_distr,
                                 
                                     connectivity_distr = connectivity_distr,
+                                    links_only = links_only,
                                 )
                                 put!(results, (:ok, b, data))
                             end
@@ -482,7 +530,9 @@ function create_dataset_and_save(
                     delete!(pending, next_b)
                     next_b += 1
 
-                    fout["batches/$b/csets"] = data.csets_b
+                    if !links_only
+                        fout["batches/$b/csets"] = data.csets_b
+                    end
                     fout["batches/$b/links"] = data.links_b
 
                     if kind == "minkowski_quasicrystal"
@@ -527,7 +577,7 @@ function create_dataset_and_save(
                         fout["batches/$b/std"] = data.std_b
                     end
 
-                    ProgressMeter.next!(p; step=length(data.csets_b))
+                    ProgressMeter.next!(p; step=length(data.links_b))
                 end
             end
 

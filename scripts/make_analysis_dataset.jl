@@ -1,5 +1,16 @@
 ################################################################################
 
+function _parse_bool_flag(value::AbstractString, name::AbstractString)::Bool
+    lower = lowercase(strip(value))
+    if lower in ("true", "1", "yes", "on")
+        return true
+    elseif lower in ("false", "0", "no", "off")
+        return false
+    end
+    println("Error: $(name) must be a boolean (true/false).")
+    exit(1)
+end
+
 args = ARGS
 for (i, arg) in enumerate(args)
 
@@ -88,6 +99,15 @@ for (i, arg) in enumerate(args)
         end
     end
 
+    if arg == "--links_only"
+        if i + 1 <= length(args)
+            global links_only = _parse_bool_flag(args[i+1], "--links_only")
+        else
+            println("Error: --links_only requires a boolean argument.")
+            exit(1)
+        end
+    end
+
     if arg == "--help" || arg == "-h"
         println(
             "Usage: julia make_analysis_dataset.jl [--kind <kind>] [--out <output_path>] [--N <number>]",
@@ -105,6 +125,7 @@ for (i, arg) in enumerate(args)
         println("  --D <number>                     Dimensionality of the spacetime (default: 2) -- only supported for Minkowski sprinklings and manifoldlike_simply_connected kinds.")
         println("  --cut_restriction <restriction>  Restricts allowed topological cuts (for kind manifoldlike_non_simply_connected). Can be \"boundary_cuts\" or \"free_cuts\".")
         println("  --link_probability <number>      Fix link probability for merged creation (0.0 to 1.0).")
+        println("  --links_only <bool>              Generate and store only sparse links for supported kinds (default: false).")
         println("  --help, -h                       Show this help message.")
         exit(0)
     end
@@ -140,6 +161,10 @@ if !@isdefined(batchsize)
     batchsize = 100
 end
 
+if !@isdefined(links_only)
+    links_only = false
+end
+
 generate_cset_size = !@isdefined(cset_size)
 
 info_parts = String[
@@ -151,6 +176,7 @@ info_parts = String[
 @isdefined(D) && push!(info_parts, "D=$(D)")
 @isdefined(cut_restriction) && push!(info_parts, "cut_restriction=$(cut_restriction)")
 @isdefined(link_probability) && push!(info_parts, "link_probability=$(link_probability)")
+push!(info_parts, "links_only=$(links_only)")
 @isdefined(batchsize) && push!(info_parts, "batchsize=$(batchsize)")
 @isdefined(seed) && push!(info_parts, "seed=$(seed)")
 @isdefined(out_path) && push!(info_parts, "output path=$(out_path)")
@@ -326,6 +352,7 @@ elseif kind == "merged"
 else
     link_probability = nothing
 end
+config["links_only"] = links_only
 
 nbatches = cld(N, batchsize)
 
@@ -367,6 +394,7 @@ CausalSetZoology.create_dataset_and_save(
 
     mink = mink,
     causal_diamond_boundary = causal_diamond_boundary,
+    links_only = links_only,
 )
 
 @info "Dataset creation complete. Output written to $(out_path)."

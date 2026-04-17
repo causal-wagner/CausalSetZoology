@@ -23,6 +23,14 @@
             @test data.links_b[i].past_links == expected.past_links
         end
     end
+
+    function _assert_dataset_has_only_links(path::String, batch::Int)
+        JLD2.jldopen(path, "r") do f
+            b = f["batches/$batch"]
+            @test !haskey(b, "csets")
+            @test haskey(b, "links")
+        end
+    end
 end
 
 # Verifies Minkowski sprinkling branch produces csets/links without extra kind metadata arrays.
@@ -51,6 +59,55 @@ end
     @test isempty(data.order_b)
     @test isempty(data.trans_in_b)
     @test isempty(data.trans_out_b)
+end
+
+# Verifies Minkowski sprinkling generation honors the provided seed instead of
+# drawing from the process-global RNG.
+@testitem "generate_dataset: generate_batch minkowski_sprinkling seed controls output" setup=[setupGenerateDataset] begin
+    mink = CausalSets.MinkowskiManifold{2}()
+    boundary = CausalSets.CausalDiamondBoundary{2}(1.0)
+
+    data_a = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        501;
+        cset_size = 32,
+        D = 2,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+    data_b = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        501;
+        cset_size = 32,
+        D = 2,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+    data_c = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        502;
+        cset_size = 32,
+        D = 2,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+
+    @test data_a.links_b[1].future_links == data_b.links_b[1].future_links
+    @test data_a.links_b[1].past_links == data_b.links_b[1].past_links
+    @test data_a.links_b[1].future_links != data_c.links_b[1].future_links ||
+          data_a.links_b[1].past_links != data_c.links_b[1].past_links
 end
 
 # Verifies manifoldlike simply-connected branch fills r/order metadata.
@@ -193,6 +250,55 @@ end
     @test all(x -> 10.0 <= x <= 10.001, data.segment_angle_b)
 end
 
+# Verifies links_only mode returns only sparse links for supported kinds.
+@testitem "generate_dataset: generate_batch grid links_only" setup=[setupGenerateDataset] begin
+    data = CausalSetZoology.generate_batch(
+        1,
+        2,
+        2,
+        "grid",
+        124;
+        cset_size = 12,
+        lattice_distr = Distributions.DiscreteUniform(1, 1),
+        lattices = ["quadratic"],
+        segment_ratio_distr = Distributions.Uniform(1.0, 1.001),
+        rotate_angle_distr = Distributions.Uniform(0.0, 0.001),
+        oblique_angle_distr = Distributions.Uniform(10.0, 10.001),
+        links_only = true,
+    )
+
+    @test isempty(data.csets_b)
+    @test length(data.links_b) == 2
+    @test all(l -> l.atom_count == 12, data.links_b)
+    @test all(l -> l isa CausalSetZoology.SparseLinksCauset, data.links_b)
+    @test length(data.lattice_b) == 2
+    @test length(data.segment_ratio_b) == 2
+    @test length(data.segment_angle_b) == 2
+    @test length(data.rotation_angle_b) == 2
+end
+
+# Verifies links_only mode works on Minkowski sprinklings without storing closure causets.
+@testitem "generate_dataset: generate_batch minkowski_sprinkling links_only" setup=[setupGenerateDataset] begin
+    mink = CausalSets.MinkowskiManifold{2}()
+    boundary = CausalSets.CausalDiamondBoundary{2}(1.0)
+
+    data = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        125;
+        cset_size = 12,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+
+    @test isempty(data.csets_b)
+    @test length(data.links_b) == 1
+    @test data.links_b[1].atom_count == 12
+end
+
 # Verifies random branch returns a generated cset and link graph for sampled connectivity target.
 @testitem "generate_dataset: generate_batch random" setup=[setupGenerateDataset] begin
     data = CausalSetZoology.generate_batch(
@@ -251,6 +357,20 @@ end
     )
 end
 
+# Verifies links_only mode rejects unsupported kinds.
+@testitem "generate_dataset: generate_batch links_only validation" setup=[setupGenerateDataset] begin
+    @test_throws ArgumentError CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "random",
+        107;
+        cset_size = 16,
+        connectivity_distr = Distributions.Normal(0.5, 0.01),
+        links_only = true,
+    )
+end
+
 # Verifies end-to-end writer creates expected metadata and batch payloads.
 @testitem "generate_dataset: create_dataset_and_save basic" setup=[setupGenerateDataset] begin
     _ensure_worker()
@@ -291,6 +411,60 @@ end
         @test length(b1["links"]) == 1
         @test b1["links"][1] isa CausalSetZoology.SparseLinksCauset
     end
+end
+
+# Verifies writer omits closure causets when links_only mode is requested.
+@testitem "generate_dataset: create_dataset_and_save links_only" setup=[setupGenerateDataset] begin
+    out_path = joinpath(mktempdir(), "dataset_links_only.jld2")
+    config = Dict("kind" => "grid", "num_csets" => 2, "cset_size" => 16, "links_only" => true)
+
+    CausalSetZoology.create_dataset_and_save(
+        out_path,
+        "grid",
+        1,
+        1,
+        2,
+        2,
+        config,
+        12;
+        cset_size = 16,
+        lattice_distr = Distributions.DiscreteUniform(1, 1),
+        lattices = ["quadratic"],
+        segment_ratio_distr = Distributions.Uniform(1.0, 1.01),
+        rotate_angle_distr = Distributions.Uniform(0.0, 0.01),
+        oblique_angle_distr = Distributions.Uniform(10.0, 10.01),
+        links_only = true,
+    )
+
+    @test isfile(out_path)
+    _assert_dataset_has_only_links(out_path, 1)
+    _assert_dataset_has_only_links(out_path, 2)
+
+    JLD2.jldopen(out_path, "r") do f
+        @test f["meta/config"]["links_only"] == true
+        @test length(f["batches/1/links"]) == 1
+        @test length(f["batches/2/links"]) == 1
+    end
+end
+
+# Verifies writer rejects links_only mode for unsupported kinds.
+@testitem "generate_dataset: create_dataset_and_save links_only validation" setup=[setupGenerateDataset] begin
+    out_path = joinpath(mktempdir(), "dataset_bad_links_only.jld2")
+    config = Dict("kind" => "random", "num_csets" => 1, "cset_size" => 16, "links_only" => true)
+
+    @test_throws ArgumentError CausalSetZoology.create_dataset_and_save(
+        out_path,
+        "random",
+        1,
+        1,
+        1,
+        1,
+        config,
+        13;
+        cset_size = 16,
+        connectivity_distr = Distributions.Normal(0.5, 0.01),
+        links_only = true,
+    )
 end
 
 # Verifies worker-count validation catches invalid values and unavailable workers.
