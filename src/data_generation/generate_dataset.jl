@@ -60,13 +60,14 @@ function generate_batch(
         rng = Random.MersenneTwister(seed + i)
         cset_size_i = if isnothing(cset_size)
             if isnothing(ndistr)
-                ArgumentError("Either cset_size or ndistr must be provided")
+                throw(ArgumentError("Either cset_size or ndistr must be provided"))
             end
             ndistr = ndistr
             rand(rng, ndistr)
         else
             cset_size
         end
+        cset = nothing
 
         if kind == "minkowski_sprinkling"
             sprinkling = CausalSets.generate_sprinkling(mink, causal_diamond_boundary, cset_size_i)
@@ -207,7 +208,10 @@ function generate_batch(
             cset, n_per_layer = QuantumGrav.create_random_layered_causet(cset_size_i, num_layers; p = link_probability, rng = rng, standard_deviation = std)
             push!(num_layers_b, num_layers)
             push!(std_b, std)
+        else
+            throw(ArgumentError("unsupported kind=$kind"))
         end
+        cset === nothing && error("No causal set generated for kind=$kind in batch=$b index=$i")
 
         links = SparseLinksCauset(cset)
 
