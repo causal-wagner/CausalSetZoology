@@ -109,6 +109,169 @@ end
 end
 
 
+@testitem "distinguishability: distance_distinguishability_probability basic" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: distance_distinguishability_probability basic behavior and output contract.
+    distance(x, y) = abs(x - y)
+    cset = [10.0, 11.0]
+    null = [0.0, 1.0, 2.0]
+
+    res = CausalSetZoology.distance_distinguishability_probability(distance, cset, null)
+    @test keys(res) == (:D, :probability_below_null, :null_value, :percentile, :mean_between, :std_between, :std_lo, :std_up)
+    @test res.null_value ≈ 1.0 atol = 1e-12
+    @test res.probability_below_null ≈ 0.0 atol = 1e-12
+    @test res.D ≈ 1.0 atol = 1e-12
+    @test res.percentile ≈ 0.5 atol = 1e-12
+    @test res.mean_between ≈ 9.5 atol = 1e-12
+    @test res.std_between ≈ sqrt(11 / 10) atol = 1e-12
+    @test res.std_lo ≈ 0.7 atol = 1e-12
+    @test res.std_up ≈ 0.7 atol = 1e-12
+
+    res_q1 = CausalSetZoology.distance_distinguishability_probability(distance, [1.5, 2.0], null; percentile = 1.0)
+    @test res_q1.null_value ≈ 2.0 atol = 1e-12
+    @test res_q1.probability_below_null ≈ 1.0 atol = 1e-12
+    @test res_q1.D ≈ 0.0 atol = 1e-12
+
+    # Mixed case: only some cross-pairs fall below the median null threshold.
+    # Null pair distances are [1, 2, 1], so the 0.5-quantile threshold is 1.
+    # Cross distances from [1, 3] to [0, 1, 2] are [1, 0, 1, 3, 2, 1], so 4/6 are <= 1.
+    res_mixed = CausalSetZoology.distance_distinguishability_probability(distance, [1.0, 3.0], null)
+    @test res_mixed.null_value ≈ 1.0 atol = 1e-12
+    @test res_mixed.probability_below_null ≈ (4 / 6) atol = 1e-12
+    @test res_mixed.D ≈ (1 - 4 / 6) atol = 1e-12
+    @test res_mixed.mean_between ≈ (8 / 6) atol = 1e-12
+    @test res_mixed.std_between >= 0.0
+    @test res_mixed.std_lo >= 0.0
+    @test res_mixed.std_up >= 0.0
+end
+
+
+@testitem "distinguishability: null_distance_percentile" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: null_distance_percentile behavior and output contract.
+    distance(x, y) = abs(x - y)
+    null = [0.0, 1.0, 2.0]
+
+    @test CausalSetZoology.null_distance_percentile(distance, null) ≈ 1.0 atol = 1e-12
+    @test CausalSetZoology.null_distance_percentile(distance, null; percentile = 1.0) ≈ 2.0 atol = 1e-12
+    @test_throws ArgumentError CausalSetZoology.null_distance_percentile(distance, Float64[])
+    @test_throws ArgumentError CausalSetZoology.null_distance_percentile(distance, [0.0])
+    @test_throws DomainError CausalSetZoology.null_distance_percentile(distance, null; percentile = -0.1)
+    @test_throws TypeError CausalSetZoology.null_distance_percentile((x, y) -> "bad", null)
+    @test_throws DomainError CausalSetZoology.null_distance_percentile((x, y) -> NaN, null)
+end
+
+
+@testitem "distinguishability: distance_distinguishability_probability cached null and vectors" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: distance_distinguishability_probability cached null and vectors behavior and output contract.
+    distance(x, y) = LinearAlgebra.norm(x .- y)
+    cset = [[3.0, 3.0], [4.0, 4.0]]
+    null = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+
+    res = CausalSetZoology.distance_distinguishability_probability(distance, cset, null; percentile = 0.5)
+    res_cached = CausalSetZoology.distance_distinguishability_probability(distance, cset, null; percentile = 0.1, null_value = res.null_value)
+    @test res_cached.null_value ≈ res.null_value atol = 1e-12
+    @test res_cached.D ≈ res.D atol = 1e-12
+    @test res_cached.probability_below_null ≈ res.probability_below_null atol = 1e-12
+    @test res_cached.percentile ≈ 0.1 atol = 1e-12
+    @test res_cached.mean_between ≈ res.mean_between atol = 1e-12
+    @test res_cached.std_between ≈ res.std_between atol = 1e-12
+    @test res_cached.std_lo ≈ res.std_lo atol = 1e-12
+    @test res_cached.std_up ≈ res.std_up atol = 1e-12
+
+    # Cached null_value should bypass the within-null pair requirement.
+    res_single_null = CausalSetZoology.distance_distinguishability_probability(
+        distance,
+        cset,
+        [[0.0, 0.0]];
+        percentile = 0.1,
+        null_value = res.null_value,
+    )
+    @test res_single_null.null_value ≈ res.null_value atol = 1e-12
+    @test res_single_null.percentile ≈ 0.1 atol = 1e-12
+    @test 0.0 <= res_single_null.D <= 1.0
+    @test 0.0 <= res_single_null.probability_below_null <= 1.0
+    @test res_single_null.mean_between >= 0.0
+    @test res_single_null.std_between >= 0.0
+    @test res_single_null.std_lo >= 0.0
+    @test res_single_null.std_up >= 0.0
+
+    ragged = CausalSetZoology.distance_distinguishability_probability(
+        CausalSetZoology.total_variation_distance,
+        [[1.0, 0.0], [0.5]],
+        [[0.2], [0.1, 0.0, 0.0]];
+        percentile = 0.5,
+    )
+    @test 0.0 <= ragged.D <= 1.0
+    @test ragged.null_value >= 0.0
+    @test ragged.mean_between >= 0.0
+    @test ragged.std_between >= 0.0
+    @test ragged.std_lo >= 0.0
+    @test ragged.std_up >= 0.0
+end
+
+
+@testitem "distinguishability: distance_distinguishability_probability validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: distance_distinguishability_probability validation behavior and output contract.
+    distance(x, y) = abs(x - y)
+    @test_throws ArgumentError CausalSetZoology.distance_distinguishability_probability(distance, Float64[], [0.0, 1.0])
+    @test_throws ArgumentError CausalSetZoology.distance_distinguishability_probability(distance, [0.0], Float64[])
+    @test_throws ArgumentError CausalSetZoology.distance_distinguishability_probability(distance, [0.0], [1.0])
+    @test_throws DomainError CausalSetZoology.distance_distinguishability_probability(distance, [0.0], [0.0, 1.0]; percentile = -0.1)
+    @test_throws DomainError CausalSetZoology.distance_distinguishability_probability(distance, [0.0], [0.0, 1.0]; percentile = 1.1)
+    @test_throws DomainError CausalSetZoology.distance_distinguishability_probability(distance, [0.0], [0.0, 1.0]; null_value = Inf)
+    @test_throws TypeError CausalSetZoology.distance_distinguishability_probability((x, y) -> "bad", [0.0], [0.0, 1.0])
+    @test_throws DomainError CausalSetZoology.distance_distinguishability_probability((x, y) -> NaN, [0.0], [0.0, 1.0])
+    @test_throws DomainError CausalSetZoology.distance_distinguishability_probability((x, y) -> NaN, [0.0], [1.0]; null_value = 0.0)
+end
+
+
+@testitem "distinguishability: scalar_bin_distance_distinguishability_probability wrappers" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distance_distinguishability_probability wrappers behavior and output contract.
+    distance(x, y) = abs(x[1] - y[1])
+    data = [Tuple{Vector{Float64},Real}[
+        ([0.0], 1.0), ([0.1], 1.0), ([0.2], 1.0), ([0.3], 1.0),
+        ([1.0], 2.0), ([1.1], 2.0), ([1.2], 2.0), ([1.3], 2.0),
+    ]]
+    ref = [[0.0], [0.1], [0.2], [0.3], [0.4], [0.5]]
+
+    r_pair = CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, data; num_bins = 2)
+    @test length(r_pair) == 1
+    @test keys(r_pair[1]) == (:s1, :s2, :rel_change, :D, :probability_below_null, :null_value, :percentile, :mean_between, :std_between, :std_lo, :std_up)
+    @test 0.0 <= r_pair[1].D <= 1.0
+    @test 0.0 <= r_pair[1].probability_below_null <= 1.0
+    @test r_pair[1].null_value >= 0.0
+    @test r_pair[1].mean_between >= 0.0
+    @test r_pair[1].std_between >= 0.0
+    @test r_pair[1].std_lo >= 0.0
+    @test r_pair[1].std_up >= 0.0
+
+    cached_null = r_pair[1].null_value
+    r_ref = CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, data, ref; num_bins = 2, null_value = cached_null)
+    @test length(r_ref) == 2
+    @test all(keys(x) == (:scalar, :D, :probability_below_null, :null_value, :percentile, :mean_between, :std_between, :std_lo, :std_up) for x in r_ref)
+    @test [x.scalar for x in r_ref] ≈ [1.0, 2.0]
+    @test all(isapprox(x.null_value, cached_null; atol = 1e-12) for x in r_ref)
+    @test all(0.0 <= x.D <= 1.0 for x in r_ref)
+    @test all(x.mean_between >= 0.0 for x in r_ref)
+    @test all(x.std_between >= 0.0 for x in r_ref)
+    @test all(x.std_lo >= 0.0 for x in r_ref)
+    @test all(x.std_up >= 0.0 for x in r_ref)
+end
+
+
+@testitem "distinguishability: scalar_bin_distance_distinguishability_probability validation" setup=[setupDistinguishability] begin
+    # Test intent: validate distinguishability: scalar_bin_distance_distinguishability_probability validation behavior and output contract.
+    distance(x, y) = abs(x[1] - y[1])
+    data = [Tuple{Vector{Float64},Real}[([0.0], 1.0), ([1.0], 2.0)]]
+    ref_empty = Vector{Vector{Float64}}()
+
+    @test_throws DimensionMismatch CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, vcat(data, data); num_bins = 2)
+    @test_throws ArgumentError CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, [Tuple{Vector{Float64},Real}[]]; num_bins = 2)
+    @test_throws DomainError CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, data; num_bins = 0)
+    @test_throws ArgumentError CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, data, ref_empty; num_bins = 2)
+    @test_throws DomainError CausalSetZoology.scalar_bin_distance_distinguishability_probability(distance, data; percentile = -0.1)
+end
+
+
 @testitem "distinguishability: scalar_bin_distinguishability wrappers" setup=[setupDistinguishability] begin
     # Test intent: validate distinguishability: scalar_bin_distinguishability wrappers behavior and output contract.
     rng = Random.Xoshiro(5353)
