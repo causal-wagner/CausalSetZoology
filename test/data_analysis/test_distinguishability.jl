@@ -224,6 +224,27 @@ end
 end
 
 
+@testitem "distinguishability: distance_distinguishability_probability preserves signed trailing coordinates" setup=[setupDistinguishability] begin
+    # Test intent: generic vector alignment must not drop trailing negative coordinates.
+    distance(x, y) = LinearAlgebra.norm(x .- y)
+
+    hist = [[1.0, 0.0, -2.0]]
+    null = [[1.0]]
+
+    res = CausalSetZoology.distance_distinguishability_probability(
+        distance,
+        hist,
+        null;
+        null_value = 0.5,
+    )
+
+    expected = distance([1.0, 0.0, -2.0], [1.0, 0.0, 0.0])
+    @test res.mean_between ≈ expected atol = 1e-12
+    @test res.probability_below_null ≈ 0.0 atol = 1e-12
+    @test res.D ≈ 1.0 atol = 1e-12
+end
+
+
 @testitem "distinguishability: scalar_bin_distance_distinguishability_probability wrappers" setup=[setupDistinguishability] begin
     # Test intent: validate distinguishability: scalar_bin_distance_distinguishability_probability wrappers behavior and output contract.
     distance(x, y) = abs(x[1] - y[1])

@@ -385,7 +385,7 @@ function distance_distinguishability_probability(
     hist_aligned = hist_ensemble
     null_aligned = null_ensemble
     if all(x -> x isa AbstractVector{<:Real}, hist_ensemble) && all(x -> x isa AbstractVector{<:Real}, null_ensemble)
-        hist_aligned, null_aligned = _prepare_vectors_for_distance(hist_ensemble, null_ensemble)
+        hist_aligned, null_aligned = _align_vectors_for_generic_distance(hist_ensemble, null_ensemble)
     end
 
     threshold = if isnothing(null_value)
@@ -1168,6 +1168,31 @@ function _sqrt_vectors_and_norms(vecs::Vector{<:AbstractVector{<:Real}})
 end
 
 """
+    _align_vectors_for_generic_distance(vecs_a, vecs_b)
+
+Pad all vectors in both datasets to a common length without histogram-specific
+trimming. This preserves signed or otherwise generic trailing coordinates for
+arbitrary distance functions.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Returns
+- `result`: Tuple `(A, B)` of aligned `Vector{Vector{Float64}}` inputs.
+"""
+function _align_vectors_for_generic_distance(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}},
+)
+    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
+    pad_to(v, n) = length(v) == n ? collect(Float64, v) : vcat(collect(Float64, v), zeros(Float64, n - length(v)))
+    A = [pad_to(v, maxlen) for v in vecs_a]
+    B = [pad_to(v, maxlen) for v in vecs_b]
+    return A, B
+end
+
+"""
     _prepare_vectors_for_distance(vecs_a, vecs_b)
 
 Internal preprocessing for Hellinger-based distance computations.
@@ -1186,10 +1211,8 @@ function _prepare_vectors_for_distance(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
 )
-    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
-    pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
-    A = [pad_to(v, maxlen) for v in vecs_a]
-    B = [pad_to(v, maxlen) for v in vecs_b]
+    A, B = _align_vectors_for_generic_distance(vecs_a, vecs_b)
+    maxlen = length(A[1])
 
     max_nonzero = 0
     for v in A
