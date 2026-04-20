@@ -37,8 +37,19 @@ function _logticks_internal(lo::Real, hi::Real; base::Real = 10.0)
     # helper for LaTeX labels
     latex_label(v) = begin
         if v < 1e-3 || v ≥ 1e4
-            k = round(Int, logb(v))
-            LaTeXStrings.LaTeXString("\$10^{$k}\$")
+            k = floor(Int, logb(v))
+            mantissa = v / (base^Float64(k))
+            mantissa_int = round(Int, mantissa)
+            mantissa_is_int = isapprox(mantissa, mantissa_int; atol = 1e-10, rtol = 1e-10)
+            if mantissa_is_int && mantissa_int == 1
+                LaTeXStrings.LaTeXString("\$10^{$k}\$")
+            else
+                if mantissa_is_int
+                    LaTeXStrings.LaTeXString("\$$(mantissa_int)\\times 10^{$k}\$")
+                else
+                    LaTeXStrings.LaTeXString(Printf.@sprintf("\$%.3g\\times 10^{%d}\$", mantissa, k))
+                end
+            end
         elseif v ≥ 1
             # integers like 1, 10, 100, 1000 without scientific notation
             LaTeXStrings.LaTeXString("\$$(Int(round(v)))\$")

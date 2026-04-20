@@ -61,6 +61,55 @@ end
     @test isempty(data.trans_out_b)
 end
 
+# Verifies Minkowski sprinkling generation honors the provided seed instead of
+# drawing from the process-global RNG.
+@testitem "generate_dataset: generate_batch minkowski_sprinkling seed controls output" setup=[setupGenerateDataset] begin
+    mink = CausalSets.MinkowskiManifold{2}()
+    boundary = CausalSets.CausalDiamondBoundary{2}(1.0)
+
+    data_a = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        501;
+        cset_size = 32,
+        D = 2,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+    data_b = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        501;
+        cset_size = 32,
+        D = 2,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+    data_c = CausalSetZoology.generate_batch(
+        1,
+        1,
+        1,
+        "minkowski_sprinkling",
+        502;
+        cset_size = 32,
+        D = 2,
+        mink = mink,
+        causal_diamond_boundary = boundary,
+        links_only = true,
+    )
+
+    @test data_a.links_b[1].future_links == data_b.links_b[1].future_links
+    @test data_a.links_b[1].past_links == data_b.links_b[1].past_links
+    @test data_a.links_b[1].future_links != data_c.links_b[1].future_links ||
+          data_a.links_b[1].past_links != data_c.links_b[1].past_links
+end
+
 # Verifies manifoldlike simply-connected branch fills r/order metadata.
 @testitem "generate_dataset: generate_batch manifoldlike_simply_connected" setup=[setupGenerateDataset] begin
     data = CausalSetZoology.generate_batch(

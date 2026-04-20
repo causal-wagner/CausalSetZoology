@@ -113,6 +113,17 @@ end
     @test_throws ArgumentError CausalSetZoology.densify_hists([Dict{Int,Float64}()])
 end
 
+@testitem "utils: densify_hists_vectors values and validation" setup=[setupUtils] begin
+    dense_vecs = CausalSetZoology.densify_hists_vectors([Dict(0 => 1.0, 2 => 2.0), Dict(1 => 1.0)])
+    @test dense_vecs == [[1.0, 0.0, 2.0], [0.0, 1.0, 0.0]]
+
+    dense_vecs1 = CausalSetZoology.densify_hists_vectors([Dict(1 => 2.0, 3 => 4.0)])
+    @test dense_vecs1 == [[2.0, 0.0, 4.0]]
+
+    @test_throws ArgumentError CausalSetZoology.densify_hists_vectors(Dict{Int,Float64}[])
+    @test_throws ArgumentError CausalSetZoology.densify_hists_vectors([Dict{Int,Float64}()])
+end
+
 # histogram_to_dense_pair
 @testitem "utils: histogram_to_dense_pair dict mode" setup=[setupUtils] begin
     obs = [

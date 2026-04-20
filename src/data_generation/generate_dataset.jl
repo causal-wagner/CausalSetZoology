@@ -86,7 +86,7 @@ function generate_batch(
         end
 
         if kind == "minkowski_sprinkling"
-            sprinkling = CausalSets.generate_sprinkling(mink, causal_diamond_boundary, cset_size_i)
+            sprinkling = CausalSets.generate_sprinkling(mink, causal_diamond_boundary, cset_size_i; rng = rng)
             causet = links_only ? SparseLinksCauset(mink, sprinkling) : CausalSets.BitArrayCauset(mink, sprinkling)
 
         elseif kind == "minkowski_quasicrystal"

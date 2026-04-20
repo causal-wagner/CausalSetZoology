@@ -420,6 +420,27 @@ function densify_hists(hists::Vector{<:AbstractDict})
 end
 
 """
+    densify_hists_vectors(hists::Vector{<:AbstractDict})
+
+Convert sparse histogram dictionaries to a dense vector-of-vectors representation
+with consistent binning. This is a convenience wrapper around `densify_hists`
+for APIs that expect one dense vector per histogram.
+
+# Arguments
+- `hists`: Histogram input data.
+
+# Returns
+- `dense::Vector{Vector{Float64}}`: Dense histogram vectors, one per sample.
+
+# Throws
+- `ArgumentError`: Propagated from `densify_hists` for invalid histogram input.
+"""
+function densify_hists_vectors(hists::Vector{<:AbstractDict})
+    dense = densify_hists(hists)
+    return [Vector{Float64}(dense[i, :]) for i in 1:size(dense, 1)]
+end
+
+"""
     histogram_to_dense_pair(hist, k::Int)
 
 Convert one observable shaped as `[class_a_samples, class_b_samples]` into two

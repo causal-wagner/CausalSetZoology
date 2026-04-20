@@ -250,6 +250,364 @@ function _map_scalar_bin_reference(compute::F, bins::AbstractVector) where {F<:F
 end
 
 """
+    _checked_distance_value(x, fname)
+
+Validate and convert one distance value to `Float64`.
+
+# Arguments
+- `x`: Candidate distance value.
+- `fname`: Name of the calling function used in error messages.
+
+# Returns
+- `y::Float64`: Finite distance value.
+
+# Throws
+- `TypeError`: If `x` is not a `Real`.
+- `DomainError`: If `x` is not finite.
+"""
+@inline function _checked_distance_value(x, fname::AbstractString)::Float64
+    if !(x isa Real)
+        throw(TypeError(Symbol(fname), "distance value", Real, x))
+    end
+    y = Float64(x)
+    if !isfinite(y)
+        throw(DomainError(y, "$fname produced a non-finite distance"))
+    end
+    return y
+end
+
+"""
+    null_distance_percentile(distance, null_ensemble; percentile=1/2)
+
+Compute the `percentile`-quantile of the within-ensemble distance distribution
+for `null_ensemble`, using all unordered pairs.
+
+# Arguments
+- `distance`: Distance function on two single histogram/vector elements.
+- `null_ensemble`: Null/reference ensemble used to define the within-class threshold.
+
+# Keyword Arguments
+- `percentile`: Quantile in `[0, 1]` used for the null threshold. Defaults to `1/2`.
+
+# Returns
+- `threshold::Float64`: The requested quantile of the within-null pairwise distances.
+
+# Throws
+- `ArgumentError`: Raised for empty or undersized null ensembles.
+- `DomainError`: Raised for invalid `percentile` or non-finite distance outputs.
+- `TypeError`: Raised when the distance function does not return a `Real`.
+"""
+function null_distance_percentile(
+    distance::F,
+    null_ensemble::AbstractVector;
+    percentile::Real = 1 / 2,
+) where {F<:Function}
+    if isempty(null_ensemble)
+        throw(ArgumentError("null_ensemble must be non-empty"))
+    end
+    if length(null_ensemble) < 2
+        throw(ArgumentError("null_ensemble must contain at least two elements"))
+    end
+    if !(0.0 <= percentile <= 1.0)
+        throw(DomainError(percentile, "percentile must lie in [0, 1]"))
+    end
+
+    null_dists = Float64[]
+    sizehint!(null_dists, length(null_ensemble) * (length(null_ensemble) - 1) ÷ 2)
+    @inbounds for i in 1:(length(null_ensemble) - 1)
+        ni = null_ensemble[i]
+        for j in (i + 1):length(null_ensemble)
+            push!(null_dists, _checked_distance_value(distance(ni, null_ensemble[j]), "null_distance_percentile"))
+        end
+    end
+    return Statistics.quantile(null_dists, percentile)
+end
+
+"""
+    distance_distinguishability_probability(distance, hist_ensemble, null_ensemble; percentile=1/2, null_value=nothing)
+
+Given a distance function on single samples, compute a probability-style
+distinguishability score by:
+
+1. Building the within-null distance distribution from `null_ensemble`.
+2. Taking its `percentile`-quantile as the null threshold (unless supplied via
+   `null_value`).
+3. Computing the fraction of cross-pairs `(c, n)` with distance at most that
+   threshold.
+
+The returned distinguishability is
+
+`D = 1 - P(distance(c, n) <= null_threshold)`,
+
+so values near `1` indicate that cross-pairs are usually farther apart than the
+chosen null quantile.
+
+# Arguments
+- `distance`: Distance function on two single histogram/vector elements.
+- `hist_ensemble`: Histogram ensemble to be tested against the null ensemble.
+- `null_ensemble`: Null/reference ensemble used to define the within-class threshold.
+
+# Keyword Arguments
+- `percentile`: Quantile in `[0, 1]` used for the null threshold. Defaults to `1/2`.
+- `null_value`: Optional precomputed null threshold. If provided, the within-null
+  pair computation is skipped, but `null_ensemble` must still be non-empty.
+
+# Returns
+- `result`: Named tuple with entries
+  `(D, probability_below_null, null_value, percentile, mean_between, std_between, std_lo, std_up)`,
+  where `std_lo = mean_between - Q_0.16` and `std_up = Q_0.84 - mean_between`
+  are lower/upper error widths derived from the 16% and 84% cross-distance quantiles.
+
+# Throws
+- `ArgumentError`: Raised for empty ensembles or an undersized null ensemble when
+  `null_value` is not supplied.
+- `DomainError`: Raised for invalid `percentile`, non-finite thresholds, or invalid
+  distance outputs.
+- `TypeError`: Raised when the distance function does not return a `Real`.
+"""
+function distance_distinguishability_probability(
+    distance::F,
+    hist_ensemble::AbstractVector,
+    null_ensemble::AbstractVector;
+    percentile::Real = 1 / 2,
+    null_value::Union{Nothing,Real} = nothing,
+) where {F<:Function}
+    if isempty(hist_ensemble)
+        throw(ArgumentError("hist_ensemble must be non-empty"))
+    end
+    if isempty(null_ensemble)
+        throw(ArgumentError("null_ensemble must be non-empty"))
+    end
+    if !(0.0 <= percentile <= 1.0)
+        throw(DomainError(percentile, "percentile must lie in [0, 1]"))
+    end
+
+    hist_aligned = hist_ensemble
+    null_aligned = null_ensemble
+    if all(x -> x isa AbstractVector{<:Real}, hist_ensemble) && all(x -> x isa AbstractVector{<:Real}, null_ensemble)
+        hist_aligned, null_aligned = _align_vectors_for_generic_distance(hist_ensemble, null_ensemble)
+    end
+
+    threshold = if isnothing(null_value)
+        null_distance_percentile(distance, null_aligned; percentile = percentile)
+    else
+        v = Float64(null_value)
+        if !isfinite(v)
+            throw(DomainError(v, "null_value must be finite"))
+        end
+        v
+    end
+
+    below = 0
+    between_dists = Float64[]
+    sizehint!(between_dists, length(hist_aligned) * length(null_aligned))
+    sum_between = 0.0
+    sumsq_between = 0.0
+    total = length(hist_aligned) * length(null_aligned)
+    @inbounds for c in hist_aligned
+        for n in null_aligned
+            d = _checked_distance_value(distance(c, n), "distance_distinguishability_probability")
+            below += d <= threshold
+            push!(between_dists, d)
+            sum_between += d
+            sumsq_between += d * d
+        end
+    end
+
+    p_below = below / total
+    mean_between = sum_between / total
+    std_between = total <= 1 ? 0.0 : sqrt(max((sumsq_between - total * mean_between * mean_between) / (total - 1), 0.0))
+    q16 = Statistics.quantile(between_dists, 0.16)
+    q84 = Statistics.quantile(between_dists, 0.84)
+    std_lo = mean_between - q16
+    std_up = q84 - mean_between
+    return (
+        D = 1.0 - p_below,
+        probability_below_null = p_below,
+        null_value = threshold,
+        percentile = Float64(percentile),
+        mean_between = mean_between,
+        std_between = std_between,
+        std_lo = std_lo,
+        std_up = std_up,
+    )
+end
+
+"""
+    scalar_bin_distance_distinguishability_probability(distance, data::Vector{Vector{Tuple{T,Real}}}; num_bins=nothing, percentile=1/2)
+
+Given one dataset (top-level vector must have length 1) of `(value, scalar)` pairs,
+bin by scalar (if `num_bins` is set) and compute
+`distance_distinguishability_probability` for all unordered bin pairs, using the
+second bin as the null ensemble.
+
+Returns a vector of `(s1, s2, rel_change, D, probability_below_null, null_value, percentile, mean_between, std_between, std_lo, std_up)`.
+
+# Arguments
+- `distance`: Distance function on two single values.
+- `data`: Single observable dataset of `(value, scalar)` pairs.
+
+# Keyword Arguments
+- `num_bins`: Optional scalar bin count used before pairwise comparisons.
+- `percentile`: Quantile in `[0, 1]` used for the null threshold inside each bin-pair comparison.
+- `null_value`: Optional precomputed null threshold passed through to
+  `distance_distinguishability_probability`.
+
+# Returns
+- `result`: Vector of named tuples
+  `(s1, s2, rel_change, D, probability_below_null, null_value, percentile, mean_between, std_between, std_lo, std_up)`.
+
+# Throws
+- `DimensionMismatch`: Propagated when the top-level dataset shape is incompatible with scalar-bin processing.
+- `ArgumentError`: Propagated for invalid scalar-bin inputs or invalid distance-comparison ensembles.
+- `DomainError`: Propagated for invalid `num_bins`, `percentile`, `null_value`, or non-finite distance outputs.
+- `TypeError`: Propagated when `distance` does not return a `Real`.
+"""
+function scalar_bin_distance_distinguishability_probability(
+    distance::F,
+    data::Vector{Vector{Tuple{T,Real}}};
+    num_bins::Union{Nothing,Int} = nothing,
+    percentile::Real = 1 / 2,
+    null_value::Union{Nothing,Real} = nothing,
+) where {F<:Function,T}
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_distance_distinguishability_probability";
+        num_bins = num_bins,
+    )
+    bins = ctx.bins
+    n_bins = length(bins)
+    total = n_bins * (n_bins - 1) ÷ 2
+    tasks = Vector{Tuple{Int,Int}}(undef, total)
+    t = 1
+    for i in 1:n_bins
+        for j in (i + 1):n_bins
+            tasks[t] = (i, j)
+            t += 1
+        end
+    end
+    out = Vector{NamedTuple}(undef, total)
+    compute_task = function (k::Int)
+        i, j = tasks[k]
+        s1, vals1 = bins[i]
+        s2, vals2 = bins[j]
+        res = distance_distinguishability_probability(
+            distance,
+            vals1,
+            vals2;
+            percentile = percentile,
+            null_value = null_value,
+        )
+        return (
+            s1 = s1,
+            s2 = s2,
+            rel_change = relative_change(s1, s2),
+            D = res.D,
+            probability_below_null = res.probability_below_null,
+            null_value = res.null_value,
+            percentile = res.percentile,
+            mean_between = res.mean_between,
+            std_between = res.std_between,
+            std_lo = res.std_lo,
+            std_up = res.std_up,
+        )
+    end
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && total > 1
+        Threads.@threads for tid in 1:n_threads
+            for k in tid:n_threads:total
+                @inbounds out[k] = compute_task(k)
+            end
+        end
+    else
+        for k in 1:total
+            @inbounds out[k] = compute_task(k)
+        end
+    end
+    return out
+end
+
+"""
+    scalar_bin_distance_distinguishability_probability(distance, data::Vector{Vector{Tuple{T,Real}}}, ref::AbstractVector; num_bins=nothing, percentile=1/2)
+
+See `scalar_bin_distance_distinguishability_probability(distance, data; ...)`.
+
+This overload compares each scalar bin to a fixed reference/null ensemble `ref`
+and returns `(scalar, D, probability_below_null, null_value, percentile, mean_between, std_between, std_lo, std_up)` entries.
+
+# Arguments
+- `distance`: Distance function on two single values.
+- `data`: Single observable dataset of `(value, scalar)` pairs.
+- `ref`: Fixed reference/null ensemble compared against each scalar bin.
+
+# Keyword Arguments
+- `num_bins`: Optional scalar bin count used before comparisons.
+- `percentile`: Quantile in `[0, 1]` used for the null threshold inside each bin/reference comparison.
+- `null_value`: Optional precomputed null threshold passed through to
+  `distance_distinguishability_probability`.
+
+# Returns
+- `result`: Vector of named tuples
+  `(scalar, D, probability_below_null, null_value, percentile, mean_between, std_between, std_lo, std_up)`.
+
+# Throws
+- `ArgumentError`: Propagated for invalid scalar-bin inputs, empty reference ensembles, or invalid distance-comparison ensembles.
+- `DomainError`: Propagated for invalid `num_bins`, `percentile`, `null_value`, or non-finite distance outputs.
+- `TypeError`: Propagated when `distance` does not return a `Real`.
+"""
+function scalar_bin_distance_distinguishability_probability(
+    distance::F,
+    data::Vector{Vector{Tuple{T,Real}}},
+    ref::AbstractVector;
+    num_bins::Union{Nothing,Int} = nothing,
+    percentile::Real = 1 / 2,
+    null_value::Union{Nothing,Real} = nothing,
+) where {F<:Function,T}
+    ctx = _prepare_scalar_bin_context(
+        data,
+        "scalar_bin_distance_distinguishability_probability";
+        num_bins = num_bins,
+        ref = ref,
+    )
+    bins = ctx.bins
+    out = Vector{NamedTuple}(undef, length(bins))
+    compute_task = function (k::Int)
+        s, vals = bins[k]
+        res = distance_distinguishability_probability(
+            distance,
+            vals,
+            ref;
+            percentile = percentile,
+            null_value = null_value,
+        )
+        return (
+            scalar = s,
+            D = res.D,
+            probability_below_null = res.probability_below_null,
+            null_value = res.null_value,
+            percentile = res.percentile,
+            mean_between = res.mean_between,
+            std_between = res.std_between,
+            std_lo = res.std_lo,
+            std_up = res.std_up,
+        )
+    end
+    n_threads = Threads.maxthreadid()
+    if n_threads > 1 && length(bins) > 1
+        Threads.@threads for tid in 1:n_threads
+            for k in tid:n_threads:length(bins)
+                @inbounds out[k] = compute_task(k)
+            end
+        end
+    else
+        for k in eachindex(bins)
+            @inbounds out[k] = compute_task(k)
+        end
+    end
+    return out
+end
+
+"""
     scalar_bin_distinguishability(data::Vector{Vector{Tuple{T,Real}}}; num_bins=nothing)
 
 Given one dataset (top-level vector must have length 1) of `(value, scalar)` pairs
@@ -810,6 +1168,31 @@ function _sqrt_vectors_and_norms(vecs::Vector{<:AbstractVector{<:Real}})
 end
 
 """
+    _align_vectors_for_generic_distance(vecs_a, vecs_b)
+
+Pad all vectors in both datasets to a common length without histogram-specific
+trimming. This preserves signed or otherwise generic trailing coordinates for
+arbitrary distance functions.
+
+# Arguments
+- `vecs_a`: Vector-valued input data.
+- `vecs_b`: Vector-valued input data.
+
+# Returns
+- `result`: Tuple `(A, B)` of aligned `Vector{Vector{Float64}}` inputs.
+"""
+function _align_vectors_for_generic_distance(
+    vecs_a::Vector{<:AbstractVector{<:Real}},
+    vecs_b::Vector{<:AbstractVector{<:Real}},
+)
+    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
+    pad_to(v, n) = length(v) == n ? collect(Float64, v) : vcat(collect(Float64, v), zeros(Float64, n - length(v)))
+    A = [pad_to(v, maxlen) for v in vecs_a]
+    B = [pad_to(v, maxlen) for v in vecs_b]
+    return A, B
+end
+
+"""
     _prepare_vectors_for_distance(vecs_a, vecs_b)
 
 Internal preprocessing for Hellinger-based distance computations.
@@ -828,10 +1211,8 @@ function _prepare_vectors_for_distance(
     vecs_a::Vector{<:AbstractVector{<:Real}},
     vecs_b::Vector{<:AbstractVector{<:Real}},
 )
-    maxlen = maximum(length.(vcat(vecs_a, vecs_b)))
-    pad_to(v, n) = length(v) == n ? collect(v) : vcat(collect(v), zeros(Float64, n - length(v)))
-    A = [pad_to(v, maxlen) for v in vecs_a]
-    B = [pad_to(v, maxlen) for v in vecs_b]
+    A, B = _align_vectors_for_generic_distance(vecs_a, vecs_b)
+    maxlen = length(A[1])
 
     max_nonzero = 0
     for v in A

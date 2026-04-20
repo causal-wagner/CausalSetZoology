@@ -2232,6 +2232,7 @@ function graph_observable_kind_plot_matrix(
     rowgap !== nothing && rowgap < 0 && throw(DomainError(rowgap, "rowgap must be >= 0"))
     colgap !== nothing && colgap < 0 && throw(DomainError(colgap, "colgap must be >= 0"))
 
+    observable_spec = graph_observable_field_spec(loaded.observable)
     panel_specs = loaded.panel_specs
     panels = loaded.panels
     loaded_panel_log_binning = loaded.panel_log_colorbar
@@ -2546,6 +2547,7 @@ function plot_labeled_average_std_panel!(
     ylabel_i,
     xticks_i,
     yticks_i,
+    logscale_x::Bool,
     logscale_y::Bool,
     plot_std::Bool,
     show_legend::Bool,
@@ -2566,10 +2568,17 @@ function plot_labeled_average_std_panel!(
     end
 
     for s in series
-        x = collect(1:length(s.mean))
+        x = hasproperty(s, :x) ? collect(s.x) : collect(1:length(s.mean))
         mean = s.mean
         ylo = s.mean .- s.std
         yhi = s.mean .+ s.std
+        if logscale_x
+            maskx = x .> 0
+            x = x[maskx]
+            mean = mean[maskx]
+            ylo = ylo[maskx]
+            yhi = yhi[maskx]
+        end
         if logscale_y
             mask = mean .> 0
             x = x[mask]
@@ -2595,6 +2604,59 @@ function plot_labeled_average_std_panel!(
         end
     end
     return nothing
+end
+
+function size_boundary_dimension_series_for_panel(
+    panel_series,
+    colors,
+    panel::Symbol,
+    loaded,
+    normalize_x_by_size::Bool,
+)
+    is_hist = graph_observable_field_spec(loaded.observable).hist
+    return [
+        begin
+            size_denom = if panel == :size
+                s.size
+            elseif panel == :boundary
+                loaded.boundary_size
+            else
+                loaded.dimension_size
+            end
+            (; label = s.label,
+               mean = if normalize_x_by_size && is_hist
+                   trimmed = s.mean[2:end]
+                   mass = sum(trimmed)
+                   # Convert the trimmed mass histogram into a density in x = j / n,
+                   # so that sum(mean) * (1 / n) = 1.
+                   mass > 0 ? (size_denom / mass) .* trimmed : trimmed
+               else
+                   s.mean
+               end,
+               std = if normalize_x_by_size && is_hist
+                   trimmed_std = s.std[2:end]
+                   mass = sum(s.mean[2:end])
+                   mass > 0 ? (size_denom / mass) .* trimmed_std : trimmed_std
+               else
+                   s.std
+               end,
+               color = colors[j],
+               x = if normalize_x_by_size
+                   if is_hist
+                       collect(1:length(s.mean)-1) ./ size_denom
+                   else
+                       collect(1:length(s.mean)) ./ size_denom
+                   end
+               else
+                   if is_hist
+                       collect(0:length(s.mean)-1)
+                   else
+                       collect(1:length(s.mean))
+                   end
+               end)
+        end
+        for (j, s) in enumerate(panel_series)
+    ]
 end
 
 function normalize_size_boundary_dimension_num_csets(
@@ -2682,6 +2744,8 @@ function load_graph_observable_size_boundary_dimension_plot_matrix_data(
     return (
         observable = observable,
         sizes = Int.(sizes),
+        boundary_size = Int(boundary_size),
+        dimension_size = Int(dimension_size),
         panel_specs = [
             (panel = :size,),
             (panel = :boundary,),
@@ -2720,6 +2784,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     xlabel_size = L"j",
     xlabel_boundary = L"j",
     xlabel_dimension = L"j",
+    normalize_x_by_size::Bool = false,
     ylabel = nothing,
     xticks_size = nothing,
     xticks_boundary = nothing,
@@ -2782,6 +2847,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
         xlabel_size = xlabel_size,
         xlabel_boundary = xlabel_boundary,
         xlabel_dimension = xlabel_dimension,
+        normalize_x_by_size = normalize_x_by_size,
         ylabel = ylabel,
         xticks_size = xticks_size,
         xticks_boundary = xticks_boundary,
@@ -2827,6 +2893,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     xlabel_size = nothing,
     xlabel_boundary = nothing,
     xlabel_dimension = nothing,
+    normalize_x_by_size::Bool = false,
     ylabel = nothing,
     xticks_size = nothing,
     xticks_boundary = nothing,
@@ -2863,14 +2930,43 @@ function graph_observable_size_boundary_dimension_plot_matrix(
 
     panel_specs = loaded.panel_specs
     panels = loaded.panels
+    min_positive_normalized_x = [
+        minimum(1 / s.size for s in panels[1]),
+        1 / loaded.boundary_size,
+        1 / loaded.dimension_size,
+    ]
     title_n = [
         isnothing(title_size) ? default_size_boundary_dimension_plot_matrix_title(panel_specs[1].panel) : title_size,
         isnothing(title_boundary) ? default_size_boundary_dimension_plot_matrix_title(panel_specs[2].panel) : title_boundary,
         isnothing(title_dimension) ? default_size_boundary_dimension_plot_matrix_title(panel_specs[3].panel) : title_dimension,
     ]
-    xlim_n = [xlim_size, xlim_boundary, xlim_dimension]
+    xlim_n = if normalize_x_by_size
+        [
+            isnothing(xlim_size) ? ((logscale_x ? min_positive_normalized_x[1] : 0.0), 1.0) : xlim_size,
+            isnothing(xlim_boundary) ? ((logscale_x ? min_positive_normalized_x[2] : 0.0), 1.0) : xlim_boundary,
+            isnothing(xlim_dimension) ? ((logscale_x ? min_positive_normalized_x[3] : 0.0), 1.0) : xlim_dimension,
+        ]
+    else
+        [xlim_size, xlim_boundary, xlim_dimension]
+    end
+    if logscale_x
+        xlim_n = [
+            if isnothing(xl)
+                nothing
+            else
+                lo, hi = xl
+                lo <= 0 && normalize_x_by_size ? (min_positive_normalized_x[i], hi) : xl
+            end
+            for (i, xl) in enumerate(xlim_n)
+        ]
+    end
     ylim_n = [ylim_size, ylim_boundary, ylim_dimension]
-    xlabel_n = [xlabel_size, xlabel_boundary, xlabel_dimension]
+    default_xlabel = normalize_x_by_size ? L"j / n" : L"j"
+    xlabel_n = [
+        isnothing(xlabel_size) ? default_xlabel : xlabel_size,
+        isnothing(xlabel_boundary) ? default_xlabel : xlabel_boundary,
+        isnothing(xlabel_dimension) ? default_xlabel : xlabel_dimension,
+    ]
     ylabel_left = isnothing(ylabel) ? default_graph_observable_ylabel(loaded.observable) : ylabel
     ylabel_n = [ylabel_left, nothing, nothing]
     xticks_n = [xticks_size, xticks_boundary, xticks_dimension]
@@ -2940,10 +3036,13 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     panel_colors = [size_colors, boundary_colors, dimension_colors]
 
     for idx in 1:3
-        series = [
-            (; label = s.label, mean = s.mean, std = s.std, color = panel_colors[idx][j])
-            for (j, s) in enumerate(panels[idx])
-        ]
+        series = size_boundary_dimension_series_for_panel(
+            panels[idx],
+            panel_colors[idx],
+            panel_specs[idx].panel,
+            loaded,
+            normalize_x_by_size,
+        )
         if title_legend
             title_labels =
                 if panel_specs[idx].panel == :size
@@ -2964,6 +3063,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
             ylabel_i = ylabel_n[idx],
             xticks_i = xticks_n[idx],
             yticks_i = yticks_n[idx],
+            logscale_x = logscale_x,
             logscale_y = logscale_y,
             plot_std = plot_std,
             show_legend = !title_legend,
