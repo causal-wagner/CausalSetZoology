@@ -2705,9 +2705,10 @@ function size_boundary_dimension_series_for_panel(
     panel::Symbol,
     loaded,
     normalize_x_by_size::Bool,
+    invert_plot_order::Bool,
 )
     is_hist = graph_observable_field_spec(loaded.observable).hist
-    return [
+    series = [
         begin
             size_denom = if panel == :size
                 s.size
@@ -2736,6 +2737,7 @@ function size_boundary_dimension_series_for_panel(
         end
         for (j, s) in enumerate(panel_series)
     ]
+    return invert_plot_order ? reverse(series) : series
 end
 
 function normalize_size_boundary_dimension_num_csets(
@@ -2890,6 +2892,9 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     legend_columns_size::Int = 1,
     legend_columns_boundary::Int = 1,
     legend_columns_dimension::Int = 1,
+    invert_plot_order_size::Bool = false,
+    invert_plot_order_boundary::Bool = false,
+    invert_plot_order_dimension::Bool = false,
     title_legend::Bool = false,
     return_axis::Bool = false,
     verbose::Bool = false,
@@ -2954,6 +2959,9 @@ function graph_observable_size_boundary_dimension_plot_matrix(
         legend_columns_size = legend_columns_size,
         legend_columns_boundary = legend_columns_boundary,
         legend_columns_dimension = legend_columns_dimension,
+        invert_plot_order_size = invert_plot_order_size,
+        invert_plot_order_boundary = invert_plot_order_boundary,
+        invert_plot_order_dimension = invert_plot_order_dimension,
         title_legend = title_legend,
         return_axis = return_axis,
     )
@@ -3000,6 +3008,9 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     legend_columns_size::Int = 1,
     legend_columns_boundary::Int = 1,
     legend_columns_dimension::Int = 1,
+    invert_plot_order_size::Bool = false,
+    invert_plot_order_boundary::Bool = false,
+    invert_plot_order_dimension::Bool = false,
     title_legend::Bool = false,
     return_axis::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Vector{CairoMakie.Axis}}}
@@ -3055,6 +3066,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
     yticklabels_n = [yticklabels_left, yticklabels_middle, yticklabels_right]
     legend_positions = [legend_position_size, legend_position_boundary, legend_position_dimension]
     legend_columns = [legend_columns_size, legend_columns_boundary, legend_columns_dimension]
+    invert_plot_order_n = [invert_plot_order_size, invert_plot_order_boundary, invert_plot_order_dimension]
 
     panel_size = apply_paper_theme!(double_column = double_column, third_line_size = true, magnification = magnification)
     fig_width = 3 * panel_size[1] + 2 * (isnothing(colgap) ? 0.0 : float(colgap))
@@ -3123,6 +3135,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
             panel_specs[idx].panel,
             loaded,
             normalize_x_by_size,
+            invert_plot_order_n[idx],
         )
         if title_legend
             title_labels =
