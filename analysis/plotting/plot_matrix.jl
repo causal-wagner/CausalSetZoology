@@ -76,6 +76,7 @@ function plot_hist_or_vec_panel!(
     colormap,
     comp_color,
     comp_linewidth::Union{Nothing,Real},
+    xscale::Real = 1.0,
 )
     apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, yticks_i)
 
@@ -94,7 +95,7 @@ function plot_hist_or_vec_panel!(
     comp_mean = nothing
     if comp_mean_std !== nothing
         mean_comp, std_comp = comp_mean_std
-        x = collect(1:length(mean_comp))
+        x = xscale .* collect(1:length(mean_comp))
         ylo = mean_comp .- std_comp
         yhi = mean_comp .+ std_comp
         if logscale_y
@@ -121,7 +122,7 @@ function plot_hist_or_vec_panel!(
         t = invert_color_scaling ? (1 - t) : t
         color = PlotUtils.get(CairoMakie.cgrad(colormap), t)
 
-        x = collect(1:length(mean))
+        x = xscale .* collect(1:length(mean))
         ylo = mean .- std
         yhi = mean .+ std
         if logscale_y
@@ -145,6 +146,17 @@ function plot_hist_or_vec_panel!(
             CairoMakie.lines!(ax, comp_x, comp_mean; color = comp_color, linewidth = comp_linewidth)
     end
     return nothing
+end
+
+function scale_mean_std(mean_std, yscale::Real)
+    yscale == 1.0 && return mean_std
+    mean, std = mean_std
+    return (yscale .* mean, yscale .* std)
+end
+
+function scale_panel_series(data::AbstractVector{<:Tuple}, yscale::Real)
+    yscale == 1.0 && return data
+    return [(val, yscale .* mean, yscale .* std) for (val, mean, std) in data]
 end
 
 function group_scalar_pairs_for_plot(
@@ -402,14 +414,18 @@ function apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, 
     xlim_i !== nothing && CairoMakie.xlims!(ax, xlim_i...)
     ylim_i !== nothing && CairoMakie.ylims!(ax, ylim_i...)
     if xticks_i !== nothing
-        if !isempty(xticks_i) && first(xticks_i) isa Tuple
+        if xticks_i isa Tuple && length(xticks_i) == 2
+            ax.xticks = xticks_i
+        elseif !isempty(xticks_i) && first(xticks_i) isa Tuple
             ax.xticks = ([t[1] for t in xticks_i], [t[2] for t in xticks_i])
         else
             ax.xticks = collect(xticks_i)
         end
     end
     if yticks_i !== nothing
-        if !isempty(yticks_i) && first(yticks_i) isa Tuple
+        if yticks_i isa Tuple && length(yticks_i) == 2
+            ax.yticks = yticks_i
+        elseif !isempty(yticks_i) && first(yticks_i) isa Tuple
             ax.yticks = ([t[1] for t in yticks_i], [t[2] for t in yticks_i])
         else
             ax.yticks = collect(yticks_i)
@@ -854,8 +870,8 @@ function observable_plot_matrix(
     normalized_connectivity_comp = normalize_hists(comp_loaded.connectivity_link_hists)
     normalized_max_pathlen_data = normalize_hists(data_loaded.max_pathlen_hists; normalization = 1)
     normalized_max_pathlen_comp = normalize_hists(comp_loaded.max_pathlen_hists; normalization = 1)
-    normalized_cardinalities_data = normalize_hists(data_loaded.cardinalities_hists)
-    normalized_cardinalities_comp = normalize_hists(comp_loaded.cardinalities_hists)
+    normalized_cardinalities_data = normalize_hists(data_loaded.cardinalities_hists; normalize_x_axis_with_size = true, cset_size = data_loaded.size)
+    normalized_cardinalities_comp = normalize_hists(comp_loaded.cardinalities_hists; normalize_x_axis_with_size = true, cset_size = comp_loaded.size)
 
     maybe_sqrt_pairs(pairs) = sqrt_scalars ? [(v, sqrt(Float64(s))) for (v, s) in pairs] : pairs
     normalized_connectivity_data = [maybe_sqrt_pairs(g) for g in normalized_connectivity_data]
@@ -1759,6 +1775,7 @@ end
 function load_graph_observable_kind_panel(
     paths_in,
     observable::Symbol;
+    size::Int,
     scalar::Union{Nothing,Symbol} = nothing,
     comp_paths_in = nothing,
     num_bins::Union{Nothing,Int} = nothing,
@@ -1767,14 +1784,23 @@ function load_graph_observable_kind_panel(
 )
     spec = graph_observable_field_spec(observable)
     paths = paths_in isa AbstractString ? [String(paths_in)] : String.(collect(paths_in))
-    loaded = isnothing(scalar) ?
-        load_fields_from_paths(paths, [spec.field]; verbose = verbose) :
-        load_fields_from_paths(paths, [spec.field], scalar; verbose = verbose)
-    values = loaded[1][1]
+    normalize_x_axis_with_size = observable === :cardinalities
+    xscale = observable in (:cardinalities, :ev_sym_link) ? inv(Float64(size)) : 1.0
+    yscale = 1.0
+    values =
+        if spec.hist
+            isnothing(scalar) ?
+                load_histograms_from_paths(paths, spec.field; verbose = verbose)[1] :
+                load_histograms_from_paths(paths, spec.field, scalar; verbose = verbose)[1]
+        else
+            isnothing(scalar) ?
+                load_fields_from_paths(paths, [spec.field]; verbose = verbose)[1][1] :
+                load_fields_from_paths(paths, [spec.field], scalar; verbose = verbose)[1][1]
+        end
 
     prepared =
         if spec.hist
-            normalize_hists([values]; normalization = spec.normalization)[1]
+            normalize_hists([values]; normalization = spec.normalization, normalize_x_axis_with_size = normalize_x_axis_with_size, cset_size = size)[1]
         else
             values
         end
@@ -1782,11 +1808,15 @@ function load_graph_observable_kind_panel(
     comp_mean_std = nothing
     if comp_paths_in !== nothing
         comp_paths = comp_paths_in isa AbstractString ? [String(comp_paths_in)] : String.(collect(comp_paths_in))
-        comp_loaded = load_fields_from_paths(comp_paths, [spec.field]; verbose = verbose)
-        comp_values = comp_loaded[1][1]
+        comp_values =
+            if spec.hist
+                load_histograms_from_paths(comp_paths, spec.field; verbose = verbose)[1]
+            else
+                load_fields_from_paths(comp_paths, [spec.field]; verbose = verbose)[1][1]
+            end
         comp_prepared =
             if spec.hist
-                normalize_hists([comp_values]; normalization = spec.normalization)[1]
+                normalize_hists([comp_values]; normalization = spec.normalization, normalize_x_axis_with_size = normalize_x_axis_with_size, cset_size = size)[1]
             else
                 comp_values
             end
@@ -1796,12 +1826,12 @@ function load_graph_observable_kind_panel(
     if isnothing(scalar)
         mean_std = spec.hist ? average_histogram_with_std(prepared) : average_vectors_with_std(prepared)
         data = [(1.0, mean_std[1], mean_std[2])]
-        return (data = data, scalar = nothing, comp = comp_mean_std)
+        return (data = data, scalar = nothing, comp = comp_mean_std, xscale = xscale, yscale = yscale)
     end
 
     bin_edges = compute_plot_matrix_scalar_bin_edges((prepared,); num_bins = num_bins, log_binning = log_binning)
     data = avg_hist_or_vec(prepared; num_bins = num_bins, bin_edges = bin_edges, log_binning = log_binning)
-    return (data = data, scalar = scalar, comp = comp_mean_std)
+    return (data = data, scalar = scalar, comp = comp_mean_std, xscale = xscale, yscale = yscale)
 end
 
 function load_graph_observable_kind_plot_matrix_data(
@@ -1820,7 +1850,7 @@ function load_graph_observable_kind_plot_matrix_data(
     layered_paths = data_paths(["layered_$(size)_10000/statistics.jld2"]),
     random_paths = data_paths(["random_$(size)_10000/statistics.jld2"]),
     merged_paths = data_paths(["merged_link_prob_tenth_$(size)_30000/statistics.jld2"]),
-    destroyed_paths = data_paths(["destroyed_$(size)_30000/statistics.jld2"]),
+    destroyed_paths = data_paths(["destroyed_$(size)_100000/statistics.jld2"]),
     pants_paths = data_paths(["manifoldlike_pants_$(size)_10000/statistics.jld2"]),
     genus_paths = data_paths(["manifoldlike_genus_$(size)_10000/statistics.jld2"]),
     standard_comp_paths = data_paths(["manifoldlike_simply_connected_$(size)_10000/statistics.jld2"]),
@@ -1868,6 +1898,7 @@ function load_graph_observable_kind_plot_matrix_data(
         load_graph_observable_kind_panel(
             spec.paths,
             observable;
+            size = size,
             scalar = spec.scalar,
             comp_paths_in = spec.comp_paths,
             num_bins = num_bins,
@@ -1922,7 +1953,7 @@ function graph_observable_kind_plot_matrix(
     layered_paths = data_paths(["layered_$(size)_10000/statistics.jld2"]),
     random_paths = data_paths(["random_$(size)_10000/statistics.jld2"]),
     merged_paths = data_paths(["merged_link_prob_tenth_$(size)_30000/statistics.jld2"]),
-    destroyed_paths = data_paths(["destroyed_$(size)_30000/statistics.jld2"]),
+    destroyed_paths = data_paths(["destroyed_$(size)_100000/statistics.jld2"]),
     pants_paths = data_paths(["manifoldlike_pants_$(size)_10000/statistics.jld2"]),
     genus_paths = data_paths(["manifoldlike_genus_$(size)_10000/statistics.jld2"]),
     standard_comp_paths = data_paths(["manifoldlike_simply_connected_$(size)_10000/statistics.jld2"]),
@@ -2340,7 +2371,11 @@ function graph_observable_kind_plot_matrix(
     ]
     xlim_n = panel_meta.xlim
     ylim_n = panel_meta.ylim
-    xlabel_n = panel_meta.xlabel
+    xlabel_n = Any[panel_meta.xlabel...]
+    default_bottom_xlabel = loaded.observable in (:cardinalities, :ev_sym_link) ? L"j/n" : L"j"
+    for idx in 7:8
+        isnothing(xlabel_n[idx]) && (xlabel_n[idx] = default_bottom_xlabel)
+    end
     ylabel_n = panel_meta.ylabel
     xticks_n = panel_meta.xticks
     yticks_n = panel_meta.yticks
@@ -2358,9 +2393,13 @@ function graph_observable_kind_plot_matrix(
         for row in 1:4
     ]
     outer_rowgap = isnothing(rowgap) ? 0.0 : float(rowgap)
-    fig_padding = 140.0
-    fig_height = sum(row_heights) + 3 * outer_rowgap + fig_padding
-    fig = CairoMakie.Figure(size = (base_size[1], fig_height))
+    top_padding = 100
+    bottom_padding = 100
+    fig_height = sum(row_heights) + 3 * outer_rowgap + top_padding + bottom_padding
+    fig = CairoMakie.Figure(
+        size = (base_size[1], fig_height),
+        figure_padding = (20, 20, top_padding, bottom_padding),
+    )
     axs = Matrix{CairoMakie.Axis}(undef, 4, 2)
     panel_layouts = Matrix{CairoMakie.GridLayout}(undef, 4, 2)
 
@@ -2378,6 +2417,29 @@ function graph_observable_kind_plot_matrix(
             ax.title = title_n[idx]
             if top_xaxis && row == 1
                 ax.xaxisposition = :top
+                ax.xticklabelalign = (:center, :bottom)
+                ax_bottom = CairoMakie.Axis(
+                    panel_layout[1, 1];
+                    xscale = ax.xscale[],
+                    yscale = ax.yscale[],
+                    xlabelvisible = false,
+                    xticklabelsvisible = false,
+                    yticklabelsvisible = false,
+                    yticksvisible = false,
+                    ylabelvisible = false,
+                    xgridvisible = false,
+                    xminorgridvisible = false,
+                    ygridvisible = false,
+                    yminorgridvisible = false,
+                    backgroundcolor = :transparent,
+                )
+                apply_axis_scale_theme!(
+                    ax_bottom;
+                    logscale_x = ax.xscale[] !== identity,
+                    logscale_y = ax.yscale[] !== identity,
+                )
+                ax_bottom.xaxisposition = :bottom
+                ax_bottom.topspinevisible = false
             end
             if right_yaxis && col == 2
                 ax.yaxisposition = :right
@@ -2390,6 +2452,8 @@ function graph_observable_kind_plot_matrix(
     end
 
     rowgap !== nothing && CairoMakie.rowgap!(fig.layout, rowgap)
+    CairoMakie.rowgap!(fig.layout, 2, -10)
+    CairoMakie.rowgap!(fig.layout, 3, -10)
     colgap !== nothing && CairoMakie.colgap!(fig.layout, colgap)
     for row in 1:4
         CairoMakie.rowsize!(fig.layout, row, CairoMakie.Fixed(row_heights[row]))
@@ -2401,6 +2465,16 @@ function graph_observable_kind_plot_matrix(
             spec = panel_specs[idx]
             panel = panels[idx]
             ax = axs[row, col]
+            panel_xscale =
+                if loaded.observable in (:cardinalities, :ev_sym_link)
+                    inv(Float64(loaded.size))
+                else
+                    hasproperty(panel, :xscale) ? panel.xscale : 1.0
+                end
+            panel_yscale = loaded.observable == :cardinalities ? 1.0 :
+                (hasproperty(panel, :yscale) ? panel.yscale : 1.0)
+            panel_data = scale_panel_series(panel.data, panel_yscale)
+            panel_comp = scale_mean_std(panel.comp, panel_yscale)
             panel_colormap =
                 if idx == 3
                     layered_colormap
@@ -2414,8 +2488,8 @@ function graph_observable_kind_plot_matrix(
             if isnothing(spec.scalar)
                 plot_hist_or_vec_panel!(
                     ax,
-                    panel.data,
-                    panel.comp,
+                    panel_data,
+                    panel_comp,
                     xlim_n[idx],
                     ylim_n[idx],
                     xlabel_n[idx],
@@ -2432,13 +2506,14 @@ function graph_observable_kind_plot_matrix(
                     colormap = panel_colormap,
                     comp_color = comp_color,
                     comp_linewidth = comp_linewidth,
+                    xscale = panel_xscale,
                 )
             else
                 color_scale = compute_color_scale([panel.data]; log_color_scaling = panel_log_binning[idx])
                 plot_hist_or_vec_panel!(
                     ax,
-                    panel.data,
-                    panel.comp,
+                    panel_data,
+                    panel_comp,
                     xlim_n[idx],
                     ylim_n[idx],
                     xlabel_n[idx],
@@ -2455,10 +2530,11 @@ function graph_observable_kind_plot_matrix(
                     colormap = panel_colormap,
                     comp_color = comp_color,
                     comp_linewidth = comp_linewidth,
+                    xscale = panel_xscale,
                 )
                 cb_layout = CairoMakie.GridLayout(panel_layouts[row, col][2, 1])
-                CairoMakie.rowgap!(panel_layouts[row, col], 2)
-                CairoMakie.rowsize!(panel_layouts[row, col], 2, CairoMakie.Fixed(6))
+                CairoMakie.rowgap!(panel_layouts[row, col], 0)
+                CairoMakie.rowsize!(panel_layouts[row, col], 2, CairoMakie.Fixed(30))
                 cb = CairoMakie.Colorbar(
                     cb_layout[1, 1],
                     limits = (color_scale.raw_vmin, color_scale.raw_vmax),
@@ -2466,9 +2542,13 @@ function graph_observable_kind_plot_matrix(
                     vertical = false,
                     scale = panel_log_binning[idx] ? log10 : identity,
                 )
-                cb.height = 10
+                cb.flipaxis = false
+                cb.height = 5
+                cb.ticksize = 3
+                cb.minorticksize = 2
+                cb.ticklabelpad = row == 3 ? 4 : 2
                 cb.label = graph_observable_scalar_label(spec.scalar)
-                cb.labelpadding = -5
+                cb.labelpadding = row == 3 ? 0 : -5
                 if colorbar_ticks_n[idx] !== nothing
                     cb.ticks = colorbar_ticks_n[idx]
                 end
@@ -2483,15 +2563,28 @@ end
 function load_graph_observable_average_std(
     paths_in,
     observable::Symbol;
+    size::Union{Nothing,Integer} = nothing,
+    normalize_x_by_size::Bool = false,
     verbose::Bool = false,
 )
-    loaded = load_graph_observable_kind_panel(
-        paths_in,
-        observable;
-        scalar = nothing,
-        verbose = verbose,
-    )
-    _, mean, std = only(loaded.data)
+    spec = graph_observable_field_spec(observable)
+    paths = paths_in isa AbstractString ? [String(paths_in)] : String.(collect(paths_in))
+    if spec.hist
+        if normalize_x_by_size
+            size === nothing && throw(ArgumentError("size is required when normalize_x_by_size = true for histogram observables"))
+        end
+        values = load_histograms_from_paths(paths, spec.field; verbose = verbose)[1]
+        prepared = normalize_hists(
+            [values];
+            normalization = spec.normalization,
+            normalize_x_axis_with_size = normalize_x_by_size,
+            cset_size = size,
+        )[1]
+        mean, std = average_histogram_with_std(prepared)
+    else
+        values = load_fields_from_paths(paths, [spec.field]; verbose = verbose)[1][1]
+        mean, std = average_vectors_with_std(values)
+    end
     return (mean = mean, std = std)
 end
 
@@ -2624,22 +2717,8 @@ function size_boundary_dimension_series_for_panel(
                 loaded.dimension_size
             end
             (; label = s.label,
-               mean = if normalize_x_by_size && is_hist
-                   trimmed = s.mean[2:end]
-                   mass = sum(trimmed)
-                   # Convert the trimmed mass histogram into a density in x = j / n,
-                   # so that sum(mean) * (1 / n) = 1.
-                   mass > 0 ? (size_denom / mass) .* trimmed : trimmed
-               else
-                   s.mean
-               end,
-               std = if normalize_x_by_size && is_hist
-                   trimmed_std = s.std[2:end]
-                   mass = sum(s.mean[2:end])
-                   mass > 0 ? (size_denom / mass) .* trimmed_std : trimmed_std
-               else
-                   s.std
-               end,
+               mean = normalize_x_by_size && is_hist ? s.mean[2:end] : s.mean,
+               std = normalize_x_by_size && is_hist ? s.std[2:end] : s.std,
                color = colors[j],
                x = if normalize_x_by_size
                    if is_hist
@@ -2706,6 +2785,7 @@ function load_graph_observable_size_boundary_dimension_plot_matrix_data(
     dimension_size::Int = 2048,
     dimension_2d_paths = nothing,
     dimension_3d_paths = nothing,
+    normalize_x_by_size::Bool = false,
     verbose::Bool = false,
 )
     isempty(sizes) && throw(ArgumentError("sizes must be non-empty"))
@@ -2729,16 +2809,16 @@ function load_graph_observable_size_boundary_dimension_plot_matrix_data(
 
     size_labels = ["n=$(s)" for s in sizes]
     size_series = [
-        (; label = size_labels[i], size = Int(sizes[i]), load_graph_observable_average_std(size_paths[i], observable; verbose = verbose)...)
+        (; label = size_labels[i], size = Int(sizes[i]), load_graph_observable_average_std(size_paths[i], observable; size = Int(sizes[i]), normalize_x_by_size = normalize_x_by_size, verbose = verbose)...)
         for i in eachindex(sizes)
     ]
     boundary_series = [
-        (; label = "box", load_graph_observable_average_std(boundary_manifold_paths, observable; verbose = verbose)...),
-        (; label = "diamond", load_graph_observable_average_std(boundary_sprinkling_paths, observable; verbose = verbose)...),
+        (; label = "box", load_graph_observable_average_std(boundary_manifold_paths, observable; size = boundary_size, normalize_x_by_size = normalize_x_by_size, verbose = verbose)...),
+        (; label = "diamond", load_graph_observable_average_std(boundary_sprinkling_paths, observable; size = boundary_size, normalize_x_by_size = normalize_x_by_size, verbose = verbose)...),
     ]
     dimension_series = [
-        (; label = L"d=2", load_graph_observable_average_std(dimension_2d_paths, observable; verbose = verbose)...),
-        (; label = L"d=3", load_graph_observable_average_std(dimension_3d_paths, observable; verbose = verbose)...),
+        (; label = L"d=2", load_graph_observable_average_std(dimension_2d_paths, observable; size = dimension_size, normalize_x_by_size = normalize_x_by_size, verbose = verbose)...),
+        (; label = L"d=3", load_graph_observable_average_std(dimension_3d_paths, observable; size = dimension_size, normalize_x_by_size = normalize_x_by_size, verbose = verbose)...),
     ]
 
     return (
@@ -2830,6 +2910,7 @@ function graph_observable_size_boundary_dimension_plot_matrix(
         dimension_size = dimension_size,
         dimension_2d_paths = dimension_2d_paths,
         dimension_3d_paths = dimension_3d_paths,
+        normalize_x_by_size = normalize_x_by_size,
         verbose = verbose,
     )
     return graph_observable_size_boundary_dimension_plot_matrix(
@@ -3145,8 +3226,8 @@ function distinguishability_plot_row(
     data_loaded = load_observable_plot_matrix_observables(obs_paths, scalar)
     comp_loaded = load_observable_plot_matrix_observables(comp_paths, scalar)
 
-    normalized_cardinalities_data = normalize_hists(data_loaded.cardinalities_hists)
-    normalized_cardinalities_comp = normalize_hists(comp_loaded.cardinalities_hists)
+    normalized_cardinalities_data = normalize_hists(data_loaded.cardinalities_hists; normalize_x_axis_with_size = true, cset_size = size)
+    normalized_cardinalities_comp = normalize_hists(comp_loaded.cardinalities_hists; normalize_x_axis_with_size = true, cset_size = size)
     normalized_connectivity_data = normalize_hists(data_loaded.connectivity_link_hists)
     normalized_connectivity_comp = normalize_hists(comp_loaded.connectivity_link_hists)
     normalized_max_pathlen_data = normalize_hists(data_loaded.max_pathlen_hists; normalization = 1)
