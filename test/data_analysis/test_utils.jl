@@ -22,11 +22,26 @@ end
     nc = CausalSetZoology.normalize_hists(h; normalization = 2.0)
     @test nc[1][1][1] ≈ 1.0
     @test nc[1][1][2] ≈ 1.0
+
+    # X-axis rescaling is applied before the selected normalization.
+    nd = CausalSetZoology.normalize_hists(h; normalization = 1.0, normalize_x_axis_with_size = true, cset_size = 4.0)
+    @test nd[1][1][1] ≈ 8.0
+    @test nd[1][1][2] ≈ 8.0
+    @test sum(values(nd[1][1])) * (1 / 4.0) ≈ 4.0
+
+    # For probability normalization, the subsequent normalization removes the
+    # histogram-count normalization but preserves the density factor from the
+    # x-axis rescaling.
+    nd_prob = CausalSetZoology.normalize_hists(h; normalization = :probability, normalize_x_axis_with_size = true, cset_size = 4.0)
+    @test nd_prob[1][1][1] ≈ 2.0
+    @test nd_prob[1][1][2] ≈ 2.0
+    @test sum(values(nd_prob[1][1])) * (1 / 4.0) ≈ 1.0
 end
 
 @testitem "utils: normalize_hists plain validation" setup=[setupUtils] begin
     # Unsupported symbol mode.
     @test_throws ArgumentError CausalSetZoology.normalize_hists([[Dict(1 => 1)]]; normalization = :unknown)
+    @test_throws ArgumentError CausalSetZoology.normalize_hists([[Dict(1 => 1)]]; normalization = :probability_normalize_x_axis)
 
     # Invalid numeric normalization constants.
     @test_throws DomainError CausalSetZoology.normalize_hists([[Dict(1 => 1)]]; normalization = 0.0)
@@ -69,6 +84,14 @@ end
     ns_smaller = CausalSetZoology.normalize_hists(hs_pre; normalization = :probability, num_bins = 2)
     @test sort(unique(last.(ns_smaller[1]))) == [1.5, 2.5]
 
+    # X-axis rescaling also works for tuple inputs and leaves the tuple scalar
+    # available for grouping/binning.
+    hs_density = [[(Dict(1 => 2, 2 => 6), 4.0)]]
+    ns_density = CausalSetZoology.normalize_hists(hs_density; normalization = 1.0, normalize_x_axis_with_size = true, cset_size = 4.0)
+    @test ns_density[1][1][1][1] ≈ 8.0
+    @test ns_density[1][1][1][2] ≈ 24.0
+    @test ns_density[1][1][2] == 4.0
+
     # Empty input returns empty output.
     @test CausalSetZoology.normalize_hists(Vector{Vector{Tuple{Dict{Int,Int},Float64}}}()) == Vector{Vector{Tuple{Dict{Int,Float64},Real}}}()
 end
@@ -81,6 +104,9 @@ end
     @test_throws DomainError CausalSetZoology.normalize_hists(hs; normalization = 0.0)
     @test_throws DomainError CausalSetZoology.normalize_hists(hs; normalization = Inf)
     @test_throws DomainError CausalSetZoology.normalize_hists(hs; normalization = NaN)
+    @test_throws ArgumentError CausalSetZoology.normalize_hists(hs; normalize_x_axis_with_size = true)
+    @test_throws DomainError CausalSetZoology.normalize_hists(hs; normalize_x_axis_with_size = true, cset_size = 0.0)
+    @test_throws DomainError CausalSetZoology.normalize_hists(hs; normalize_x_axis_with_size = true, cset_size = -1.0)
 
     hs_pre = [[
         (Dict(1 => 1), 1.0),

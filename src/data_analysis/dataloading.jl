@@ -409,14 +409,15 @@ function load_histograms_from_paths(
     histname::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Int = 1,
+    size::Bool = false,
     verbose::Bool = false,
-)::Vector{Vector{Dict}}
+)::Vector
     cfg = _scan_config(thinning)
     filters_norm = _normalize_filters(paths, filters)
-    extractor = _HistogramExtractor(histname, nothing)
+    extractor = _HistogramExtractor(histname, nothing, size)
 
     n = length(paths)
-    out = Vector{Vector{Dict}}(undef, n)
+    out = Vector{Any}(undef, n)
     Threads.@threads for i in 1:n
         vals = _load_histograms_one(paths[i], filters_norm[i], cfg, extractor)
         verbose && println("  Loaded $(length(vals)) histograms from $(paths[i])")
@@ -464,14 +465,15 @@ function load_histograms_from_paths(
     scalar::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Int = 1,
+    size::Bool = false,
     verbose::Bool = false,
-)::Vector{Vector{Tuple{Dict,Float64}}}
+)::Vector
     cfg = _scan_config(thinning)
     filters_norm = _normalize_filters(paths, filters)
-    extractor = _HistogramExtractor(histname, scalar)
+    extractor = _HistogramExtractor(histname, scalar, size)
 
     n = length(paths)
-    out = Vector{Vector{Tuple{Dict,Float64}}}(undef, n)
+    out = Vector{Any}(undef, n)
     Threads.@threads for i in 1:n
         vals = _load_histograms_one(paths[i], filters_norm[i], cfg, extractor)
         verbose && println("  Loaded $(length(vals)) histograms from $(paths[i]) with scalar $(scalar)")
@@ -499,6 +501,7 @@ struct _FieldExtractor{S}
     symbol_specs::Vector{Tuple{Int,Symbol}}
     hist_specs::Vector{Tuple{Int,Symbol,Int64}}
     scalar::S
+    size::Bool
 end
 
 """
@@ -516,6 +519,7 @@ Internal extractor plan for loading histograms (optionally with scalar pairing).
 struct _HistogramExtractor{S}
     histname::Symbol
     scalar::S
+    size::Bool
 end
 
 """
@@ -555,9 +559,12 @@ Build a field extractor for plain field loading (no scalar pairing).
 # Returns
 - `extractor::_FieldExtractor{Nothing}`: Internal extractor plan.
 """
-function _field_extractor(fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}})
+function _field_extractor(
+    fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}},
+    size::Bool = false,
+)
     symbol_specs, hist_specs = _split_field_specs(fields)
-    return _FieldExtractor(length(fields), symbol_specs, hist_specs, nothing)
+    return _FieldExtractor(length(fields), symbol_specs, hist_specs, nothing, size)
 end
 
 """
@@ -575,9 +582,10 @@ Build a field extractor for field loading with scalar pairing.
 function _field_extractor(
     fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}},
     scalar::Symbol,
+    size::Bool = false,
 )
     symbol_specs, hist_specs = _split_field_specs(fields)
-    return _FieldExtractor(length(fields), symbol_specs, hist_specs, scalar)
+    return _FieldExtractor(length(fields), symbol_specs, hist_specs, scalar, size)
 end
 
 """
@@ -607,12 +615,19 @@ function _load_fields_one(
         vals[j] = nothing
     end
     _scan_records(path, filter, cfg) do x
+        n = extractor.size ? getfield(x, :n) : nothing
+        if extractor.size && !(n isa Real)
+            throw(TypeError(:load_fields_from_paths, "size field n", Real, n))
+        end
+        n64 = extractor.size ? Float64(n) : nothing
         for (j, sym) in extractor.symbol_specs
-            _push_auto_typed!(vals, j, getfield(x, sym))
+            value = getfield(x, sym)
+            _push_auto_typed!(vals, j, extractor.size ? (value, n64) : value)
         end
         for (j, sym, bin) in extractor.hist_specs
             hist = getfield(x, sym)
-            _push_auto_typed!(vals, j, get(hist, bin, 0))
+            value = get(hist, bin, 0)
+            _push_auto_typed!(vals, j, extractor.size ? (value, n64) : value)
         end
     end
     return _finalize_any_columns(vals, extractor.nfields)
@@ -652,12 +667,19 @@ function _load_fields_one(
             throw(TypeError(:load_fields_from_paths, "scalar field", Real, s))
         end
         s64 = Float64(s)
+        n = extractor.size ? getfield(x, :n) : nothing
+        if extractor.size && !(n isa Real)
+            throw(TypeError(:load_fields_from_paths, "size field n", Real, n))
+        end
+        n64 = extractor.size ? Float64(n) : nothing
         for (j, sym) in extractor.symbol_specs
-            _push_auto_typed!(vals, j, (getfield(x, sym), s64))
+            value = getfield(x, sym)
+            _push_auto_typed!(vals, j, extractor.size ? (value, s64, n64) : (value, s64))
         end
         for (j, sym, bin) in extractor.hist_specs
             hist = getfield(x, sym)
-            _push_auto_typed!(vals, j, (get(hist, bin, 0), s64))
+            value = get(hist, bin, 0)
+            _push_auto_typed!(vals, j, extractor.size ? (value, s64, n64) : (value, s64))
         end
     end
     return _finalize_any_columns(vals, extractor.nfields)
@@ -688,12 +710,17 @@ function _load_histograms_one(
     hists = nothing
     _scan_records(path, filter, cfg) do x
         h = getfield(x, extractor.histname)
-        if hists === nothing
-            hists = Vector{typeof(h)}()
+        n = extractor.size ? getfield(x, :n) : nothing
+        if extractor.size && !(n isa Real)
+            throw(TypeError(:load_histograms_from_paths, "size field n", Real, n))
         end
-        push!(hists, h)
+        value = extractor.size ? (h, Float64(n)) : h
+        if hists === nothing
+            hists = Vector{typeof(value)}()
+        end
+        push!(hists, value)
     end
-    return hists === nothing ? Dict[] : hists
+    return hists === nothing ? (extractor.size ? Tuple{Dict,Float64}[] : Dict[]) : hists
 end
 
 """
@@ -727,13 +754,24 @@ function _load_histograms_one(
         if !(v isa Real)
             throw(TypeError(:load_histograms_from_paths, "scalar field", Real, v))
         end
-        pair = (h, Float64(v))
+        if extractor.size
+            n = getfield(x, :n)
+            if !(n isa Real)
+                throw(TypeError(:load_histograms_from_paths, "size field n", Real, n))
+            end
+            pair = (h, Float64(v), Float64(n))
+        else
+            pair = (h, Float64(v))
+        end
         if pairs === nothing
             pairs = Vector{typeof(pair)}()
         end
         push!(pairs, pair)
     end
-    return pairs === nothing ? Tuple{Dict,Float64}[] : pairs
+    if pairs === nothing
+        return extractor.size ? Tuple{Dict,Float64,Float64}[] : Tuple{Dict,Float64}[]
+    end
+    return pairs
 end
 
 """
@@ -760,6 +798,7 @@ function _load_field_with_scalar_one(
     cfg::_ScanConfig,
     field::Union{Symbol,Tuple{Symbol,Int64}},
     scalar::Symbol,
+    size::Bool = false,
 )
     vals = nothing
     _scan_records(path, filter, cfg) do x
@@ -767,13 +806,24 @@ function _load_field_with_scalar_one(
         if !(s isa Real)
             throw(TypeError(:load_field_with_scalar, "scalar field", Real, s))
         end
-        pair = (_extract_field_value(x, field), Float64(s))
+        if size
+            n = getfield(x, :n)
+            if !(n isa Real)
+                throw(TypeError(:load_field_with_scalar, "size field n", Real, n))
+            end
+            pair = (_extract_field_value(x, field), Float64(s), Float64(n))
+        else
+            pair = (_extract_field_value(x, field), Float64(s))
+        end
         if vals === nothing
             vals = Vector{typeof(pair)}()
         end
         push!(vals, pair)
     end
-    return vals === nothing ? Vector{Tuple{Any,Float64}}() : vals
+    if vals === nothing
+        return size ? Vector{Tuple{Any,Float64,Float64}}() : Vector{Tuple{Any,Float64}}()
+    end
+    return vals
 end
 
 """
@@ -813,11 +863,12 @@ function load_fields_from_paths(
     fields::Vector{<:Union{Symbol,Tuple{Symbol,Int64}}};
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Float64 = 1.0,
+    size::Bool = false,
     verbose::Bool = false,
 )
     cfg = _scan_config(thinning)
     filters_norm = _normalize_filters(paths, filters)
-    extractor = _field_extractor(fields)
+    extractor = _field_extractor(fields, size)
 
     n = length(paths)
     out = Vector{Vector{Any}}(undef, n)
@@ -870,11 +921,12 @@ function load_fields_from_paths(
     scalar::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Float64 = 1.0,
+    size::Bool = false,
     verbose::Bool = false,
 )
     cfg = _scan_config(thinning)
     filters_norm = _normalize_filters(paths, filters)
-    extractor = _field_extractor(fields, scalar)
+    extractor = _field_extractor(fields, scalar, size)
 
     n = length(paths)
     out = Vector{Vector{Any}}(undef, n)
@@ -922,6 +974,7 @@ function load_field_with_scalar(
     scalar::Symbol;
     filters::Union{Nothing,Vector{Union{Nothing,Function}}}=nothing,
     thinning::Float64 = 1.0,
+    size::Bool = false,
     verbose::Bool = false,
 )
     cfg = _scan_config(thinning)
@@ -929,13 +982,13 @@ function load_field_with_scalar(
     n = length(paths)
 
     # infer element type from first path to keep a concrete output type
-    first_vals = _load_field_with_scalar_one(paths[1], filters_norm[1], cfg, field, scalar)
+    first_vals = _load_field_with_scalar_one(paths[1], filters_norm[1], cfg, field, scalar, size)
     out = Vector{typeof(first_vals)}(undef, n)
     out[1] = first_vals
     verbose && println("  Loaded $(length(out[1])) values from $(paths[1]) with scalar $(scalar)")
 
     Threads.@threads for i in 2:n
-        vals = _load_field_with_scalar_one(paths[i], filters_norm[i], cfg, field, scalar)
+        vals = _load_field_with_scalar_one(paths[i], filters_norm[i], cfg, field, scalar, size)
         out[i] = vals
         verbose && println("  Loaded $(length(out[i])) values from $(paths[i]) with scalar $(scalar)")
     end

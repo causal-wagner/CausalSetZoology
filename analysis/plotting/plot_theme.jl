@@ -34,11 +34,25 @@ function _logticks_internal(lo::Real, hi::Real; base::Real = 10.0)
     pmin = floor(Int, logb(lo))
     pmax = ceil(Int,  logb(hi))
 
+    normalized_log_components(v) = begin
+        raw_exp = logb(v)
+        rounded_exp = round(Int, raw_exp)
+        if isapprox(v, base^Float64(rounded_exp); atol = 1e-10, rtol = 1e-10)
+            return rounded_exp, 1.0
+        end
+
+        exp = floor(Int, raw_exp)
+        mantissa = v / (base^Float64(exp))
+        if isapprox(mantissa, base; atol = 1e-10, rtol = 1e-10)
+            return exp + 1, 1.0
+        end
+        return exp, mantissa
+    end
+
     # helper for LaTeX labels
     latex_label(v) = begin
         if v < 1e-3 || v ≥ 1e4
-            k = floor(Int, logb(v))
-            mantissa = v / (base^Float64(k))
+            k, mantissa = normalized_log_components(v)
             mantissa_int = round(Int, mantissa)
             mantissa_is_int = isapprox(mantissa, mantissa_int; atol = 1e-10, rtol = 1e-10)
             if mantissa_is_int && mantissa_int == 1

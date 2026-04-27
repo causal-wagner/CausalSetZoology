@@ -4,6 +4,7 @@
     using JLD2
 
     Base.@kwdef struct _DLRec
+        n::Int
         in_degree_hist_link::Dict{Int,Float64}
         out_degree_hist_link::Dict{Int,Float64}
         max_pathlen_hist::Dict{Int,Float64}
@@ -13,6 +14,7 @@
     end
 
     Base.@kwdef struct _DLRecBadScalar
+        n::Int
         in_degree_hist_link::Dict{Int,Float64}
         out_degree_hist_link::Dict{Int,Float64}
         max_pathlen_hist::Dict{Int,Float64}
@@ -36,12 +38,12 @@
         p2 = joinpath(dir, "b.jld2")
 
         b1 = [[
-            _DLRec(Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0),
-            _DLRec(Dict(1 => 2.0), Dict(1 => 1.0), Dict(1 => 1.0), [2.0, 3.0], 2.0, 20.0),
+            _DLRec(100, Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0),
+            _DLRec(200, Dict(1 => 2.0), Dict(1 => 1.0), Dict(1 => 1.0), [2.0, 3.0], 2.0, 20.0),
         ]]
         b2 = [[
-            _DLRec(Dict(1 => 3.0), Dict(1 => 1.0), Dict(1 => 2.0), [4.0, 5.0], 3.0, 10.0),
-            _DLRec(Dict(1 => 4.0), Dict(1 => 2.0), Dict(1 => 2.0), [6.0, 7.0], 4.0, 20.0),
+            _DLRec(300, Dict(1 => 3.0), Dict(1 => 1.0), Dict(1 => 2.0), [4.0, 5.0], 3.0, 10.0),
+            _DLRec(400, Dict(1 => 4.0), Dict(1 => 2.0), Dict(1 => 2.0), [6.0, 7.0], 4.0, 20.0),
         ]]
 
         _write_dl_file(p1, b1)
@@ -53,8 +55,8 @@
         dir = mktempdir()
         p = joinpath(dir, "bad_scalar.jld2")
         b = [[
-            _DLRecBadScalar(Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, "bad"),
-            _DLRecBadScalar(Dict(1 => 2.0), Dict(1 => 1.0), Dict(1 => 1.0), [2.0, 3.0], 2.0, "bad"),
+            _DLRecBadScalar(100, Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, "bad"),
+            _DLRecBadScalar(200, Dict(1 => 2.0), Dict(1 => 1.0), Dict(1 => 1.0), [2.0, 3.0], 2.0, "bad"),
         ]]
         _write_dl_file(p, b)
         return p
@@ -130,7 +132,7 @@ end
 
 @testitem "dataloading helpers: extraction and column helpers" setup=[setupDataloading] begin
     # Test intent: validate dataloading helpers: extraction and column helpers behavior and output contract.
-    x = _DLRec(Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0)
+    x = _DLRec(100, Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0)
     @test CausalSetZoology._extract_field_value(x, :score) == 1.0
     @test CausalSetZoology._extract_field_value(x, (:in_degree_hist_link, 1)) == 1.0
     @test CausalSetZoology._extract_field_value(x, (:in_degree_hist_link, 99)) == 0
@@ -253,17 +255,26 @@ end
     cfg1f = CausalSetZoology._scan_config(1.0)
     @test CausalSetZoology._load_fields_one(p1, nothing, cfg1f, ex_plain) == [[1.0, 2.0], [1.0, 2.0]]
     @test CausalSetZoology._load_fields_one(p1, nothing, cfg1f, ex_scalar) == [[(1.0, 10.0), (2.0, 20.0)], [(1.0, 10.0), (2.0, 20.0)]]
+    ex_plain_size = CausalSetZoology._FieldExtractor(ex_plain.nfields, ex_plain.symbol_specs, ex_plain.hist_specs, ex_plain.scalar, true)
+    ex_scalar_size = CausalSetZoology._field_extractor(fields, :scalar, true)
+    @test CausalSetZoology._load_fields_one(p1, nothing, cfg1f, ex_plain_size) == [[(1.0, 100.0), (2.0, 200.0)], [(1.0, 100.0), (2.0, 200.0)]]
+    @test CausalSetZoology._load_fields_one(p1, nothing, cfg1f, ex_scalar_size) == [[(1.0, 10.0, 100.0), (2.0, 20.0, 200.0)], [(1.0, 10.0, 100.0), (2.0, 20.0, 200.0)]]
     @test_throws TypeError CausalSetZoology._load_fields_one(pbad, nothing, cfg1f, ex_scalar)
 
-    h_plain = CausalSetZoology._HistogramExtractor(:in_degree_hist_link, nothing)
-    h_scalar = CausalSetZoology._HistogramExtractor(:in_degree_hist_link, :scalar)
+    h_plain = CausalSetZoology._HistogramExtractor(:in_degree_hist_link, nothing, false)
+    h_scalar = CausalSetZoology._HistogramExtractor(:in_degree_hist_link, :scalar, false)
+    h_plain_size = CausalSetZoology._HistogramExtractor(:in_degree_hist_link, nothing, true)
+    h_scalar_size = CausalSetZoology._HistogramExtractor(:in_degree_hist_link, :scalar, true)
     cfg1i = CausalSetZoology._scan_config(1)
     @test CausalSetZoology._load_histograms_one(p1, nothing, cfg1i, h_plain) == [Dict(1 => 1.0), Dict(1 => 2.0)]
     @test CausalSetZoology._load_histograms_one(p1, nothing, cfg1i, h_scalar) == [(Dict(1 => 1.0), 10.0), (Dict(1 => 2.0), 20.0)]
+    @test CausalSetZoology._load_histograms_one(p1, nothing, cfg1i, h_plain_size) == [(Dict(1 => 1.0), 100.0), (Dict(1 => 2.0), 200.0)]
+    @test CausalSetZoology._load_histograms_one(p1, nothing, cfg1i, h_scalar_size) == [(Dict(1 => 1.0), 10.0, 100.0), (Dict(1 => 2.0), 20.0, 200.0)]
     @test_throws TypeError CausalSetZoology._load_histograms_one(pbad, nothing, cfg1i, h_scalar)
 
     @test CausalSetZoology._load_field_with_scalar_one(p1, nothing, cfg1f, :score, :scalar) == [(1.0, 10.0), (2.0, 20.0)]
     @test CausalSetZoology._load_field_with_scalar_one(p1, nothing, cfg1f, (:in_degree_hist_link, 1), :scalar) == [(1.0, 10.0), (2.0, 20.0)]
+    @test CausalSetZoology._load_field_with_scalar_one(p1, nothing, cfg1f, :score, :scalar, true) == [(1.0, 10.0, 100.0), (2.0, 20.0, 200.0)]
     @test_throws TypeError CausalSetZoology._load_field_with_scalar_one(pbad, nothing, cfg1f, :score, :scalar)
 end
 
@@ -274,6 +285,9 @@ end
 
     f = CausalSetZoology.load_fields_from_paths([p1], fields)
     @test f == [[[1.0, 2.0], [1.0, 2.0]]]
+
+    f_size = CausalSetZoology.load_fields_from_paths([p1], fields; size = true)
+    @test f_size == [[[(1.0, 100.0), (2.0, 200.0)], [(1.0, 100.0), (2.0, 200.0)]]]
 end
 
 @testitem "dataloading: load_fields_from_paths scalar" setup=[setupDataloading] begin
@@ -283,6 +297,9 @@ end
     fs = CausalSetZoology.load_fields_from_paths([p1], [:score], :scalar)
     @test fs == [[[(1.0, 10.0), (2.0, 20.0)]]]
     @test [s for (_, s) in fs[1][1]] == [10.0, 20.0]
+
+    fs_size = CausalSetZoology.load_fields_from_paths([p1], [:score], :scalar; size = true)
+    @test fs_size == [[[(1.0, 10.0, 100.0), (2.0, 20.0, 200.0)]]]
 end
 
 @testitem "dataloading: load_fields_from_paths validation" setup=[setupDataloading] begin
@@ -313,6 +330,19 @@ end
 
     one_hist = CausalSetZoology.load_field_with_scalar([p1], (:in_degree_hist_link, 1), :scalar)
     @test one_hist == [[(1.0, 10.0), (2.0, 20.0)]]
+
+    one_sym_size = CausalSetZoology.load_field_with_scalar([p1], :score, :scalar; size = true)
+    @test one_sym_size == [[(1.0, 10.0, 100.0), (2.0, 20.0, 200.0)]]
+end
+
+@testitem "dataloading: load_histograms_from_paths size" setup=[setupDataloading] begin
+    p1, _ = _make_dl_fixture()
+
+    h_plain = CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link; size = true)
+    @test h_plain == [[(Dict(1 => 1.0), 100.0), (Dict(1 => 2.0), 200.0)]]
+
+    h_scalar = CausalSetZoology.load_histograms_from_paths([p1], :in_degree_hist_link, :scalar; size = true)
+    @test h_scalar == [[(Dict(1 => 1.0), 10.0, 100.0), (Dict(1 => 2.0), 20.0, 200.0)]]
 end
 
 @testitem "dataloading: load_field_with_scalar validation" setup=[setupDataloading] begin

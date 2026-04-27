@@ -135,6 +135,10 @@ Each histogram is scaled by a denominator chosen from `normalization`.
 
 # Keyword Arguments
 - `normalization`: `:max`, `:probability`, or a nonzero finite real constant.
+- `normalize_x_axis_with_size`: If `true`, first rescale histogram heights by
+  `cset_size` to match the x-axis change `x -> x / n`.
+- `cset_size`: Optional causal-set size `n`, required when
+  `normalize_x_axis_with_size = true`.
 
 # Throws
 - `ArgumentError`: If `normalization` uses an unsupported symbol mode.
@@ -142,6 +146,8 @@ Each histogram is scaled by a denominator chosen from `normalization`.
 function normalize_hists(
     hists::AbstractVector{<:AbstractVector{<:AbstractDict}};
     normalization::Union{Symbol,Real} = :probability,
+    normalize_x_axis_with_size::Bool = false,
+    cset_size::Union{Nothing,Real} = nothing,
 )::Vector{Vector{Dict{Int,Float64}}}
     if normalization isa Symbol && normalization ∉ (:max, :probability)
         throw(ArgumentError("normalization symbol must be :max or :probability"))
@@ -154,12 +160,24 @@ function normalize_hists(
             throw(DomainError(normalization, "normalization constant must be nonzero"))
         end
     end
+    if normalize_x_axis_with_size
+        if cset_size === nothing
+            throw(ArgumentError("normalize_x_axis_with_size = true requires cset_size"))
+        end
+        if !isfinite(cset_size)
+            throw(DomainError(cset_size, "cset_size must be finite when normalize_x_axis_with_size = true"))
+        end
+        if cset_size <= 0
+            throw(DomainError(cset_size, "cset_size must be positive when normalize_x_axis_with_size = true"))
+        end
+    end
 
     out = Vector{Vector{Dict{Int,Float64}}}(undef, length(hists))
 
     for i in eachindex(hists)
         out[i] = Vector{Dict{Int,Float64}}(undef, length(hists[i]))
         for (j, hist) in enumerate(hists[i])
+            scale = normalize_x_axis_with_size ? cset_size : 1.0
             if normalization === :max
                 denom = isempty(hist) ? 0.0 : maximum(Base.values(hist))
             elseif normalization === :probability
@@ -173,7 +191,7 @@ function normalize_hists(
             end
             out_hist = Dict{Int,Float64}()
             for (k, v) in hist
-                out_hist[k] = v / denom
+                out_hist[k] = (scale * v) / denom
             end
             out[i][j] = out_hist
         end
@@ -203,6 +221,10 @@ See the main method `normalize_hists(hists; normalization)` for core behavior.
 # Keyword Arguments
 - `normalization`: `:max`, `:probability`, or a nonzero finite real constant.
 - `num_bins`: Optional scalar bin count (`>= 1`).
+- `normalize_x_axis_with_size`: If `true`, first rescale histogram heights by
+  `cset_size` to match the x-axis change `x -> x / n`.
+- `cset_size`: Optional causal-set size `n`, required when
+  `normalize_x_axis_with_size = true`.
 
 # Returns
 - `Vector{Vector{Tuple{Dict{Int,Float64},Real}}}`: Normalized histogram/scalar pairs.
@@ -214,6 +236,8 @@ function normalize_hists(
     hists::AbstractVector{<:AbstractVector{<:Tuple{<:AbstractDict,<:Real}}};
     normalization::Union{Symbol,Real} = :probability,
     num_bins::Union{Nothing,Int} = nothing,
+    normalize_x_axis_with_size::Bool = false,
+    cset_size::Union{Nothing,Real} = nothing,
 )::Vector{Vector{Tuple{Dict{Int,Float64},Real}}}
     isempty(hists) && return Vector{Vector{Tuple{Dict{Int,Float64},Real}}}()
 
@@ -231,6 +255,17 @@ function normalize_hists(
         end
         if normalization == 0
             throw(DomainError(normalization, "normalization constant must be nonzero"))
+        end
+    end
+    if normalize_x_axis_with_size
+        if cset_size === nothing
+            throw(ArgumentError("normalize_x_axis_with_size = true requires cset_size"))
+        end
+        if !isfinite(cset_size)
+            throw(DomainError(cset_size, "cset_size must be finite when normalize_x_axis_with_size = true"))
+        end
+        if cset_size <= 0
+            throw(DomainError(cset_size, "cset_size must be positive when normalize_x_axis_with_size = true"))
         end
     end
 
@@ -281,6 +316,7 @@ function normalize_hists(
         for (j, hist_pair) in enumerate(hists[i])
             d, s = hist_pair
             key = scalar_key(s)
+            scale = normalize_x_axis_with_size ? cset_size : 1.0
             if normalization === :max
                 denom = isempty(d) ? 0.0 : maximum(Base.values(d))
             elseif normalization === :probability
@@ -293,7 +329,7 @@ function normalize_hists(
             end
             out_hist = Dict{Int,Float64}()
             for (k, v) in d
-                out_hist[k] = v / denom
+                out_hist[k] = (scale * v) / denom
             end
             out[i][j] = (out_hist, key)
         end
@@ -307,6 +343,8 @@ end
         hists::AbstractVector{<:AbstractVector};
         normalization::Union{Symbol,Real} = :probability,
         num_bins::Union{Nothing,Int} = nothing,
+        normalize_x_axis_with_size::Bool = false,
+        cset_size::Union{Nothing,Real} = nothing,
     )
 
 Bridge method for nested vectors with non-concrete element types (e.g. `Vector{Vector}`).
@@ -319,6 +357,10 @@ Infers histogram payload shape at runtime and forwards to the typed implementati
 # Keyword Arguments
 - `normalization`: `:max`, `:probability`, or a nonzero finite real constant.
 - `num_bins`: Optional scalar bin count for `(hist, scalar)` payloads.
+- `normalize_x_axis_with_size`: If `true`, first rescale histogram heights by
+  `cset_size` to match the x-axis change `x -> x / n`.
+- `cset_size`: Optional causal-set size `n`, required when
+  `normalize_x_axis_with_size = true`.
 
 # Returns
 - `result`: Output of the matching typed `normalize_hists` method.
@@ -331,6 +373,8 @@ function normalize_hists(
     hists::AbstractVector{<:AbstractVector};
     normalization::Union{Symbol,Real} = :probability,
     num_bins::Union{Nothing,Int} = nothing,
+    normalize_x_axis_with_size::Bool = false,
+    cset_size::Union{Nothing,Real} = nothing,
 )
     isempty(hists) && return Vector{Vector{Dict{Int,Float64}}}()
 
@@ -356,7 +400,7 @@ function normalize_hists(
                 typed[i][j] = out_hist
             end
         end
-        return normalize_hists(typed; normalization = normalization)
+        return normalize_hists(typed; normalization = normalization, normalize_x_axis_with_size = normalize_x_axis_with_size, cset_size = cset_size)
     end
 
     if first_item isa Tuple &&
@@ -377,7 +421,7 @@ function normalize_hists(
                 typed[i][j] = (out_hist, Float64(s_any))
             end
         end
-        return normalize_hists(typed; normalization = normalization, num_bins = num_bins)
+        return normalize_hists(typed; normalization = normalization, num_bins = num_bins, normalize_x_axis_with_size = normalize_x_axis_with_size, cset_size = cset_size)
     end
 
     throw(ArgumentError("Unsupported histogram payload type $(typeof(first_item)) for normalize_hists"))
