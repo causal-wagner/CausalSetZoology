@@ -132,7 +132,7 @@ end
 
 @testitem "dataloading helpers: extraction and column helpers" setup=[setupDataloading] begin
     # Test intent: validate dataloading helpers: extraction and column helpers behavior and output contract.
-    x = _DLRec(Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0)
+    x = _DLRec(100, Dict(1 => 1.0), Dict(1 => 2.0), Dict(1 => 3.0), [1.0, 2.0], 1.0, 10.0)
     @test CausalSetZoology._extract_field_value(x, :score) == 1.0
     @test CausalSetZoology._extract_field_value(x, (:in_degree_hist_link, 1)) == 1.0
     @test CausalSetZoology._extract_field_value(x, (:in_degree_hist_link, 99)) == 0
