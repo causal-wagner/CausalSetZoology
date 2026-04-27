@@ -1785,7 +1785,8 @@ function load_graph_observable_kind_panel(
     spec = graph_observable_field_spec(observable)
     paths = paths_in isa AbstractString ? [String(paths_in)] : String.(collect(paths_in))
     normalize_x_axis_with_size = observable === :cardinalities
-    xscale = observable in (:cardinalities, :ev_sym_link) ? inv(Float64(size)) : 1.0
+    # Only cardinalities are plotted versus j/n; eigenvalue spectra use the raw index j.
+    xscale = observable === :cardinalities ? inv(Float64(size)) : 1.0
     yscale = 1.0
     values =
         if spec.hist
@@ -1805,6 +1806,12 @@ function load_graph_observable_kind_panel(
             values
         end
 
+    # Drop the trivial zero mode for normalized Laplacian spectra.
+    # For ev_sym_link we store eigenvalues sorted ascending, so the first entry is λ₁ = 0.
+    if observable === :ev_sym_link
+        prepared = [(v[2:end], s) for (v, s) in prepared if length(v) >= 2]
+    end
+
     comp_mean_std = nothing
     if comp_paths_in !== nothing
         comp_paths = comp_paths_in isa AbstractString ? [String(comp_paths_in)] : String.(collect(comp_paths_in))
@@ -1820,6 +1827,9 @@ function load_graph_observable_kind_panel(
             else
                 comp_values
             end
+        if observable === :ev_sym_link
+            comp_prepared = [(v[2:end], s) for (v, s) in comp_prepared if length(v) >= 2]
+        end
         comp_mean_std = comp_avg_hist_or_vec(comp_prepared; num_bins = num_bins)
     end
 
@@ -2372,7 +2382,7 @@ function graph_observable_kind_plot_matrix(
     xlim_n = panel_meta.xlim
     ylim_n = panel_meta.ylim
     xlabel_n = Any[panel_meta.xlabel...]
-    default_bottom_xlabel = loaded.observable in (:cardinalities, :ev_sym_link) ? L"j/n" : L"j"
+    default_bottom_xlabel = loaded.observable === :cardinalities ? L"j/n" : L"j"
     for idx in 7:8
         isnothing(xlabel_n[idx]) && (xlabel_n[idx] = default_bottom_xlabel)
     end
@@ -2466,7 +2476,7 @@ function graph_observable_kind_plot_matrix(
             panel = panels[idx]
             ax = axs[row, col]
             panel_xscale =
-                if loaded.observable in (:cardinalities, :ev_sym_link)
+                if loaded.observable === :cardinalities
                     inv(Float64(loaded.size))
                 else
                     hasproperty(panel, :xscale) ? panel.xscale : 1.0
@@ -2717,23 +2727,32 @@ function size_boundary_dimension_series_for_panel(
             else
                 loaded.dimension_size
             end
+            drop_first_ev = loaded.observable == :ev_sym_link
+            mean = normalize_x_by_size && is_hist ? s.mean[2:end] : s.mean
+            std = normalize_x_by_size && is_hist ? s.std[2:end] : s.std
+            if drop_first_ev
+                mean = mean[2:end]
+                std = std[2:end]
+            end
+            raw_x = if normalize_x_by_size
+                if is_hist
+                    collect(1:length(s.mean)-1) ./ size_denom
+                else
+                    collect(1:length(s.mean)) ./ size_denom
+                end
+            else
+                if is_hist
+                    collect(0:length(s.mean)-1)
+                else
+                    collect(1:length(s.mean))
+                end
+            end
+            x = drop_first_ev ? raw_x[2:end] : raw_x
             (; label = s.label,
-               mean = normalize_x_by_size && is_hist ? s.mean[2:end] : s.mean,
-               std = normalize_x_by_size && is_hist ? s.std[2:end] : s.std,
+               mean = mean,
+               std = std,
                color = colors[j],
-               x = if normalize_x_by_size
-                   if is_hist
-                       collect(1:length(s.mean)-1) ./ size_denom
-                   else
-                       collect(1:length(s.mean)) ./ size_denom
-                   end
-               else
-                   if is_hist
-                       collect(0:length(s.mean)-1)
-                   else
-                       collect(1:length(s.mean))
-                   end
-               end)
+               x = x)
         end
         for (j, s) in enumerate(panel_series)
     ]
