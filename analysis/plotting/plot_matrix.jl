@@ -77,6 +77,7 @@ function plot_hist_or_vec_panel!(
     comp_color,
     comp_linewidth::Union{Nothing,Real},
     xscale::Real = 1.0,
+    comp_inds = nothing,
 )
     apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, yticks_i)
 
@@ -95,7 +96,13 @@ function plot_hist_or_vec_panel!(
     comp_mean = nothing
     if comp_mean_std !== nothing
         mean_comp, std_comp = comp_mean_std
-        x = xscale .* collect(1:length(mean_comp))
+        if comp_inds !== nothing
+            mean_comp = mean_comp[comp_inds]
+            std_comp = std_comp[comp_inds]
+            x = xscale .* collect(comp_inds)
+        else
+            x = xscale .* collect(1:length(mean_comp))
+        end
         ylo = mean_comp .- std_comp
         yhi = mean_comp .+ std_comp
         if logscale_y
@@ -1809,7 +1816,9 @@ function load_graph_observable_kind_panel(
     # Drop the trivial zero mode for normalized Laplacian spectra.
     # For ev_sym_link we store eigenvalues sorted ascending, so the first entry is λ₁ = 0.
     if observable === :ev_sym_link
-        prepared = [(v[2:end], s) for (v, s) in prepared if length(v) >= 2]
+        prepared = isnothing(scalar) ? 
+        [v[2:end] for v in prepared] : 
+        [(v[2:end], s) for (v, s) in prepared]
     end
 
     comp_mean_std = nothing
@@ -1828,7 +1837,7 @@ function load_graph_observable_kind_panel(
                 comp_values
             end
         if observable === :ev_sym_link
-            comp_prepared = [(v[2:end], s) for (v, s) in comp_prepared if length(v) >= 2]
+            comp_prepared = [v[2:end] for v in comp_prepared]
         end
         comp_mean_std = comp_avg_hist_or_vec(comp_prepared; num_bins = num_bins)
     end
@@ -2054,6 +2063,8 @@ function graph_observable_kind_plot_matrix(
     layered_colormap = :viridis,
     deffect_colormap = :tarn,
     topo_colormap = :delta,
+    range_comp_man = nothing,
+    range_comp_mink = nothing,
     return_axis::Bool = false,
     verbose::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Matrix{CairoMakie.Axis}}}
@@ -2171,6 +2182,8 @@ function graph_observable_kind_plot_matrix(
         layered_colormap = layered_colormap,
         deffect_colormap = deffect_colormap,
         topo_colormap = topo_colormap,
+        range_comp_man = range_comp_man,
+        range_comp_mink = range_comp_mink,
         comp_color = comp_color,
         comp_linewidth = comp_linewidth,
         return_axis = return_axis,
@@ -2263,6 +2276,8 @@ function graph_observable_kind_plot_matrix(
     layered_colormap = :viridis,
     deffect_colormap = :tarn,
     topo_colormap = :delta,
+    range_comp_man = nothing,
+    range_comp_mink = nothing,
     comp_color = :black,
     comp_linewidth::Union{Nothing,Real} = nothing,
     return_axis::Bool = false,
@@ -2485,6 +2500,7 @@ function graph_observable_kind_plot_matrix(
                 (hasproperty(panel, :yscale) ? panel.yscale : 1.0)
             panel_data = scale_panel_series(panel.data, panel_yscale)
             panel_comp = scale_mean_std(panel.comp, panel_yscale)
+            panel_comp_inds = idx == 2 ? range_comp_mink : range_comp_man
             panel_colormap =
                 if idx == 3
                     layered_colormap
@@ -2517,6 +2533,7 @@ function graph_observable_kind_plot_matrix(
                     comp_color = comp_color,
                     comp_linewidth = comp_linewidth,
                     xscale = panel_xscale,
+                    comp_inds = panel_comp_inds,
                 )
             else
                 color_scale = compute_color_scale([panel.data]; log_color_scaling = panel_log_binning[idx])
@@ -2541,6 +2558,7 @@ function graph_observable_kind_plot_matrix(
                     comp_color = comp_color,
                     comp_linewidth = comp_linewidth,
                     xscale = panel_xscale,
+                    comp_inds = panel_comp_inds,
                 )
                 cb_layout = CairoMakie.GridLayout(panel_layouts[row, col][2, 1])
                 CairoMakie.rowgap!(panel_layouts[row, col], 0)

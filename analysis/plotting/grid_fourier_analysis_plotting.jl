@@ -194,8 +194,8 @@ function plot_fourier_grid_deviation(
     end
 
     CairoMakie.lines!(ax, spec.freqs[spec.keep], spec.spectrum[spec.keep]; linewidth = magnification * linewidth)
-    ax.xlabel = L"\omega~\mathrm{(cycles~per~bin)}"
-    ax.ylabel = LaTeXStrings.L"\mathcal{F}_\omega(\mathcal{S}_j^{\mathrm{lat}} / \langle\mathcal{S}^{\mathrm{man}}\rangle -1)"
+    ax.xlabel = L"f[1/\text{bin}]]"
+    ax.ylabel = LaTeXStrings.L"\mathcal{F}_f(\mathcal{S}^{\mathrm{lat}} / \langle\mathcal{S}^{\mathrm{man}}\rangle -1)"
     CairoMakie.xlims!(ax, (0., 0.51))
     if !isnothing(ylim)
         CairoMakie.ylims!(ax, ylim)
@@ -241,8 +241,8 @@ function plot_fourier_grid_deviation!(
     end
 
     CairoMakie.lines!(ax, spec.freqs[spec.keep], spec.spectrum[spec.keep]; linewidth = magnification * linewidth)
-    ax.xlabel = L"\omega~\mathrm{(cycles~per~bin)}"
-    ax.ylabel = LaTeXStrings.L"\mathcal{F}_\omega(\mathcal{S}_j^{\mathrm{lat}} / \langle\mathcal{S}^{\mathrm{man}}\rangle -1)"
+    ax.xlabel = L"f[1/\text{bin}]"
+    ax.ylabel = LaTeXStrings.L"\mathcal{F}_f(\mathcal{S}^{\mathrm{lat}} / \langle\mathcal{S}^{\mathrm{man}}\rangle -1)"
     CairoMakie.xlims!(ax, (0., 0.51))
     if !isnothing(ylim)
         CairoMakie.ylims!(ax, ylim)
@@ -307,12 +307,6 @@ function fourier_transform_grid_deviation(
     segment_ratio::Float64=1., 
     segment_angle::Float64=60., 
     rotation_angle::Union{Float64,Nothing}=nothing,
-    quasicrystal_rho::Real = 1.0,
-    quasicrystal_crystal::Union{Nothing,Tuple{Vector{Float64},Vector{Float64}}} = nothing,
-    quasicrystal_center::Tuple{Real,Real} = (0.5, 0.0),
-    quasicrystal_exact_size::Bool = true,
-    quasicrystal_deviation_from_mean_size::Float64 = 0.1,
-    quasicrystal_max_iter::Int = 100,
     fig_path::Union{Nothing,String}=nothing,
     magnification::Real=1.,
     linewidth::Real=1,
@@ -329,12 +323,6 @@ function fourier_transform_grid_deviation(
         segment_ratio = segment_ratio,
         segment_angle = segment_angle,
         rotation_angle = rotation_angle,
-        quasicrystal_rho = quasicrystal_rho,
-        quasicrystal_crystal = quasicrystal_crystal,
-        quasicrystal_center = quasicrystal_center,
-        quasicrystal_exact_size = quasicrystal_exact_size,
-        quasicrystal_deviation_from_mean_size = quasicrystal_deviation_from_mean_size,
-        quasicrystal_max_iter = quasicrystal_max_iter,
         max_peak_order = max_peak_order,
     )
 
@@ -375,6 +363,28 @@ function normalize_four_panel_tick_lists(x)
     return fill(vals, 4)
 end
 
+function normalize_two_panel_value(x, name::AbstractString)
+    if x isa AbstractVector
+        vals = collect(x)
+        if length(vals) < 2
+            throw(ArgumentError("$(name) must have length at least 2"))
+        end
+        return vals[1:2]
+    end
+    return fill(x, 2)
+end
+
+function normalize_two_panel_tick_lists(x)
+    if x === nothing
+        return fill(nothing, 2)
+    end
+    vals = collect(x)
+    if length(vals) >= 2 && all(v -> v === nothing || v isa AbstractVector, vals[1:2])
+        return vals[1:2]
+    end
+    return fill(vals, 2)
+end
+
 function grid_fourier_plot_matrix(
     fig_path::String;
     comp_hists::AbstractVector{<:AbstractVector{<:Real}},
@@ -382,20 +392,12 @@ function grid_fourier_plot_matrix(
     lattices::Union{AbstractString,AbstractVector{<:AbstractString}},
     rotation_angles::Union{Real,Nothing,AbstractVector},
     boxes::Union{Tuple{Tuple{Float64,Float64},Tuple{Float64,Float64}},AbstractVector} = ((-1.0, -1.0), (1.0, 1.0)),
-    segment_ratios::Union{Real,AbstractVector{<:Real}} = 2.0,
+    segment_ratios::Union{Real,AbstractVector{<:Real}} = 1.0,
     segment_angles::Union{Real,AbstractVector{<:Real}} = 60.0,
     shell_thicknesss::Union{Nothing,Real,AbstractVector} = nothing,
-    quasicrystal_rhos::Union{Real,AbstractVector{<:Real}} = 1.0,
-    quasicrystal_crystal::Union{Nothing,Tuple{Vector{Float64},Vector{Float64}},AbstractVector} = nothing,
-    quasicrystal_centers::Union{Tuple{Real,Real},AbstractVector} = (0.5, 0.0),
-    quasicrystal_exact_sizes::Union{Bool,AbstractVector{Bool}} = true,
-    quasicrystal_deviation_from_mean_sizes::Union{Real,AbstractVector{<:Real}} = 0.1,
-    quasicrystal_max_iters::Union{Int,AbstractVector{<:Integer}} = 100,
     markersizes::Union{Real,AbstractVector{<:Real}} = 4,
     P_maxs::Union{Real,AbstractVector{<:Real}} = 300.0,
     rngs::Union{Random.AbstractRNG,AbstractVector} = Random.GLOBAL_RNG,
-    fourier_segment_ratios::Union{Real,AbstractVector{<:Real}} = 1.0,
-    fourier_segment_angles::Union{Real,AbstractVector{<:Real}} = 60.0,
     linewidths::Union{Real,AbstractVector{<:Real}} = 1,
     ylims_fourier::Union{Nothing,Tuple{Float64,Float64},AbstractVector} = nothing,
     xtick_fracss::Union{Nothing,Vector{<:Any},AbstractVector} = nothing,
@@ -411,38 +413,30 @@ function grid_fourier_plot_matrix(
     if fourier_yaxis_side ∉ (:left, :right)
         throw(ArgumentError("fourier_yaxis_side must be :left or :right"))
     end
-    comp_hists_n = normalize_four_panel_value(comp_hists, "comp_hists")
-    sizes_n = Int.(normalize_four_panel_value(sizes, "sizes"))
-    lattices_n = String.(normalize_four_panel_value(lattices, "lattices"))
-    rotation_angles_n = normalize_four_panel_value(rotation_angles, "rotation_angles")
-    boxes_n = normalize_four_panel_value(boxes, "boxes")
-    segment_ratios_n = Float64.(normalize_four_panel_value(segment_ratios, "segment_ratios"))
-    segment_angles_n = Float64.(normalize_four_panel_value(segment_angles, "segment_angles"))
-    shell_thicknesss_n = normalize_four_panel_value(shell_thicknesss, "shell_thicknesss")
-    quasicrystal_rhos_n = Float64.(normalize_four_panel_value(quasicrystal_rhos, "quasicrystal_rhos"))
-    quasicrystal_crystals_n = normalize_four_panel_value(quasicrystal_crystal, "quasicrystal_crystal")
-    quasicrystal_centers_n = normalize_four_panel_value(quasicrystal_centers, "quasicrystal_centers")
-    quasicrystal_exact_sizes_n = Bool.(normalize_four_panel_value(quasicrystal_exact_sizes, "quasicrystal_exact_sizes"))
-    quasicrystal_deviation_from_mean_sizes_n = Float64.(normalize_four_panel_value(quasicrystal_deviation_from_mean_sizes, "quasicrystal_deviation_from_mean_sizes"))
-    quasicrystal_max_iters_n = Int.(normalize_four_panel_value(quasicrystal_max_iters, "quasicrystal_max_iters"))
-    markersizes_n = normalize_four_panel_value(markersizes, "markersizes")
-    P_maxs_n = Float64.(normalize_four_panel_value(P_maxs, "P_maxs"))
-    rngs_n = normalize_four_panel_value(rngs, "rngs")
-    fourier_segment_ratios_n = Float64.(normalize_four_panel_value(fourier_segment_ratios, "fourier_segment_ratios"))
-    fourier_segment_angles_n = Float64.(normalize_four_panel_value(fourier_segment_angles, "fourier_segment_angles"))
-    linewidths_n = normalize_four_panel_value(linewidths, "linewidths")
-    ylims_fourier_n = normalize_four_panel_value(ylims_fourier, "ylims_fourier")
-    xtick_fracss_n = normalize_four_panel_tick_lists(xtick_fracss)
-    max_peak_orders_n = Int.(normalize_four_panel_value(max_peak_orders, "max_peak_orders"))
+    comp_hists_n = normalize_two_panel_value(comp_hists, "comp_hists")
+    sizes_n = Int.(normalize_two_panel_value(sizes, "sizes"))
+    lattices_n = String.(normalize_two_panel_value(lattices, "lattices"))
+    rotation_angles_n = normalize_two_panel_value(rotation_angles, "rotation_angles")
+    boxes_n = normalize_two_panel_value(boxes, "boxes")
+    segment_ratios_n = Float64.(normalize_two_panel_value(segment_ratios, "segment_ratios"))
+    segment_angles_n = Float64.(normalize_two_panel_value(segment_angles, "segment_angles"))
+    shell_thicknesss_n = normalize_two_panel_value(shell_thicknesss, "shell_thicknesss")
+    markersizes_n = normalize_two_panel_value(markersizes, "markersizes")
+    P_maxs_n = Float64.(normalize_two_panel_value(P_maxs, "P_maxs"))
+    rngs_n = normalize_two_panel_value(rngs, "rngs")
+    linewidths_n = normalize_two_panel_value(linewidths, "linewidths")
+    ylims_fourier_n = normalize_two_panel_value(ylims_fourier, "ylims_fourier")
+    xtick_fracss_n = normalize_two_panel_tick_lists(xtick_fracss)
+    max_peak_orders_n = Int.(normalize_two_panel_value(max_peak_orders, "max_peak_orders"))
 
     base_size = apply_paper_theme!(double_column = double_column, magnification = magnification)
-    fig = CairoMakie.Figure(size = (base_size[1], 4 * base_size[2]))
+    fig = CairoMakie.Figure(size = (base_size[1], 2 * base_size[2]))
     CairoMakie.rowgap!(fig.layout, rowgap)
     CairoMakie.colgap!(fig.layout, colgap)
 
-    axs = Matrix{CairoMakie.Axis}(undef, 4, 2)
+    axs = Matrix{CairoMakie.Axis}(undef, 2, 2)
 
-    for row in 1:4
+    for row in 1:2
         left_ax = CairoMakie.Axis(fig[row, 1])
         right_ax = CairoMakie.Axis(fig[row, 2])
         if fourier_yaxis_side == :right
@@ -452,6 +446,10 @@ function grid_fourier_plot_matrix(
             right_ax.yaxisposition = :left
             right_ax.flip_ylabel = false
         end
+        left_ax.xminorticksvisible = false
+        left_ax.yminorticksvisible = false
+        left_ax.xminorgridvisible = false
+        left_ax.yminorgridvisible = false
         axs[row, 1] = left_ax
         axs[row, 2] = right_ax
 
@@ -463,12 +461,6 @@ function grid_fourier_plot_matrix(
             segment_ratio = segment_ratios_n[row],
             segment_angle = segment_angles_n[row],
             shell_thickness = shell_thicknesss_n[row],
-            quasicrystal_rho = quasicrystal_rhos_n[row],
-            quasicrystal_crystal = quasicrystal_crystals_n[row],
-            quasicrystal_center = quasicrystal_centers_n[row],
-            quasicrystal_exact_size = quasicrystal_exact_sizes_n[row],
-            quasicrystal_deviation_from_mean_size = quasicrystal_deviation_from_mean_sizes_n[row],
-            quasicrystal_max_iter = quasicrystal_max_iters_n[row],
         )
         plot_grid_points!(
             left_ax,
@@ -477,14 +469,14 @@ function grid_fourier_plot_matrix(
             magnification = magnification,
             remove_coordinate_ticks = remove_coordinate_ticks,
         )
-        if row < 4
-            left_ax.xlabel = ""
-        end
-
         spec = CausalSetZoology.compute_fourier_grid_deviation(
             comp_hists_n[row],
-            quad_grid;
+            sizes_n[row],
+            lattices_n[row];
             P_max = P_maxs_n[row],
+            rotation_angle = rotation_angles_n[row],
+            segment_ratio = segment_ratios_n[row],
+            segment_angle = segment_angles_n[row],
             max_peak_order = max_peak_orders_n[row],
         )
         plot_fourier_grid_deviation!(
@@ -495,9 +487,6 @@ function grid_fourier_plot_matrix(
             ylim = ylims_fourier_n[row],
             xtick_fracs = xtick_fracss_n[row],
         )
-        if row < 4
-            right_ax.xlabel = ""
-        end
     end
 
     CairoMakie.save(fig_path, fig)
