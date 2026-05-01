@@ -123,6 +123,7 @@ end
 # ---------------------------------------------------------------------
 dataset_script = joinpath(@__DIR__, "make_analysis_dataset.jl")
 stats_script   = joinpath(@__DIR__, "make_analysis_statistics.jl")
+connectivity_dist = joinpath(@__DIR__, "connectivity_dist.jld2")
 
 isfile(dataset_script) || error("Dataset script not found: $dataset_script")
 isfile(stats_script)   || error("Statistics script not found: $stats_script")
@@ -135,6 +136,11 @@ stats_script_copy   = joinpath(outdir, basename(stats_script))
 
 cp(dataset_script, dataset_script_copy; force=true)
 cp(stats_script,   stats_script_copy;   force=true)
+
+if args["kind"] == "random"
+    isfile(connectivity_dist) || error("Connectivity distribution file not found: $connectivity_dist")
+    cp(connectivity_dist, joinpath(outdir, basename(connectivity_dist)); force=true)
+end
 
 driver_script = @__FILE__
 driver_script_copy = joinpath(outdir, basename(driver_script))

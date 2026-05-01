@@ -11,6 +11,13 @@ function _parse_bool_flag(value::AbstractString, name::AbstractString)::Bool
     exit(1)
 end
 
+function _load_random_connectivity_distribution(path::AbstractString)::Distributions.Distribution
+    isfile(path) || error("Connectivity distribution file not found: $(path)")
+    return JLD2.jldopen(path, "r") do f
+        return f["distribution"]
+    end
+end
+
 args = ARGS
 for (i, arg) in enumerate(args)
 
@@ -283,7 +290,8 @@ else
 end
 layers_distr = Distributions.DiscreteUniform(2, 25)
 link_probability_distr = Distributions.Uniform(0.0, 1.0)
-connectivity_distr = Distributions.Normal(0.49981532, 0.06963808)
+connectivity_dist_path = joinpath(@__DIR__, "connectivity_dist.jld2")
+connectivity_distr = kind == "random" ? _load_random_connectivity_distribution(connectivity_dist_path) : nothing
 genus_distr = Distributions.DiscreteUniform(1, 10)
 num_boundary_cuts_distr = Distributions.DiscreteUniform(1, 10)
 lattice_distr = Distributions.DiscreteUniform(1, 1)
