@@ -38,6 +38,14 @@
         )
     end
 
+    function _fan4_sparse_links()
+        return CausalSetZoology.SparseLinksCauset(
+            Int64(4),
+            [Int32[2, 3, 4], Int32[], Int32[], Int32[]],
+            [Int32[], Int32[1], Int32[1], Int32[1]],
+        )
+    end
+
     function _write_tiny_dataset(path::String; kind::String = "grid")
         # Build fixture data through the same generator path as datasets to avoid
         # synthetic-edge-case mismatches in downstream CausalSets measurements.
@@ -132,6 +140,8 @@ end
     @test hasfield(typeof(rec), :out_degree_hist_link)
     @test hasfield(typeof(rec), :degree_hist_link)
     @test hasfield(typeof(rec), :max_pathlen_hist)
+    @test hasfield(typeof(rec), :max_pathlen_sources_hist)
+    @test hasfield(typeof(rec), :height_profile_hist)
     @test hasfield(typeof(rec), :ev_sym_link)
     @test hasfield(typeof(rec), :ev_imag_antisym_in_link)
     @test hasfield(typeof(rec), :ev_imag_antisym_in_mean_link)
@@ -144,6 +154,9 @@ end
     @test rec.num_sinks >= 1
     @test sum(values(rec.degree_hist)) == rec.n
     @test sum(values(rec.degree_hist_link)) == rec.n
+    @test sum(values(rec.max_pathlen_hist)) == rec.n
+    @test sum(values(rec.max_pathlen_sources_hist)) == rec.num_sources
+    @test sum(values(rec.height_profile_hist)) == rec.n
     @test length(rec.ev_imag_antisym_in_link) == rec.n
     @test length(rec.communicability_link) == rec.n
 end
@@ -184,6 +197,8 @@ end
 
     @test !hasfield(typeof(rec), :in_degree_hist_link)
     @test !hasfield(typeof(rec), :max_pathlen_hist)
+    @test !hasfield(typeof(rec), :max_pathlen_sources_hist)
+    @test !hasfield(typeof(rec), :height_profile_hist)
     @test !hasfield(typeof(rec), :cardinalities_hist)
     @test !hasfield(typeof(rec), :ev_imag_antisym_in_link)
 
@@ -202,7 +217,9 @@ end
         :ev_sym => (:ev_sym_link, [:degree_hist, :degree_hist_link, :ev_imag_antisym_in_link]),
         :ev_antisym => (:ev_imag_antisym_in_link, [:degree_hist, :degree_hist_link, :ev_sym_link]),
         :cardinalities => (:cardinalities_hist, [:degree_hist, :degree_hist_link, :ev_sym_link]),
-        :max_pathlen => (:max_pathlen_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist]),
+        :max_pathlen => (:max_pathlen_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist, :max_pathlen_sources_hist]),
+        :max_pathlen_sources => (:max_pathlen_sources_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist, :max_pathlen_hist]),
+        :height_profile => (:height_profile_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist, :max_pathlen_hist]),
         :communicability => (:communicability_link, [:degree_hist, :degree_hist_link, :cardinalities_hist]),
     )
 
@@ -244,12 +261,14 @@ end
     rec = CausalSetZoology.compute_statistics(
         links;
         kind = "grid",
-        observables = [:link_degree, :max_pathlen, :ev_sym, :ev_antisym, :communicability],
+        observables = [:link_degree, :max_pathlen, :max_pathlen_sources, :height_profile, :ev_sym, :ev_antisym, :communicability],
     )
 
     @test hasfield(typeof(rec), :n)
     @test hasfield(typeof(rec), :degree_hist_link)
     @test hasfield(typeof(rec), :max_pathlen_hist)
+    @test hasfield(typeof(rec), :max_pathlen_sources_hist)
+    @test hasfield(typeof(rec), :height_profile_hist)
     @test hasfield(typeof(rec), :ev_sym_link)
     @test hasfield(typeof(rec), :ev_imag_antisym_in_link)
     @test hasfield(typeof(rec), :communicability_link)
@@ -262,12 +281,28 @@ end
     @test rec.num_sources == 1
     @test rec.num_sinks == 1
     @test sum(values(rec.degree_hist_link)) == rec.n
+    @test rec.max_pathlen_hist == Dict(3 => 1, 2 => 1, 1 => 1, 0 => 1)
+    @test rec.max_pathlen_sources_hist == Dict(3 => 1)
+    @test rec.height_profile_hist == Dict(0 => 1, 1 => 1, 2 => 1, 3 => 1)
+end
+
+# Verifies height_profile is the past-boundary counterpart of max_pathlen.
+@testitem "generate_statistics: height_profile asymmetric fan" setup=[setupGenerateStatistics] begin
+    links = _fan4_sparse_links()
+    rec = CausalSetZoology.compute_statistics(
+        links;
+        kind = "grid",
+        observables = [:max_pathlen, :height_profile],
+    )
+
+    @test rec.max_pathlen_hist == Dict(1 => 1, 0 => 3)
+    @test rec.height_profile_hist == Dict(0 => 1, 1 => 3)
 end
 
 # Verifies links-only overload defaults to all supported observables and matches common fields from the two-argument method.
 @testitem "generate_statistics: compute_statistics links-only equivalence" setup=[setupGenerateStatistics] begin
     cset, links = _generated_fixture(kind = "grid")
-    obs = [:link_degree, :max_pathlen, :ev_sym, :ev_antisym, :communicability]
+    obs = [:link_degree, :max_pathlen, :max_pathlen_sources, :height_profile, :ev_sym, :ev_antisym, :communicability]
 
     rec_full = CausalSetZoology.compute_statistics(cset, links; kind = "grid", observables = obs)
     rec_links = CausalSetZoology.compute_statistics(links; kind = "grid")
@@ -282,6 +317,10 @@ end
         :num_sinks_link,
         :max_pathlen_hist,
         :max_pathlen_mean,
+        :max_pathlen_sources_hist,
+        :max_pathlen_sources_mean,
+        :height_profile_hist,
+        :height_profile_mean,
         :ev_sym_link,
         :ev_sym_mean_link,
         :ev_imag_antisym_in_link,
