@@ -1632,6 +1632,7 @@ function observable_distinguishability_symbol_labels()
         ev_sym_link = LaTeXStrings.L"\lambda_j",
         connectivity_link = LaTeXStrings.L"P^{\mathrm{link}}_j",
         max_pathlen = LaTeXStrings.L"\mathcal{H}_j",
+        max_pathlen_sources = LaTeXStrings.L"\mathcal{H}_j",
     )
 end
 
@@ -1652,6 +1653,8 @@ function graph_observable_field_spec(observable::Symbol)
         return (field = :degree_hist_link, hist = true, normalization = :probability)
     elseif observable == :max_pathlen
         return (field = :max_pathlen_hist, hist = true, normalization = :probability)
+    elseif observable == :max_pathlen_sources
+        return (field = :max_pathlen_sources_hist, hist = true, normalization = :probability)
     elseif observable == :ev_sym_link
         return (field = :ev_sym_link, hist = false, normalization = nothing)
     else
@@ -2616,6 +2619,8 @@ function default_graph_observable_ylabel(observable::Symbol)
     elseif observable == :cardinalities
         return L"\mathcal{S}_{j}"
     elseif observable == :max_pathlen
+        return L"\mathcal{H}_{j}"
+    elseif observable == :max_pathlen_sources
         return L"\mathcal{H}_{j}"
     elseif observable == :ev_sym_link
         return L"\lambda_j"
