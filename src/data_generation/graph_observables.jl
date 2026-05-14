@@ -537,13 +537,13 @@ function height(links::SparseLinksCauset, source::Int)::Int
 end
 
 """
-    height_profile(links)
+    height_distribution(links)
 
 Compute the longest link-path distance from the past boundary for every
 element. Sources have height `0`; every other element receives the maximum
 path length from any source to that element.
 """
-function height_profile(links::SparseLinksCauset)::Vector{Int}
+function height_distribution(links::SparseLinksCauset)::Vector{Int}
     n = links.atom_count
     dist = zeros(Int, n)
 

@@ -11,7 +11,7 @@ Compute per-causal-set graph/cardinality/spectral summary statistics.
 - `kind`: Dataset kind used to attach kind-specific metadata fields.
 - `observables`: Optional subset of observable groups to compute. Supported
   symbols are `:ev_sym`, `:ev_antisym`, `:cardinalities`, `:link_degree`,
-  `:degree`, `:max_pathlen`, `:max_pathlen_sources`, `:height_profile`, and
+  `:degree`, `:max_pathlen`, `:max_pathlen_sources`, `:height_distribution`, and
   `:communicability`. `nothing` computes all.
 - `r`, `order`, `num_boundary_cuts`, `genus`, `num_layers`, `std`,
   `segment_ratio`, `segment_angle`, `rotation_angle`, `rel_num_flips`,
@@ -80,7 +80,7 @@ function compute_statistics(
         :degree,
         :max_pathlen,
         :max_pathlen_sources,
-        :height_profile,
+        :height_distribution,
         :communicability,
     )
     selected_observables = if isnothing(observables)
@@ -98,12 +98,12 @@ function compute_statistics(
     want_link_degree = :link_degree in selected_observables
     want_max_pathlen = :max_pathlen in selected_observables
     want_max_pathlen_sources = :max_pathlen_sources in selected_observables
-    want_height_profile = :height_profile in selected_observables
+    want_height_distribution = :height_distribution in selected_observables
     want_ev_sym = :ev_sym in selected_observables
     want_ev_antisym = :ev_antisym in selected_observables
     want_communicability = :communicability in selected_observables
     want_cardinalities = :cardinalities in selected_observables
-    want_any_pathlen = want_max_pathlen || want_max_pathlen_sources || want_height_profile
+    want_any_pathlen = want_max_pathlen || want_max_pathlen_sources || want_height_distribution
 
     in_deg = out_deg = deg = nothing
     if want_degree
@@ -255,8 +255,8 @@ function compute_statistics(
         nothing
     end
 
-    t_height_profile = if want_height_profile
-        heights = CausalSetZoology.height_profile(links)
+    t_height_distribution = if want_height_distribution
+        heights = CausalSetZoology.height_distribution(links)
         StatsBase.countmap(heights),
         minimum(heights),
         maximum(heights),
@@ -406,22 +406,22 @@ function compute_statistics(
         ))
     end
 
-    if want_height_profile
-        height_profile_hist,
-        height_profile_min,
-        height_profile_max,
-        height_profile_mean,
-        height_profile_q25,
-        height_profile_q75,
-        height_profile_median = t_height_profile
+    if want_height_distribution
+        height_distribution_hist,
+        height_distribution_min,
+        height_distribution_max,
+        height_distribution_mean,
+        height_distribution_q25,
+        height_distribution_q75,
+        height_distribution_median = t_height_distribution
         d = merge(d, (
-            height_profile_hist = height_profile_hist,
-            height_profile_min = height_profile_min,
-            height_profile_max = height_profile_max,
-            height_profile_mean = height_profile_mean,
-            height_profile_q25 = height_profile_q25,
-            height_profile_q75 = height_profile_q75,
-            height_profile_median = height_profile_median,
+            height_distribution_hist = height_distribution_hist,
+            height_distribution_min = height_distribution_min,
+            height_distribution_max = height_distribution_max,
+            height_distribution_mean = height_distribution_mean,
+            height_distribution_q25 = height_distribution_q25,
+            height_distribution_q75 = height_distribution_q75,
+            height_distribution_median = height_distribution_median,
         ))
     end
 
@@ -563,7 +563,7 @@ Compute per-causal-set statistics from a `SparseLinksCauset` alone.
 - `kind`: Dataset kind used to attach kind-specific metadata fields.
 - `observables`: Optional subset of observable groups to compute. Supported
   symbols are `:ev_sym`, `:ev_antisym`, `:link_degree`, `:max_pathlen`,
-  `:max_pathlen_sources`, `:height_profile`, and `:communicability`.
+  `:max_pathlen_sources`, `:height_distribution`, and `:communicability`.
   `nothing` computes all.
 - `r`, `order`, `num_boundary_cuts`, `genus`, `num_layers`, `std`,
   `segment_ratio`, `segment_angle`, `rotation_angle`, `rel_num_flips`,
@@ -624,7 +624,7 @@ function compute_statistics(
         :link_degree,
         :max_pathlen,
         :max_pathlen_sources,
-        :height_profile,
+        :height_distribution,
         :communicability,
     )
     selected_observables = if isnothing(observables)
@@ -641,11 +641,11 @@ function compute_statistics(
     want_link_degree = :link_degree in selected_observables
     want_max_pathlen = :max_pathlen in selected_observables
     want_max_pathlen_sources = :max_pathlen_sources in selected_observables
-    want_height_profile = :height_profile in selected_observables
+    want_height_distribution = :height_distribution in selected_observables
     want_ev_sym = :ev_sym in selected_observables
     want_ev_antisym = :ev_antisym in selected_observables
     want_communicability = :communicability in selected_observables
-    want_any_pathlen = want_max_pathlen || want_max_pathlen_sources || want_height_profile
+    want_any_pathlen = want_max_pathlen || want_max_pathlen_sources || want_height_distribution
 
     in_deg_link = out_deg_link = deg_link = nothing
     if want_link_degree || want_any_pathlen
@@ -746,8 +746,8 @@ function compute_statistics(
         nothing
     end
 
-    t_height_profile = if want_height_profile
-        heights = CausalSetZoology.height_profile(links)
+    t_height_distribution = if want_height_distribution
+        heights = CausalSetZoology.height_distribution(links)
         (
             StatsBase.countmap(heights),
             minimum(heights),
@@ -848,22 +848,22 @@ function compute_statistics(
         ))
     end
 
-    if want_height_profile
-        height_profile_hist,
-        height_profile_min,
-        height_profile_max,
-        height_profile_mean,
-        height_profile_q25,
-        height_profile_q75,
-        height_profile_median = t_height_profile
+    if want_height_distribution
+        height_distribution_hist,
+        height_distribution_min,
+        height_distribution_max,
+        height_distribution_mean,
+        height_distribution_q25,
+        height_distribution_q75,
+        height_distribution_median = t_height_distribution
         d = merge(d, (
-            height_profile_hist = height_profile_hist,
-            height_profile_min = height_profile_min,
-            height_profile_max = height_profile_max,
-            height_profile_mean = height_profile_mean,
-            height_profile_q25 = height_profile_q25,
-            height_profile_q75 = height_profile_q75,
-            height_profile_median = height_profile_median,
+            height_distribution_hist = height_distribution_hist,
+            height_distribution_min = height_distribution_min,
+            height_distribution_max = height_distribution_max,
+            height_distribution_mean = height_distribution_mean,
+            height_distribution_q25 = height_distribution_q25,
+            height_distribution_q75 = height_distribution_q75,
+            height_distribution_median = height_distribution_median,
         ))
     end
 
