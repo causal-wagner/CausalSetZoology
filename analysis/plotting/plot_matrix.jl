@@ -1768,6 +1768,14 @@ function graph_observable_kind_plot_matrix_panel_meta(;
     yticks_destroyed = nothing,
     yticks_pants = nothing,
     yticks_genus = nothing,
+    colorbar_label_grid = nothing,
+    colorbar_label_quasicrystal = nothing,
+    colorbar_label_layered = nothing,
+    colorbar_label_random = nothing,
+    colorbar_label_merged = nothing,
+    colorbar_label_destroyed = nothing,
+    colorbar_label_pants = nothing,
+    colorbar_label_genus = nothing,
     colorbar_ticks_layered = nothing,
     colorbar_ticks_merged = nothing,
     colorbar_ticks_destroyed = nothing,
@@ -1781,6 +1789,7 @@ function graph_observable_kind_plot_matrix_panel_meta(;
         ylabel = [ylabel_grid, ylabel_quasicrystal, ylabel_layered, ylabel_random, ylabel_merged, ylabel_destroyed, ylabel_pants, ylabel_genus],
         xticks = [xticks_grid, xticks_quasicrystal, xticks_layered, xticks_random, xticks_merged, xticks_destroyed, xticks_pants, xticks_genus],
         yticks = [yticks_grid, yticks_quasicrystal, yticks_layered, yticks_random, yticks_merged, yticks_destroyed, yticks_pants, yticks_genus],
+        colorbar_label = [colorbar_label_grid, colorbar_label_quasicrystal, colorbar_label_layered, colorbar_label_random, colorbar_label_merged, colorbar_label_destroyed, colorbar_label_pants, colorbar_label_genus],
         colorbar_ticks = [nothing, nothing, colorbar_ticks_layered, nothing, colorbar_ticks_merged, colorbar_ticks_destroyed, colorbar_ticks_pants, colorbar_ticks_genus],
     )
 end
@@ -1960,6 +1969,9 @@ Kinds with scalar metadata are color-coded:
 - `destroyed` by `:rel_num_flips` using inverted `:magma`
 - `pants` by `:num_boundary_cuts` using inverted `:magma`
 - `genus` by `:genus` using inverted `:magma`
+
+Per-kind colorbar labels can be overridden with `colorbar_label_<kind>` keywords,
+for example `colorbar_label_destroyed`.
 """
 function graph_observable_kind_plot_matrix(
     observable::Symbol,
@@ -2039,6 +2051,14 @@ function graph_observable_kind_plot_matrix(
     yticks_destroyed = nothing,
     yticks_pants = nothing,
     yticks_genus = nothing,
+    colorbar_label_grid = nothing,
+    colorbar_label_quasicrystal = nothing,
+    colorbar_label_layered = nothing,
+    colorbar_label_random = nothing,
+    colorbar_label_merged = nothing,
+    colorbar_label_destroyed = nothing,
+    colorbar_label_pants = nothing,
+    colorbar_label_genus = nothing,
     colorbar_ticks_layered = nothing,
     colorbar_ticks_merged = nothing,
     colorbar_ticks_destroyed = nothing,
@@ -2161,6 +2181,14 @@ function graph_observable_kind_plot_matrix(
         yticks_destroyed = yticks_destroyed,
         yticks_pants = yticks_pants,
         yticks_genus = yticks_genus,
+        colorbar_label_grid = colorbar_label_grid,
+        colorbar_label_quasicrystal = colorbar_label_quasicrystal,
+        colorbar_label_layered = colorbar_label_layered,
+        colorbar_label_random = colorbar_label_random,
+        colorbar_label_merged = colorbar_label_merged,
+        colorbar_label_destroyed = colorbar_label_destroyed,
+        colorbar_label_pants = colorbar_label_pants,
+        colorbar_label_genus = colorbar_label_genus,
         colorbar_ticks_layered = colorbar_ticks_layered,
         colorbar_ticks_merged = colorbar_ticks_merged,
         colorbar_ticks_destroyed = colorbar_ticks_destroyed,
@@ -2255,6 +2283,14 @@ function graph_observable_kind_plot_matrix(
     yticks_destroyed = nothing,
     yticks_pants = nothing,
     yticks_genus = nothing,
+    colorbar_label_grid = nothing,
+    colorbar_label_quasicrystal = nothing,
+    colorbar_label_layered = nothing,
+    colorbar_label_random = nothing,
+    colorbar_label_merged = nothing,
+    colorbar_label_destroyed = nothing,
+    colorbar_label_pants = nothing,
+    colorbar_label_genus = nothing,
     colorbar_ticks_layered = nothing,
     colorbar_ticks_merged = nothing,
     colorbar_ticks_destroyed = nothing,
@@ -2384,6 +2420,14 @@ function graph_observable_kind_plot_matrix(
         yticks_destroyed = yticks_destroyed,
         yticks_pants = yticks_pants,
         yticks_genus = yticks_genus,
+        colorbar_label_grid = colorbar_label_grid,
+        colorbar_label_quasicrystal = colorbar_label_quasicrystal,
+        colorbar_label_layered = colorbar_label_layered,
+        colorbar_label_random = colorbar_label_random,
+        colorbar_label_merged = colorbar_label_merged,
+        colorbar_label_destroyed = colorbar_label_destroyed,
+        colorbar_label_pants = colorbar_label_pants,
+        colorbar_label_genus = colorbar_label_genus,
         colorbar_ticks_layered = colorbar_ticks_layered,
         colorbar_ticks_merged = colorbar_ticks_merged,
         colorbar_ticks_destroyed = colorbar_ticks_destroyed,
@@ -2410,6 +2454,7 @@ function graph_observable_kind_plot_matrix(
     ylabel_n = panel_meta.ylabel
     xticks_n = panel_meta.xticks
     yticks_n = panel_meta.yticks
+    colorbar_label_n = panel_meta.colorbar_label
     colorbar_ticks_n = panel_meta.colorbar_ticks
 
     base_size = apply_paper_theme!(double_column = double_column, magnification = magnification)
@@ -2581,7 +2626,7 @@ function graph_observable_kind_plot_matrix(
                 cb.ticksize = 3
                 cb.minorticksize = 2
                 cb.ticklabelpad = row == 3 ? 4 : 2
-                cb.label = graph_observable_scalar_label(spec.scalar)
+                cb.label = isnothing(colorbar_label_n[idx]) ? graph_observable_scalar_label(spec.scalar) : colorbar_label_n[idx]
                 cb.labelpadding = row == 3 ? 0 : -5
                 if colorbar_ticks_n[idx] !== nothing
                     cb.ticks = colorbar_ticks_n[idx]
