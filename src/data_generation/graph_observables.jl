@@ -246,7 +246,7 @@ function laplacian_extreme_eigenvalues(
     zero_count = _nonisolated_weak_component_count(links)
     nev_small_eff = max(nev_small, zero_count + 1)
     if nev_small_eff > max_nev
-        @warn "laplacian_extreme_eigenvalues cannot request enough smallest eigenvalues without dense fallback" atom_count=n requested=nev_small_eff max_nev=max_nev
+        @warn "laplacian_extreme_eigenvalues cannot request enough smallest eigenvalues from ARPACK; querying the maximum allowed partial spectrum" atom_count=n requested=nev_small_eff max_nev=max_nev
         nev_small_eff = max_nev
     end
 
