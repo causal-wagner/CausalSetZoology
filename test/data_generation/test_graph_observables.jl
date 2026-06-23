@@ -46,6 +46,15 @@
             [Int32[], Int32[1], Int32[2], Int32[3]],
         )
     end
+
+    # Two disconnected 2-chains.
+    function _two_chain2_sparse_links()
+        return CausalSetZoology.SparseLinksCauset(
+            Int64(4),
+            [Int32[2], Int32[], Int32[4], Int32[]],
+            [Int32[], Int32[1], Int32[], Int32[3]],
+        )
+    end
 end
 
 # Verifies strict-upper to strict-lower copy and in-place return contract.
@@ -85,6 +94,45 @@ end
 @testitem "graph_observables: normalized_lap_eigs_symmetrized_links validation" setup=[setupDataGenerationGraphObservables] begin
     cset_empty = CausalSets.BitArrayCauset(0, BitVector[], BitVector[])
     @test_throws DomainError CausalSetZoology.normalized_lap_eigs_symmetrized_links(cset_empty)
+end
+
+# Verifies the lazy normalized link-Laplacian operator against the dense path.
+@testitem "graph_observables: normalized link laplacian operator dense equivalence" setup=[setupDataGenerationGraphObservables] begin
+    links = _chain4_sparse_links()
+    Lop = CausalSetZoology.normalized_link_laplacian_operator(links)
+
+    W = Float64.(CausalSetZoology.dense_future_links(links))
+    CausalSetZoology.symmetrize_strictly_upper_triangular!(W)
+    dense_vals = sort(CausalSetZoology.sym_norm_lap_eigs!(W))
+
+    @test Matrix(Lop) ≈ W atol = 1e-12
+    @test sort(eigvals(Symmetric(Matrix(Lop)))) ≈ dense_vals atol = 1e-12
+
+    x = [0.2, -0.3, 0.5, 0.7]
+    y = similar(x)
+    mul!(y, Lop, x)
+    @test y ≈ Matrix(Lop) * x atol = 1e-12
+end
+
+# Verifies ARPACK-backed normalized link-Laplacian extremes and unresolved partial-spectrum behavior.
+@testitem "graph_observables: laplacian extreme eigenvalues arpack" setup=[setupDataGenerationGraphObservables] begin
+    λfirst, λlast = CausalSetZoology.laplacian_extreme_eigenvalues(_chain4_sparse_links())
+    @test λfirst ≈ 0.5 atol = 1e-8
+    @test λlast ≈ 2.0 atol = 1e-8
+
+    λfirst_disconnected, λlast_disconnected =
+        CausalSetZoology.laplacian_extreme_eigenvalues(_two_chain2_sparse_links())
+    @test isnan(λfirst_disconnected)
+    @test λlast_disconnected ≈ 2.0 atol = 1e-12
+end
+
+# Verifies validation for lazy ARPACK normalized link-Laplacian helpers.
+@testitem "graph_observables: laplacian arpack validation" setup=[setupDataGenerationGraphObservables] begin
+    empty_links = CausalSetZoology.SparseLinksCauset(Int64(0), Vector{Vector{Int32}}(), Vector{Vector{Int32}}())
+    @test_throws DomainError CausalSetZoology.normalized_link_laplacian_operator(empty_links)
+    @test_throws DomainError CausalSetZoology.laplacian_extreme_eigenvalues(empty_links)
+    @test_throws DomainError CausalSetZoology.laplacian_extreme_eigenvalues(_chain4_sparse_links(); nev_small = 0)
+    @test_throws DomainError CausalSetZoology.laplacian_extreme_eigenvalues(_chain4_sparse_links(); zero_tol = -1.0)
 end
 
 # Verifies the exact antisymmetric normalized out-Laplacian spectrum on the
@@ -164,6 +212,45 @@ end
     ]
     @test H ≈ expected atol = 1e-12
     @test H ≈ adjoint(H) atol = 1e-12
+end
+
+# Verifies the lazy antisymmetric in-Laplacian operator against the dense path.
+@testitem "graph_observables: imag antisym in lap operator dense equivalence" setup=[setupDataGenerationGraphObservables] begin
+    links = _chain4_sparse_links()
+    Hop = CausalSetZoology.imag_antisym_in_lap_operator(links)
+    H = CausalSetZoology.imag_antisym_in_lap(links)
+
+    @test Matrix(Hop) ≈ H atol = 1e-12
+    @test Matrix(Hop) ≈ adjoint(Matrix(Hop)) atol = 1e-12
+
+    x = ComplexF64[0.2 + 0.1im, -0.3 + 0.4im, 0.5 - 0.2im, 0.7 + 0.3im]
+    y = similar(x)
+    mul!(y, Hop, x)
+    @test y ≈ H * x atol = 1e-12
+end
+
+# Verifies ARPACK-backed antisymmetric in-Laplacian extremal eigenvalues.
+@testitem "graph_observables: imag antisym in lap extreme eigenvalues arpack" setup=[setupDataGenerationGraphObservables] begin
+    links = _chain4_sparse_links()
+    ev = real.(eigvals(Hermitian(CausalSetZoology.imag_antisym_in_lap(links))))
+    expected_lowest = minimum(ev)
+    expected_min_abs_nonzero = minimum(abs.(ev[abs.(ev) .> 1e-10]))
+
+    got_lowest, got_min_abs_nonzero =
+        CausalSetZoology.imag_antisym_in_lap_extreme_eigenvalues(links)
+    @test got_lowest ≈ expected_lowest atol = 1e-8
+    @test got_min_abs_nonzero ≈ expected_min_abs_nonzero atol = 1e-8
+    @test CausalSetZoology.imag_antisym_in_lap_lowest_eigenvalue(links) ≈ expected_lowest atol = 1e-8
+end
+
+# Verifies validation for lazy antisymmetric in-Laplacian helpers.
+@testitem "graph_observables: imag antisym in lap arpack validation" setup=[setupDataGenerationGraphObservables] begin
+    empty_links = CausalSetZoology.SparseLinksCauset(Int64(0), Vector{Vector{Int32}}(), Vector{Vector{Int32}}())
+    @test_throws DomainError CausalSetZoology.imag_antisym_in_lap_operator(empty_links)
+    @test_throws DomainError CausalSetZoology.imag_antisym_in_lap_extreme_eigenvalues(empty_links)
+    @test_throws DomainError CausalSetZoology.imag_antisym_in_lap_extreme_eigenvalues(_chain4_sparse_links(); nev_middle = 0)
+    @test_throws DomainError CausalSetZoology.imag_antisym_in_lap_extreme_eigenvalues(_chain4_sparse_links(); zero_tol = -1.0)
+    @test_throws DomainError CausalSetZoology.imag_antisym_in_lap_lowest_eigenvalue(empty_links)
 end
 
 # Verifies communicability row sums on closure adjacency against dense exp(A) * 1.

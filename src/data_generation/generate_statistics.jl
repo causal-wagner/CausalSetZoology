@@ -11,8 +11,9 @@ Compute per-causal-set graph/cardinality/spectral summary statistics.
 - `kind`: Dataset kind used to attach kind-specific metadata fields.
 - `observables`: Optional subset of observable groups to compute. Supported
   symbols are `:ev_sym`, `:ev_antisym`, `:cardinalities`, `:link_degree`,
-  `:degree`, `:max_pathlen`, `:max_pathlen_sources`, `:height_profile`, and
-  `:communicability`. `nothing` computes all.
+  `:degree`, `:max_pathlen`, `:max_pathlen_sources`, `:height_profile`,
+  `:communicability`, `:ev_sym_arpack`, and `:ev_antisym_arpack`. `nothing`
+  computes all.
 - `r`, `order`, `num_boundary_cuts`, `genus`, `num_layers`, `std`,
   `segment_ratio`, `segment_angle`, `rotation_angle`, `rel_num_flips`,
   `rel_size_KR`, `link_probability`, `lattice`, `trans_in`, `trans_out`:
@@ -82,6 +83,8 @@ function compute_statistics(
         :max_pathlen_sources,
         :height_profile,
         :communicability,
+        :ev_sym_arpack,
+        :ev_antisym_arpack,
     )
     selected_observables = if isnothing(observables)
         collect(supported_observables)
@@ -101,6 +104,8 @@ function compute_statistics(
     want_height_profile = :height_profile in selected_observables
     want_ev_sym = :ev_sym in selected_observables
     want_ev_antisym = :ev_antisym in selected_observables
+    want_ev_sym_arpack = :ev_sym_arpack in selected_observables
+    want_ev_antisym_arpack = :ev_antisym_arpack in selected_observables
     want_communicability = :communicability in selected_observables
     want_cardinalities = :cardinalities in selected_observables
     want_any_pathlen = want_max_pathlen || want_max_pathlen_sources || want_height_profile
@@ -188,6 +193,18 @@ function compute_statistics(
         (
             ev_summary(ev_imag_antisym_in)...,
         )
+    else
+        nothing
+    end
+
+    t_lap_arpack_link = if want_ev_sym_arpack
+        CausalSetZoology.laplacian_extreme_eigenvalues(links)
+    else
+        nothing
+    end
+
+    t_imag_antisym_in_lap_arpack_link = if want_ev_antisym_arpack
+        CausalSetZoology.imag_antisym_in_lap_extreme_eigenvalues(links)
     else
         nothing
     end
@@ -480,6 +497,23 @@ function compute_statistics(
         ))
     end
 
+    if want_ev_sym_arpack
+        ev_sym_arpack_first_nonzero_link, ev_sym_arpack_last_link = t_lap_arpack_link
+        d = merge(d, (
+            ev_sym_arpack_first_nonzero_link = ev_sym_arpack_first_nonzero_link,
+            ev_sym_arpack_last_link = ev_sym_arpack_last_link,
+        ))
+    end
+
+    if want_ev_antisym_arpack
+        ev_antisym_arpack_first_link, ev_antisym_arpack_min_abs_nonzero_link =
+            t_imag_antisym_in_lap_arpack_link
+        d = merge(d, (
+            ev_antisym_arpack_first_link = ev_antisym_arpack_first_link,
+            ev_antisym_arpack_min_abs_nonzero_link = ev_antisym_arpack_min_abs_nonzero_link,
+        ))
+    end
+
     if want_communicability
         communicability_link,
         communicability_min_link,
@@ -563,8 +597,8 @@ Compute per-causal-set statistics from a `SparseLinksCauset` alone.
 - `kind`: Dataset kind used to attach kind-specific metadata fields.
 - `observables`: Optional subset of observable groups to compute. Supported
   symbols are `:ev_sym`, `:ev_antisym`, `:link_degree`, `:max_pathlen`,
-  `:max_pathlen_sources`, `:height_profile`, and `:communicability`.
-  `nothing` computes all.
+  `:max_pathlen_sources`, `:height_profile`, `:communicability`,
+  `:ev_sym_arpack`, and `:ev_antisym_arpack`. `nothing` computes all.
 - `r`, `order`, `num_boundary_cuts`, `genus`, `num_layers`, `std`,
   `segment_ratio`, `segment_angle`, `rotation_angle`, `rel_num_flips`,
   `rel_size_KR`, `link_probability`, `lattice`, `trans_in`, `trans_out`:
@@ -626,6 +660,8 @@ function compute_statistics(
         :max_pathlen_sources,
         :height_profile,
         :communicability,
+        :ev_sym_arpack,
+        :ev_antisym_arpack,
     )
     selected_observables = if isnothing(observables)
         collect(supported_observables)
@@ -644,6 +680,8 @@ function compute_statistics(
     want_height_profile = :height_profile in selected_observables
     want_ev_sym = :ev_sym in selected_observables
     want_ev_antisym = :ev_antisym in selected_observables
+    want_ev_sym_arpack = :ev_sym_arpack in selected_observables
+    want_ev_antisym_arpack = :ev_antisym_arpack in selected_observables
     want_communicability = :communicability in selected_observables
     want_any_pathlen = want_max_pathlen || want_max_pathlen_sources || want_height_profile
 
@@ -691,6 +729,18 @@ function compute_statistics(
     t_imag_antisym_in_lap_link = if want_ev_antisym
         ev_imag_antisym_in = CausalSetZoology.imag_antisym_in_lap_eigs(links)
         (ev_summary(ev_imag_antisym_in)...,)
+    else
+        nothing
+    end
+
+    t_lap_arpack_link = if want_ev_sym_arpack
+        CausalSetZoology.laplacian_extreme_eigenvalues(links)
+    else
+        nothing
+    end
+
+    t_imag_antisym_in_lap_arpack_link = if want_ev_antisym_arpack
+        CausalSetZoology.imag_antisym_in_lap_extreme_eigenvalues(links)
     else
         nothing
     end
@@ -919,6 +969,23 @@ function compute_statistics(
             ev_imag_antisym_in_q25_link = ev_imag_antisym_in_q25_link,
             ev_imag_antisym_in_q75_link = ev_imag_antisym_in_q75_link,
             ev_imag_antisym_in_median_link = ev_imag_antisym_in_median_link,
+        ))
+    end
+
+    if want_ev_sym_arpack
+        ev_sym_arpack_first_nonzero_link, ev_sym_arpack_last_link = t_lap_arpack_link
+        d = merge(d, (
+            ev_sym_arpack_first_nonzero_link = ev_sym_arpack_first_nonzero_link,
+            ev_sym_arpack_last_link = ev_sym_arpack_last_link,
+        ))
+    end
+
+    if want_ev_antisym_arpack
+        ev_antisym_arpack_first_link, ev_antisym_arpack_min_abs_nonzero_link =
+            t_imag_antisym_in_lap_arpack_link
+        d = merge(d, (
+            ev_antisym_arpack_first_link = ev_antisym_arpack_first_link,
+            ev_antisym_arpack_min_abs_nonzero_link = ev_antisym_arpack_min_abs_nonzero_link,
         ))
     end
 

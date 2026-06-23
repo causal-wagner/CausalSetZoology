@@ -145,6 +145,10 @@ end
     @test hasfield(typeof(rec), :ev_sym_link)
     @test hasfield(typeof(rec), :ev_imag_antisym_in_link)
     @test hasfield(typeof(rec), :ev_imag_antisym_in_mean_link)
+    @test hasfield(typeof(rec), :ev_sym_arpack_first_nonzero_link)
+    @test hasfield(typeof(rec), :ev_sym_arpack_last_link)
+    @test hasfield(typeof(rec), :ev_antisym_arpack_first_link)
+    @test hasfield(typeof(rec), :ev_antisym_arpack_min_abs_nonzero_link)
     @test hasfield(typeof(rec), :communicability_link)
     @test hasfield(typeof(rec), :communicability_mean_link)
 
@@ -158,6 +162,10 @@ end
     @test sum(values(rec.max_pathlen_sources_hist)) == rec.num_sources
     @test sum(values(rec.height_profile_hist)) == rec.n
     @test length(rec.ev_imag_antisym_in_link) == rec.n
+    @test rec.ev_sym_arpack_first_nonzero_link ≈ rec.ev_sym_min_abs_nonzero_link atol = 1e-8
+    @test rec.ev_sym_arpack_last_link ≈ rec.ev_sym_max_link atol = 1e-8
+    @test rec.ev_antisym_arpack_first_link ≈ rec.ev_imag_antisym_in_min_link atol = 1e-8
+    @test rec.ev_antisym_arpack_min_abs_nonzero_link ≈ rec.ev_imag_antisym_in_min_abs_nonzero_link atol = 1e-8
     @test length(rec.communicability_link) == rec.n
 end
 
@@ -201,6 +209,9 @@ end
     @test !hasfield(typeof(rec), :height_profile_hist)
     @test !hasfield(typeof(rec), :cardinalities_hist)
     @test !hasfield(typeof(rec), :ev_imag_antisym_in_link)
+    @test !hasfield(typeof(rec), :ev_sym_arpack_first_nonzero_link)
+    @test !hasfield(typeof(rec), :ev_antisym_arpack_first_link)
+    @test !hasfield(typeof(rec), :ev_antisym_arpack_min_abs_nonzero_link)
 
     @test hasfield(typeof(rec), :segment_ratio)
     @test hasfield(typeof(rec), :segment_angle)
@@ -221,6 +232,8 @@ end
         :max_pathlen_sources => (:max_pathlen_sources_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist, :max_pathlen_hist]),
         :height_profile => (:height_profile_hist, [:degree_hist, :degree_hist_link, :cardinalities_hist, :max_pathlen_hist]),
         :communicability => (:communicability_link, [:degree_hist, :degree_hist_link, :cardinalities_hist]),
+        :ev_sym_arpack => (:ev_sym_arpack_first_nonzero_link, [:degree_hist, :degree_hist_link, :ev_sym_link]),
+        :ev_antisym_arpack => (:ev_antisym_arpack_first_link, [:degree_hist, :degree_hist_link, :ev_imag_antisym_in_link]),
     )
 
     for (obs, (present_field, absent_fields)) in expected
@@ -271,6 +284,9 @@ end
     @test hasfield(typeof(rec), :height_profile_hist)
     @test hasfield(typeof(rec), :ev_sym_link)
     @test hasfield(typeof(rec), :ev_imag_antisym_in_link)
+    @test !hasfield(typeof(rec), :ev_sym_arpack_first_nonzero_link)
+    @test !hasfield(typeof(rec), :ev_antisym_arpack_first_link)
+    @test !hasfield(typeof(rec), :ev_antisym_arpack_min_abs_nonzero_link)
     @test hasfield(typeof(rec), :communicability_link)
 
     @test !hasfield(typeof(rec), :degree_hist)
@@ -302,7 +318,7 @@ end
 # Verifies links-only overload defaults to all supported observables and matches common fields from the two-argument method.
 @testitem "generate_statistics: compute_statistics links-only equivalence" setup=[setupGenerateStatistics] begin
     cset, links = _generated_fixture(kind = "grid")
-    obs = [:link_degree, :max_pathlen, :max_pathlen_sources, :height_profile, :ev_sym, :ev_antisym, :communicability]
+    obs = [:link_degree, :max_pathlen, :max_pathlen_sources, :height_profile, :ev_sym, :ev_antisym, :communicability, :ev_sym_arpack, :ev_antisym_arpack]
 
     rec_full = CausalSetZoology.compute_statistics(cset, links; kind = "grid", observables = obs)
     rec_links = CausalSetZoology.compute_statistics(links; kind = "grid")
@@ -335,6 +351,10 @@ end
     for fld in common_fields
         @test getproperty(rec_links, fld) == getproperty(rec_full, fld)
     end
+    @test rec_links.ev_sym_arpack_first_nonzero_link ≈ rec_full.ev_sym_arpack_first_nonzero_link atol = 1e-8
+    @test rec_links.ev_sym_arpack_last_link ≈ rec_full.ev_sym_arpack_last_link atol = 1e-8
+    @test rec_links.ev_antisym_arpack_first_link ≈ rec_full.ev_antisym_arpack_first_link atol = 1e-8
+    @test rec_links.ev_antisym_arpack_min_abs_nonzero_link ≈ rec_full.ev_antisym_arpack_min_abs_nonzero_link atol = 1e-8
 end
 
 # Verifies links-only overload rejects closure-dependent observables.

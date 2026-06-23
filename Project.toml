@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Fabian Wagner <f.wagner@thphys.uni-heidelberg.de>"]
 
 [deps]
+Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 CausalSets = "2cd3ca5d-4cd6-4e37-88b9-1a897f702e70"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
@@ -23,6 +24,7 @@ CausalSets = {url = "https://codeberg.org/cyclopentane/CausalSets.jl"}
 QuantumGrav = {rev = "main", subdir = "QuantumGrav.jl", url = "https://github.com/ssciwr/QuantumGrav.git"}
 
 [compat]
+Arpack = "0.5.4"
 julia = "1.12"
 Distributed = "1.11.0"
 Statistics = "1.11.1"
