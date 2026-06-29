@@ -13,6 +13,7 @@ import LinearAlgebra
 import StatsBase
 import ProgressMeter
 import Distributed
+import Arpack
 
 export average_histogram_with_std,
     average_vectors_with_std,
@@ -65,6 +66,13 @@ export average_histogram_with_std,
     symmetrize_strictly_upper_triangular!,
     sym_norm_lap_eigs!,
     normalized_lap_eigs_symmetrized_links,
+    NormalizedLinkLaplacianOp,
+    normalized_link_laplacian_operator,
+    laplacian_extreme_eigenvalues,
+    ImagAntisymInLaplacianOp,
+    imag_antisym_in_lap_operator,
+    imag_antisym_in_lap_extreme_eigenvalues,
+    imag_antisym_in_lap_lowest_eigenvalue,
     imag_antisym_out_lap,
     imag_antisym_out_lap_eigs,
     imag_antisym_in_lap,

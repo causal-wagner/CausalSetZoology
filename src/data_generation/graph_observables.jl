@@ -114,6 +114,426 @@ function normalized_lap_eigs_symmetrized_links(cset::CausalSets.BitArrayCauset):
 end
 
 """
+    NormalizedLinkLaplacianOp
+
+Lazy matrix representation of the symmetrically normalized Laplacian of the
+undirected sparse link graph of a `SparseLinksCauset`.
+
+The operator represents `L = I - D^{-1/2} W D^{-1/2}`, where `W` is the
+symmetrized link adjacency and `D` is its degree matrix. It implements
+`mul!`, so iterative eigensolvers can use it without materializing the dense
+Laplacian.
+"""
+struct NormalizedLinkLaplacianOp <: AbstractMatrix{Float64}
+    cset::SparseLinksCauset
+    dinvsqrt::Vector{Float64}
+end
+
+Base.size(L::NormalizedLinkLaplacianOp) = (L.cset.atom_count, L.cset.atom_count)
+Base.size(L::NormalizedLinkLaplacianOp, d::Int) = d <= 2 ? L.cset.atom_count : 1
+Base.eltype(::Type{NormalizedLinkLaplacianOp}) = Float64
+Base.eltype(::NormalizedLinkLaplacianOp) = Float64
+LinearAlgebra.issymmetric(::NormalizedLinkLaplacianOp) = true
+LinearAlgebra.ishermitian(::NormalizedLinkLaplacianOp) = true
+
+function Base.getindex(L::NormalizedLinkLaplacianOp, i::Int, j::Int)::Float64
+    n = L.cset.atom_count
+    checkbounds(1:n, i)
+    checkbounds(1:n, j)
+    i == j && return 1.0
+    _has_sparse_link(L.cset, i, j) || return 0.0
+    return -L.dinvsqrt[i] * L.dinvsqrt[j]
+end
+
+"""
+    normalized_link_laplacian_operator(links)
+
+Construct a lazy normalized-Laplacian operator for the undirected sparse link
+graph of `links`.
+
+# Arguments
+- `links`: Sparse link graph representation of a causal set.
+
+# Returns
+- `L::NormalizedLinkLaplacianOp`: Lazy normalized-Laplacian operator.
+
+# Throws
+- `DomainError`: If `links.atom_count < 1`.
+"""
+function normalized_link_laplacian_operator(links::SparseLinksCauset)::NormalizedLinkLaplacianOp
+    n = links.atom_count
+    n >= 1 || throw(DomainError(n, "normalized_link_laplacian_operator requires atom_count >= 1"))
+
+    dinvsqrt = zeros(Float64, n)
+    @inbounds for i in 1:n
+        deg = length(links.future_links[i]) + length(links.past_links[i])
+        deg > 0 && (dinvsqrt[i] = inv(sqrt(deg)))
+    end
+    return NormalizedLinkLaplacianOp(links, dinvsqrt)
+end
+
+function LinearAlgebra.mul!(
+    y::AbstractVector{Float64},
+    L::NormalizedLinkLaplacianOp,
+    x::AbstractVector{Float64},
+)
+    n = L.cset.atom_count
+    length(x) == n || throw(DimensionMismatch("x has length $(length(x)) but operator size is $n"))
+    length(y) == n || throw(DimensionMismatch("y has length $(length(y)) but operator size is $n"))
+
+    links = L.cset
+    dinvsqrt = L.dinvsqrt
+    Base.Threads.@threads :dynamic for i in 1:n
+        wi = dinvsqrt[i]
+        if wi == 0.0
+            @inbounds y[i] = x[i]
+            continue
+        end
+
+        acc = 0.0
+        @inbounds for j in links.future_links[i]
+            acc += dinvsqrt[Int(j)] * x[Int(j)]
+        end
+        @inbounds for j in links.past_links[i]
+            acc += dinvsqrt[Int(j)] * x[Int(j)]
+        end
+        @inbounds y[i] = x[i] - wi * acc
+    end
+    return y
+end
+
+"""
+    laplacian_extreme_eigenvalues(links; nev_small=2, tol=1e-6, zero_tol=1e-10)
+
+Compute the first nonzero and largest eigenvalues of the normalized Laplacian
+of the undirected sparse link graph using ARPACK.
+
+If ARPACK cannot be queried for enough values, or the requested nonzero
+eigenvalue is not found among the partial spectrum, the corresponding return
+value is `NaN` and a warning is emitted.
+
+# Arguments
+- `links`: Sparse link graph representation of a causal set.
+
+# Keyword Arguments
+- `nev_small`: Minimum number of smallest eigenvalues requested from ARPACK.
+- `tol`: ARPACK convergence tolerance.
+- `zero_tol`: Absolute tolerance used to identify zero eigenvalues.
+
+# Returns
+- `(λ_first_nonzero, λ_last)::Tuple{Float64,Float64}`.
+
+# Throws
+- `DomainError`: If `links.atom_count < 1`.
+"""
+function laplacian_extreme_eigenvalues(
+    links::SparseLinksCauset;
+    nev_small::Int = 2,
+    tol::Real = 1e-6,
+    zero_tol::Real = 1e-10,
+)::Tuple{Float64,Float64}
+    n = links.atom_count
+    n >= 1 || throw(DomainError(n, "laplacian_extreme_eigenvalues requires atom_count >= 1"))
+    nev_small >= 1 || throw(DomainError(nev_small, "nev_small must be >= 1"))
+    zero_tol >= 0 || throw(DomainError(zero_tol, "zero_tol must be nonnegative"))
+
+    max_nev = n - 2
+    if max_nev < 1
+        @warn "laplacian_extreme_eigenvalues cannot query ARPACK for atom_count=$n"
+        return (NaN, NaN)
+    end
+
+    zero_count = _nonisolated_weak_component_count(links)
+    nev_small_eff = max(nev_small, zero_count + 1)
+    if nev_small_eff > max_nev
+        @warn "laplacian_extreme_eigenvalues cannot request enough smallest eigenvalues from ARPACK; querying the maximum allowed partial spectrum" atom_count=n requested=nev_small_eff max_nev=max_nev
+        nev_small_eff = max_nev
+    end
+
+    Lop = normalized_link_laplacian_operator(links)
+    λsmall = try
+        Arpack.eigs(
+            Lop;
+            nev = nev_small_eff,
+            which = :SM,
+            tol = tol,
+            ritzvec = false,
+        )[1]
+    catch err
+        @warn "ARPACK failed while computing smallest normalized Laplacian eigenvalues" exception=(err, catch_backtrace())
+        Float64[]
+    end
+    λlarge = try
+        Arpack.eigs(
+            Lop;
+            nev = 1,
+            which = :LM,
+            tol = tol,
+            ritzvec = false,
+        )[1]
+    catch err
+        @warn "ARPACK failed while computing largest normalized Laplacian eigenvalue" exception=(err, catch_backtrace())
+        Float64[]
+    end
+
+    λs = sort!(real.(λsmall))
+    first_nonzero = _first_nonzero_eigenvalue(λs, zero_tol)
+    if isnan(first_nonzero)
+        @warn "laplacian_extreme_eigenvalues did not find a nonzero eigenvalue in the ARPACK partial spectrum" atom_count=n nev=nev_small_eff zero_tol=zero_tol
+    end
+    last = isempty(λlarge) ? NaN : real(λlarge[1])
+    return (first_nonzero, last)
+end
+
+"""
+    ImagAntisymInLaplacianOp
+
+Lazy Hermitian representation of `im` times the antisymmetric part of the
+directed normalized in-Laplacian of a sparse link graph.
+
+The represented matrix is `im * (L_in - L_in') / 2` with
+`L_in = I - D_in^{-1} A'`. Its eigenvalues are real, and the operator supports
+matrix-vector products for iterative eigensolvers.
+"""
+struct ImagAntisymInLaplacianOp <: AbstractMatrix{ComplexF64}
+    cset::SparseLinksCauset
+    dinv::Vector{Float64}
+end
+
+Base.size(L::ImagAntisymInLaplacianOp) = (L.cset.atom_count, L.cset.atom_count)
+Base.size(L::ImagAntisymInLaplacianOp, d::Int) = d <= 2 ? L.cset.atom_count : 1
+Base.eltype(::Type{ImagAntisymInLaplacianOp}) = ComplexF64
+Base.eltype(::ImagAntisymInLaplacianOp) = ComplexF64
+LinearAlgebra.issymmetric(::ImagAntisymInLaplacianOp) = false
+LinearAlgebra.ishermitian(::ImagAntisymInLaplacianOp) = true
+
+function Base.getindex(L::ImagAntisymInLaplacianOp, i::Int, j::Int)::ComplexF64
+    n = L.cset.atom_count
+    checkbounds(1:n, i)
+    checkbounds(1:n, j)
+    i == j && return 0.0 + 0.0im
+    if j in L.cset.past_links[i]
+        return -0.5im * L.dinv[i]
+    elseif j in L.cset.future_links[i]
+        return 0.5im * L.dinv[j]
+    end
+    return 0.0 + 0.0im
+end
+
+"""
+    imag_antisym_in_lap_operator(links)
+
+Construct a lazy Hermitian operator for `im` times the antisymmetric part of
+the directed normalized in-Laplacian of `links`.
+
+# Arguments
+- `links`: Sparse link graph representation of a causal set.
+
+# Returns
+- `H::ImagAntisymInLaplacianOp`: Lazy Hermitian operator.
+
+# Throws
+- `DomainError`: If `links.atom_count < 1`.
+"""
+function imag_antisym_in_lap_operator(links::SparseLinksCauset)::ImagAntisymInLaplacianOp
+    n = links.atom_count
+    n >= 1 || throw(DomainError(n, "imag_antisym_in_lap_operator requires atom_count >= 1"))
+
+    dinv = zeros(Float64, n)
+    @inbounds for i in 1:n
+        din = length(links.past_links[i])
+        din > 0 && (dinv[i] = inv(din))
+    end
+    return ImagAntisymInLaplacianOp(links, dinv)
+end
+
+function LinearAlgebra.mul!(
+    y::AbstractVector{ComplexF64},
+    L::ImagAntisymInLaplacianOp,
+    x::AbstractVector{ComplexF64},
+)
+    n = L.cset.atom_count
+    length(x) == n || throw(DimensionMismatch("x has length $(length(x)) but operator size is $n"))
+    length(y) == n || throw(DimensionMismatch("y has length $(length(y)) but operator size is $n"))
+
+    links = L.cset
+    dinv = L.dinv
+    Base.Threads.@threads :dynamic for i in 1:n
+        acc = 0.0 + 0.0im
+        scale_i = dinv[i]
+        @inbounds for j in links.past_links[i]
+            acc -= 0.5im * scale_i * x[Int(j)]
+        end
+        @inbounds for j in links.future_links[i]
+            acc += 0.5im * dinv[Int(j)] * x[Int(j)]
+        end
+        @inbounds y[i] = acc
+    end
+    return y
+end
+
+"""
+    imag_antisym_in_lap_extreme_eigenvalues(links; nev_middle=3, tol=1e-6, zero_tol=1e-10)
+
+Compute two extremal eigenvalues of `im` times the antisymmetric part of the
+directed normalized in-Laplacian of `links` using ARPACK.
+
+The first returned value is the lowest eigenvalue, i.e. the largest negative
+eigenvalue when the spectrum is ordered increasingly. The second returned
+value is the smallest nonzero eigenvalue in absolute value. If ARPACK cannot
+be queried or cannot see past the zero eigenspace, the unresolved return value
+is `NaN` and a warning is emitted.
+
+# Arguments
+- `links`: Sparse link graph representation of a causal set.
+
+# Keyword Arguments
+- `nev_middle`: Initial number of smallest-magnitude eigenvalues requested
+  from ARPACK when searching for the smallest nonzero absolute eigenvalue.
+- `tol`: ARPACK convergence tolerance.
+- `zero_tol`: Absolute tolerance used to identify zero eigenvalues.
+
+# Returns
+- `(λ_lowest, λ_min_abs_nonzero)::Tuple{Float64,Float64}`.
+  `λ_min_abs_nonzero` is `NaN` if no nonzero eigenvalue exists under
+  `zero_tol`.
+
+# Throws
+- `DomainError`: If `links.atom_count < 1`.
+"""
+function imag_antisym_in_lap_extreme_eigenvalues(
+    links::SparseLinksCauset;
+    nev_middle::Int = 3,
+    tol::Real = 1e-6,
+    zero_tol::Real = 1e-10,
+)::Tuple{Float64,Float64}
+    n = links.atom_count
+    n >= 1 || throw(DomainError(n, "imag_antisym_in_lap_extreme_eigenvalues requires atom_count >= 1"))
+    nev_middle >= 1 || throw(DomainError(nev_middle, "nev_middle must be >= 1"))
+    zero_tol >= 0 || throw(DomainError(zero_tol, "zero_tol must be nonnegative"))
+    max_nev = n - 2
+    if max_nev < 1
+        @warn "imag_antisym_in_lap_extreme_eigenvalues cannot query ARPACK for atom_count=$n"
+        return (NaN, NaN)
+    end
+
+    H = imag_antisym_in_lap_operator(links)
+    λlowest = try
+        Arpack.eigs(
+            H;
+            nev = 1,
+            which = :SR,
+            tol = tol,
+            ritzvec = false,
+        )[1]
+    catch err
+        @warn "ARPACK failed while computing lowest antisymmetric in-Laplacian eigenvalue" exception=(err, catch_backtrace())
+        ComplexF64[]
+    end
+    lowest = isempty(λlowest) ? NaN : real(λlowest[1])
+
+    nev = min(max(nev_middle, 1), max_nev)
+    while true
+        λmiddle = try
+            Arpack.eigs(
+                H;
+                nev = nev,
+                which = :SM,
+                tol = tol,
+                ritzvec = false,
+            )[1]
+        catch err
+            @warn "ARPACK failed while computing smallest-magnitude antisymmetric in-Laplacian eigenvalues" exception=(err, catch_backtrace()) nev=nev
+            ComplexF64[]
+        end
+        min_abs_nonzero = _smallest_abs_nonzero_eigenvalue(real.(λmiddle), zero_tol)
+        !isnan(min_abs_nonzero) && return (lowest, min_abs_nonzero)
+
+        if nev >= max_nev
+            @warn "imag_antisym_in_lap_extreme_eigenvalues did not find a nonzero smallest-magnitude eigenvalue in the ARPACK partial spectrum" atom_count=n nev=nev zero_tol=zero_tol
+            return (lowest, NaN)
+        end
+        nev = min(max_nev, max(nev + 1, 2 * nev))
+    end
+end
+
+"""
+    imag_antisym_in_lap_lowest_eigenvalue(links; tol=1e-6)
+
+Compute the lowest eigenvalue of `im` times the antisymmetric part of the
+directed normalized in-Laplacian of `links`.
+
+This compatibility wrapper returns the first value from
+`imag_antisym_in_lap_extreme_eigenvalues`.
+"""
+function imag_antisym_in_lap_lowest_eigenvalue(
+    links::SparseLinksCauset;
+    tol::Real = 1e-6,
+)::Float64
+    return first(imag_antisym_in_lap_extreme_eigenvalues(links; tol = tol))
+end
+
+function _has_sparse_link(links::SparseLinksCauset, i::Int, j::Int)::Bool
+    if i < j
+        return j in links.future_links[i]
+    else
+        return i in links.future_links[j]
+    end
+end
+
+function _first_nonzero_eigenvalue(λ::AbstractVector{<:Real}, zero_tol::Real)::Float64
+    for val in λ
+        abs(val) > zero_tol && return Float64(val)
+    end
+    return NaN
+end
+
+function _smallest_abs_nonzero_eigenvalue(λ::AbstractVector{<:Real}, zero_tol::Real)::Float64
+    min_abs_nonzero = Inf
+    for val in λ
+        abs_val = abs(val)
+        if zero_tol < abs_val < min_abs_nonzero
+            min_abs_nonzero = abs_val
+        end
+    end
+    return isfinite(min_abs_nonzero) ? min_abs_nonzero : NaN
+end
+
+function _nonisolated_weak_component_count(links::SparseLinksCauset)::Int
+    n = links.atom_count
+    seen = falses(n)
+    stack = Vector{Int}()
+    count = 0
+    @inbounds for start in 1:n
+        seen[start] && continue
+        has_edge = false
+        empty!(stack)
+        push!(stack, start)
+        seen[start] = true
+        while !isempty(stack)
+            u = pop!(stack)
+            if !isempty(links.future_links[u]) || !isempty(links.past_links[u])
+                has_edge = true
+            end
+            for v in links.future_links[u]
+                vi = Int(v)
+                seen[vi] && continue
+                seen[vi] = true
+                push!(stack, vi)
+            end
+            for v in links.past_links[u]
+                vi = Int(v)
+                seen[vi] && continue
+                seen[vi] = true
+                push!(stack, vi)
+            end
+        end
+        has_edge && (count += 1)
+    end
+    return count
+end
+
+"""
     imag_antisym_out_lap_eigs(cset)
 
 Compute the eigenvalues of `im` times the antisymmetric part of the directed

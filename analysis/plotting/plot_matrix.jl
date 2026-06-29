@@ -77,6 +77,7 @@ function plot_hist_or_vec_panel!(
     comp_color,
     comp_linewidth::Union{Nothing,Real},
     xscale::Real = 1.0,
+    comp_inds = nothing,
 )
     apply_axis_metadata!(ax, xlim_i, ylim_i, xlabel_i, ylabel_i, xticks_i, yticks_i)
 
@@ -95,7 +96,13 @@ function plot_hist_or_vec_panel!(
     comp_mean = nothing
     if comp_mean_std !== nothing
         mean_comp, std_comp = comp_mean_std
-        x = xscale .* collect(1:length(mean_comp))
+        if comp_inds !== nothing
+            mean_comp = mean_comp[comp_inds]
+            std_comp = std_comp[comp_inds]
+            x = xscale .* collect(comp_inds)
+        else
+            x = xscale .* collect(1:length(mean_comp))
+        end
         ylo = mean_comp .- std_comp
         yhi = mean_comp .+ std_comp
         if logscale_y
@@ -1761,6 +1768,14 @@ function graph_observable_kind_plot_matrix_panel_meta(;
     yticks_destroyed = nothing,
     yticks_pants = nothing,
     yticks_genus = nothing,
+    colorbar_label_grid = nothing,
+    colorbar_label_quasicrystal = nothing,
+    colorbar_label_layered = nothing,
+    colorbar_label_random = nothing,
+    colorbar_label_merged = nothing,
+    colorbar_label_destroyed = nothing,
+    colorbar_label_pants = nothing,
+    colorbar_label_genus = nothing,
     colorbar_ticks_layered = nothing,
     colorbar_ticks_merged = nothing,
     colorbar_ticks_destroyed = nothing,
@@ -1774,6 +1789,7 @@ function graph_observable_kind_plot_matrix_panel_meta(;
         ylabel = [ylabel_grid, ylabel_quasicrystal, ylabel_layered, ylabel_random, ylabel_merged, ylabel_destroyed, ylabel_pants, ylabel_genus],
         xticks = [xticks_grid, xticks_quasicrystal, xticks_layered, xticks_random, xticks_merged, xticks_destroyed, xticks_pants, xticks_genus],
         yticks = [yticks_grid, yticks_quasicrystal, yticks_layered, yticks_random, yticks_merged, yticks_destroyed, yticks_pants, yticks_genus],
+        colorbar_label = [colorbar_label_grid, colorbar_label_quasicrystal, colorbar_label_layered, colorbar_label_random, colorbar_label_merged, colorbar_label_destroyed, colorbar_label_pants, colorbar_label_genus],
         colorbar_ticks = [nothing, nothing, colorbar_ticks_layered, nothing, colorbar_ticks_merged, colorbar_ticks_destroyed, colorbar_ticks_pants, colorbar_ticks_genus],
     )
 end
@@ -1815,7 +1831,9 @@ function load_graph_observable_kind_panel(
     # Drop the trivial zero mode for normalized Laplacian spectra.
     # For ev_sym_link we store eigenvalues sorted ascending, so the first entry is λ₁ = 0.
     if observable === :ev_sym_link
-        prepared = [(v[2:end], s) for (v, s) in prepared if length(v) >= 2]
+        prepared = isnothing(scalar) ? 
+        [v[2:end] for v in prepared] : 
+        [(v[2:end], s) for (v, s) in prepared]
     end
 
     comp_mean_std = nothing
@@ -1834,7 +1852,7 @@ function load_graph_observable_kind_panel(
                 comp_values
             end
         if observable === :ev_sym_link
-            comp_prepared = [(v[2:end], s) for (v, s) in comp_prepared if length(v) >= 2]
+            comp_prepared = [v[2:end] for v in comp_prepared]
         end
         comp_mean_std = comp_avg_hist_or_vec(comp_prepared; num_bins = num_bins)
     end
@@ -1951,6 +1969,9 @@ Kinds with scalar metadata are color-coded:
 - `destroyed` by `:rel_num_flips` using inverted `:magma`
 - `pants` by `:num_boundary_cuts` using inverted `:magma`
 - `genus` by `:genus` using inverted `:magma`
+
+Per-kind colorbar labels can be overridden with `colorbar_label_<kind>` keywords,
+for example `colorbar_label_destroyed`.
 """
 function graph_observable_kind_plot_matrix(
     observable::Symbol,
@@ -2030,6 +2051,14 @@ function graph_observable_kind_plot_matrix(
     yticks_destroyed = nothing,
     yticks_pants = nothing,
     yticks_genus = nothing,
+    colorbar_label_grid = nothing,
+    colorbar_label_quasicrystal = nothing,
+    colorbar_label_layered = nothing,
+    colorbar_label_random = nothing,
+    colorbar_label_merged = nothing,
+    colorbar_label_destroyed = nothing,
+    colorbar_label_pants = nothing,
+    colorbar_label_genus = nothing,
     colorbar_ticks_layered = nothing,
     colorbar_ticks_merged = nothing,
     colorbar_ticks_destroyed = nothing,
@@ -2060,6 +2089,8 @@ function graph_observable_kind_plot_matrix(
     layered_colormap = :viridis,
     deffect_colormap = :tarn,
     topo_colormap = :delta,
+    range_comp_man = nothing,
+    range_comp_mink = nothing,
     return_axis::Bool = false,
     verbose::Bool = false,
 )::Union{CairoMakie.Figure, Tuple{CairoMakie.Figure, Matrix{CairoMakie.Axis}}}
@@ -2150,6 +2181,14 @@ function graph_observable_kind_plot_matrix(
         yticks_destroyed = yticks_destroyed,
         yticks_pants = yticks_pants,
         yticks_genus = yticks_genus,
+        colorbar_label_grid = colorbar_label_grid,
+        colorbar_label_quasicrystal = colorbar_label_quasicrystal,
+        colorbar_label_layered = colorbar_label_layered,
+        colorbar_label_random = colorbar_label_random,
+        colorbar_label_merged = colorbar_label_merged,
+        colorbar_label_destroyed = colorbar_label_destroyed,
+        colorbar_label_pants = colorbar_label_pants,
+        colorbar_label_genus = colorbar_label_genus,
         colorbar_ticks_layered = colorbar_ticks_layered,
         colorbar_ticks_merged = colorbar_ticks_merged,
         colorbar_ticks_destroyed = colorbar_ticks_destroyed,
@@ -2177,6 +2216,8 @@ function graph_observable_kind_plot_matrix(
         layered_colormap = layered_colormap,
         deffect_colormap = deffect_colormap,
         topo_colormap = topo_colormap,
+        range_comp_man = range_comp_man,
+        range_comp_mink = range_comp_mink,
         comp_color = comp_color,
         comp_linewidth = comp_linewidth,
         return_axis = return_axis,
@@ -2242,6 +2283,14 @@ function graph_observable_kind_plot_matrix(
     yticks_destroyed = nothing,
     yticks_pants = nothing,
     yticks_genus = nothing,
+    colorbar_label_grid = nothing,
+    colorbar_label_quasicrystal = nothing,
+    colorbar_label_layered = nothing,
+    colorbar_label_random = nothing,
+    colorbar_label_merged = nothing,
+    colorbar_label_destroyed = nothing,
+    colorbar_label_pants = nothing,
+    colorbar_label_genus = nothing,
     colorbar_ticks_layered = nothing,
     colorbar_ticks_merged = nothing,
     colorbar_ticks_destroyed = nothing,
@@ -2269,6 +2318,8 @@ function graph_observable_kind_plot_matrix(
     layered_colormap = :viridis,
     deffect_colormap = :tarn,
     topo_colormap = :delta,
+    range_comp_man = nothing,
+    range_comp_mink = nothing,
     comp_color = :black,
     comp_linewidth::Union{Nothing,Real} = nothing,
     return_axis::Bool = false,
@@ -2369,6 +2420,14 @@ function graph_observable_kind_plot_matrix(
         yticks_destroyed = yticks_destroyed,
         yticks_pants = yticks_pants,
         yticks_genus = yticks_genus,
+        colorbar_label_grid = colorbar_label_grid,
+        colorbar_label_quasicrystal = colorbar_label_quasicrystal,
+        colorbar_label_layered = colorbar_label_layered,
+        colorbar_label_random = colorbar_label_random,
+        colorbar_label_merged = colorbar_label_merged,
+        colorbar_label_destroyed = colorbar_label_destroyed,
+        colorbar_label_pants = colorbar_label_pants,
+        colorbar_label_genus = colorbar_label_genus,
         colorbar_ticks_layered = colorbar_ticks_layered,
         colorbar_ticks_merged = colorbar_ticks_merged,
         colorbar_ticks_destroyed = colorbar_ticks_destroyed,
@@ -2395,6 +2454,7 @@ function graph_observable_kind_plot_matrix(
     ylabel_n = panel_meta.ylabel
     xticks_n = panel_meta.xticks
     yticks_n = panel_meta.yticks
+    colorbar_label_n = panel_meta.colorbar_label
     colorbar_ticks_n = panel_meta.colorbar_ticks
 
     base_size = apply_paper_theme!(double_column = double_column, magnification = magnification)
@@ -2491,6 +2551,7 @@ function graph_observable_kind_plot_matrix(
                 (hasproperty(panel, :yscale) ? panel.yscale : 1.0)
             panel_data = scale_panel_series(panel.data, panel_yscale)
             panel_comp = scale_mean_std(panel.comp, panel_yscale)
+            panel_comp_inds = idx == 2 ? range_comp_mink : range_comp_man
             panel_colormap =
                 if idx == 3
                     layered_colormap
@@ -2523,6 +2584,7 @@ function graph_observable_kind_plot_matrix(
                     comp_color = comp_color,
                     comp_linewidth = comp_linewidth,
                     xscale = panel_xscale,
+                    comp_inds = panel_comp_inds,
                 )
             else
                 color_scale = compute_color_scale([panel.data]; log_color_scaling = panel_log_binning[idx])
@@ -2547,6 +2609,7 @@ function graph_observable_kind_plot_matrix(
                     comp_color = comp_color,
                     comp_linewidth = comp_linewidth,
                     xscale = panel_xscale,
+                    comp_inds = panel_comp_inds,
                 )
                 cb_layout = CairoMakie.GridLayout(panel_layouts[row, col][2, 1])
                 CairoMakie.rowgap!(panel_layouts[row, col], 0)
@@ -2563,7 +2626,7 @@ function graph_observable_kind_plot_matrix(
                 cb.ticksize = 3
                 cb.minorticksize = 2
                 cb.ticklabelpad = row == 3 ? 4 : 2
-                cb.label = graph_observable_scalar_label(spec.scalar)
+                cb.label = isnothing(colorbar_label_n[idx]) ? graph_observable_scalar_label(spec.scalar) : colorbar_label_n[idx]
                 cb.labelpadding = row == 3 ? 0 : -5
                 if colorbar_ticks_n[idx] !== nothing
                     cb.ticks = colorbar_ticks_n[idx]
